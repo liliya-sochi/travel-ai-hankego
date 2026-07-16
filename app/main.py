@@ -8,6 +8,7 @@
 from fastapi import FastAPI
 
 from app.config import settings
+from app.api.info import router as info_router
 
 
 # Создаём приложение, используя централизованные настройки.
@@ -16,6 +17,14 @@ app = FastAPI(
     title=settings.app_name,
     description="AI-powered travel platform",
     version=settings.app_version,
+)
+
+
+# Подключаем информационные маршруты к основному приложению.
+app.include_router(
+    info_router,
+    prefix="/api/v1",
+    tags=["Information"],
 )
 
 
