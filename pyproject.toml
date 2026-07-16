@@ -1,0 +1,15 @@
+[project]
+name = "hankego"
+version = "0.1.0"
+description = "AI-powered travel platform."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Liliya" }
+]
+dependencies = [
+    "fastapi>=0.139.0",
+    "pydantic-settings>=2.14.2",
+    "requests>=2.34.2",
+    "uvicorn[standard]>=0.51.0",
+]
