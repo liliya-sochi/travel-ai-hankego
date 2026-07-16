@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from pydantic import SecretStr
+
 
 class Settings(BaseSettings):
     """
@@ -24,6 +26,10 @@ class Settings(BaseSettings):
     # Разрешаем только три заранее определённых режима.
     # Опечатка вроде "prodution" вызовет понятную ошибку.
     environment: Literal["development", "testing", "production"] = "development"
+
+    # Токен используется для авторизации HankeGo в Telegram Bot API.
+    # SecretStr скрывает значение при выводе объекта настроек в логах.
+    telegram_bot_token: SecretStr
 
     # Файл .env будет использоваться только локально.
     # В GitHub он не попадёт, потому что добавлен в .gitignore.

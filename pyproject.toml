@@ -8,6 +8,7 @@ authors = [
     { name = "Liliya" }
 ]
 dependencies = [
+    "aiogram>=3.29.1",
     "fastapi>=0.139.0",
     "pydantic-settings>=2.14.2",
     "requests>=2.34.2",
