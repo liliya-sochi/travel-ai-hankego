@@ -27,3 +27,21 @@ async def get_project_info() -> dict[str, str]:
         response.raise_for_status()
 
         return response.json()
+    
+
+async def send_echo(message: str) -> dict[str, str]:
+    """
+    Отправляет сообщение в backend и получает его обратно.
+    """
+
+    url = f"{settings.backend_url}/api/v1/echo"
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.post(
+            url,
+            json={"message": message},
+        )
+
+        response.raise_for_status()
+
+        return response.json()

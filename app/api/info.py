@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.config import settings
+from app.api.schemas import EchoRequest, EchoResponse
 
 
 class ProjectInfo(BaseModel):
@@ -41,4 +42,15 @@ async def get_info() -> ProjectInfo:
         version=settings.app_version,
         environment=settings.environment,
         description="AI-powered travel platform",
+    )
+
+
+@router.post("/echo", response_model=EchoResponse)
+async def echo(request: EchoRequest) -> EchoResponse:
+    """
+    Возвращает полученное сообщение обратно.
+    """
+
+    return EchoResponse(
+        message=request.message
     )

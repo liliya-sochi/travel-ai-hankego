@@ -13,7 +13,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
-from app.bot.api_client import get_project_info
+from app.bot.api_client import get_project_info, send_echo
 from app.config import settings
 
 
@@ -52,6 +52,34 @@ async def handle_info(message: Message) -> None:
         f"Версия: {project_info['version']}\n"
         f"Окружение: {project_info['environment']}"
     )
+
+
+@dispatcher.message(Command("echo"))
+async def handle_echo(message: Message) -> None:
+    """
+    Передаёт текст пользователя в backend.
+    """
+
+    command_parts = message.text.split(maxsplit=1)
+
+    if len(command_parts) < 2:
+        await message.answer(
+            "Напиши текст после команды.\n"
+            "Например: /echo Привет, HankeGo!"
+        )
+        return
+
+    user_text = command_parts[1]
+
+    try:
+        echo_response = await send_echo(user_text)
+    except httpx.HTTPError:
+        await message.answer(
+            "Не удалось получить ответ от backend."
+        )
+        return
+
+    await message.answer(echo_response["message"])
 
 
 async def main() -> None:
