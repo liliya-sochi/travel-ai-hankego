@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # SecretStr скрывает значение при выводе объекта настроек в логах.
     telegram_bot_token: SecretStr
 
+    # Базовый адрес backend, к которому обращается Telegram-бот.
+    # На VPS здесь позже будет production-адрес HankeGo.
+    backend_url: str = "http://127.0.0.1:8000"
+
     # Файл .env будет использоваться только локально.
     # В GitHub он не попадёт, потому что добавлен в .gitignore.
     model_config = SettingsConfigDict(

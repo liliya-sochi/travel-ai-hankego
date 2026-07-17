@@ -8,10 +8,12 @@
 
 import asyncio
 
+import httpx
 from aiogram import Bot, Dispatcher
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
+from app.bot.api_client import get_project_info
 from app.config import settings
 
 
@@ -24,13 +26,31 @@ dispatcher = Dispatcher()
 async def handle_start(message: Message) -> None:
     """
     Обрабатывает команду /start.
-
-    Пока бот только подтверждает, что он запущен
-    и готов принимать команды пользователя.
     """
 
     await message.answer(
         "Привет! Я HankeGo — твой будущий AI-помощник для путешествий."
+    )
+
+
+@dispatcher.message(Command("info"))
+async def handle_info(message: Message) -> None:
+    """
+    Получает информацию из backend и отправляет её пользователю.
+    """
+
+    try:
+        project_info = await get_project_info()
+    except httpx.HTTPError:
+        await message.answer(
+            "Backend HankeGo сейчас недоступен. Попробуй немного позже."
+        )
+        return
+
+    await message.answer(
+        f"Проект: {project_info['project']}\n"
+        f"Версия: {project_info['version']}\n"
+        f"Окружение: {project_info['environment']}"
     )
 
 
@@ -39,16 +59,15 @@ async def main() -> None:
     Создаёт Telegram-бота и запускает long polling.
     """
 
-    # Извлекаем реальное значение токена из SecretStr
-    # только непосредственно перед созданием Bot.
+    # Извлекаем настоящее значение токена только перед созданием Bot.
     token = settings.telegram_bot_token.get_secret_value()
-
     bot = Bot(token=token)
 
-    # Long polling постоянно получает новые обновления
-    # и передаёт их объекту Dispatcher.
+    # С этого момента бот постоянно ожидает новые сообщения.
     await dispatcher.start_polling(bot)
 
 
+# Точку запуска всегда оставляем в самом конце файла,
+# когда все обработчики уже зарегистрированы.
 if __name__ == "__main__":
     asyncio.run(main())
