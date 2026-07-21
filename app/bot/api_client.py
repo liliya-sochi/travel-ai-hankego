@@ -1,47 +1,93 @@
 """
-HTTP-клиент Telegram-бота для обращения к backend HankeGo.
+Клиент для общения Telegram-бота с FastAPI backend.
 
-Модуль изолирует сетевые запросы от Telegram-обработчиков.
+Telegram-бот не обращается к Groq напрямую.
+Он отправляет запрос нашему backend, а backend уже:
+1. обращается к языковой модели;
+2. проверяет ответ;
+3. возвращает структурированный план.
 """
+
+from typing import Any
 
 import httpx
 
-from app.config import settings
+from app.config import get_settings
 
 
-async def get_project_info() -> dict[str, str]:
+class BackendError(Exception):
     """
-    Получает общую информацию о HankeGo из backend API.
+    Ошибка при обращении Telegram-бота к backend.
 
-    Таймаут ограничивает ожидание ответа, чтобы бот
-    не зависал бесконечно при недоступном backend.
+    Благодаря собственному исключению main.py не должен знать
+    детали работы библиотеки httpx.
     """
 
-    url = f"{settings.backend_url}/api/v1/info"
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        response = await client.get(url)
+async def create_trip_plan(prompt: str) -> dict[str, Any]:
+    """
+    Отправляет пользовательский запрос в FastAPI
+    и возвращает готовый план поездки.
 
-        # Если backend вернул ошибку 4xx или 5xx,
-        # httpx создаст исключение вместо тихого продолжения.
+    Возвращаемое значение — обычный Python-словарь,
+    созданный из JSON-ответа backend.
+    """
+
+    settings = get_settings()
+
+    # Собираем полный адрес нашего endpoint:
+    # http://127.0.0.1:8000/api/v1/trip-plan
+    url = (
+        f"{settings.backend_url.rstrip('/')}"
+        f"{settings.api_prefix}/trip-plan"
+    )
+
+    try:
+        # Backend обращается к LLM, поэтому ответ может занять
+        # несколько секунд. Устанавливаем тайм-аут 90 секунд.
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            response = await client.post(
+                url=url,
+                json={
+                    "prompt": prompt,
+                },
+            )
+
+        # Преобразует HTTP-статусы 400, 404, 500 и другие
+        # в исключение HTTPStatusError.
         response.raise_for_status()
 
+        # response.json() превращает JSON-ответ backend
+        # в Python-словарь.
         return response.json()
-    
 
-async def send_echo(message: str) -> dict[str, str]:
-    """
-    Отправляет сообщение в backend и получает его обратно.
-    """
+    except httpx.TimeoutException as error:
+        raise BackendError(
+            "Backend не успел подготовить маршрут."
+        ) from error
 
-    url = f"{settings.backend_url}/api/v1/echo"
+    except httpx.HTTPStatusError as error:
+        # Пытаемся получить понятное описание ошибки,
+        # которое FastAPI обычно хранит в поле detail.
+        try:
+            error_data = error.response.json()
+            error_message = error_data.get(
+                "detail",
+                "Backend вернул ошибку.",
+            )
+        except ValueError:
+            error_message = "Backend вернул неправильный ответ."
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        response = await client.post(
-            url,
-            json={"message": message},
-        )
+        raise BackendError(str(error_message)) from error
 
-        response.raise_for_status()
+    except httpx.RequestError as error:
+        raise BackendError(
+            "Не удалось подключиться к HankeGo API. "
+            "Проверь, запущен ли FastAPI."
+        ) from error
 
-        return response.json()
+    except ValueError as error:
+        # Такое возможно, если backend вернул не JSON.
+        raise BackendError(
+            "Backend вернул данные в неправильном формате."
+        ) from error

@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # Точное название модели, которое понимает AI-сервис.
     llm_model: str
 
+    # Токен Telegram-бота, полученный у BotFather.
+    telegram_bot_token: str
+
+    # Полный адрес нашего FastAPI backend.
+    # Пока бот и backend работают на одном компьютере.
+    backend_url: str = "http://127.0.0.1:8000"
+
     # Общий префикс HTTP-маршрутов нашего backend.
     api_prefix: str = "/api/v1"
 
