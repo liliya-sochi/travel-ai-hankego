@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Общий префикс HTTP-маршрутов нашего backend.
     api_prefix: str = "/api/v1"
 
+     # Адрес Redis для хранения состояний диалога Telegram-бота.
+    redis_url: str = "redis://127.0.0.1:6379/0"   
+
     model_config = SettingsConfigDict(
         # Имя файла, из которого читаются настройки.
         env_file=".env",
