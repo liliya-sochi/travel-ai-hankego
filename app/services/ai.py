@@ -5,10 +5,13 @@
 - создаёт инструкции для модели;
 - отправляет HTTP-запрос;
 - получает ответ;
-- проверяет структуру ответа.
+- проверяет структуру ответа;
+- повторяет запрос при ошибке формата.
 """
 
 import json
+import logging
+from typing import Any
 
 import httpx
 from pydantic import ValidationError
@@ -17,8 +20,12 @@ from app.config import get_settings
 from app.schemas.trip import TripPlanResponse
 
 
-# Системная инструкция задаёт модели постоянную роль
-# и требует вернуть только JSON определённой структуры.
+logger = logging.getLogger(__name__)
+
+REQUEST_TIMEOUT_SECONDS = 60.0
+MAX_FORMAT_ATTEMPTS = 2
+
+
 SYSTEM_PROMPT = """
 Ты — AI-помощник по планированию путешествий HankeGo.
 
@@ -27,24 +34,23 @@ SYSTEM_PROMPT = """
 Верни только корректный JSON без Markdown, пояснений и блоков ```.
 
 JSON должен иметь строго такую структуру:
-
 {
   "destination": "Название города или страны",
   "duration_days": 5,
   "summary": "Краткое описание поездки",
   "days": [
     {
-        "day": 1,
-        "title": "Название и основная тема дня",
-        "morning": [
-            "План на утро"
-        ],
-        "afternoon": [
-            "План на день"
-        ],
-        "evening": [
-            "План на вечер"
-        ]
+      "day": 1,
+      "title": "Название и основная тема дня",
+      "morning": [
+        "План на утро"
+      ],
+      "afternoon": [
+        "План на день"
+      ],
+      "evening": [
+        "План на вечер"
+      ]
     }
   ],
   "practical_tips": [
@@ -58,122 +64,200 @@ JSON должен иметь строго такую структуру:
 - количество объектов в days должно соответствовать duration_days;
 - не выдумывай точные цены, расписания и часы работы;
 - предупреждай, что актуальные цены и расписания нужно проверять отдельно;
-- составляй практичный план без чрезмерного количества мест на один день.
+- составляй практичный план без чрезмерного количества мест на один день;
 - для каждого дня отдельно заполняй morning, afternoon и evening;
-- оставляй список пустым только тогда, когда для этого времени суток действительно не нужна активность;
+- оставляй список пустым только тогда, когда активность действительно не нужна;
+- не добавляй поля, отсутствующие в указанной JSON-структуре.
+""".strip()
+
+
+FORMAT_RETRY_PROMPT = """
+Предыдущий ответ не прошёл проверку формата.
+
+Верни план заново:
+- только корректный JSON;
+- без Markdown;
+- без пояснений до или после JSON;
+- строго по структуре из системной инструкции.
 """.strip()
 
 
 class AIServiceError(Exception):
     """
-    Ошибка, возникшая во время работы с языковой моделью.
+    Безопасная ошибка сервиса языковой модели.
 
-    Собственное исключение позволяет router не зависеть
-    от деталей httpx, JSON и конкретного AI-провайдера.
+    Детали ошибки записываются в журнал приложения,
+    но не передаются пользователю API.
     """
 
 
-async def generate_trip_plan(user_prompt: str) -> TripPlanResponse:
+def _extract_model_text(response_data: dict[str, Any]) -> str:
     """
-    Отправляет запрос пользователя языковой модели
-    и возвращает проверенный план путешествия.
-
-    async означает, что во время ожидания ответа модели
-    FastAPI не блокирует всё приложение и может
-    обслуживать другие запросы.
+    Извлекает текст модели из OpenAI-совместимого ответа.
     """
-
-    settings = get_settings()
-
-    # Формируем полный адрес endpoint.
-    # rstrip("/") удаляет возможный слеш в конце base URL,
-    # чтобы не получить адрес вида //chat/completions.
-    url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
-
-    headers = {
-        # Bearer — стандартный способ передачи API-ключа
-        # во многих OpenAI-совместимых сервисах.
-        "Authorization": f"Bearer {settings.llm_api_key}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": settings.llm_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ],
-
-        # Низкая температура делает ответ менее случайным
-        # и помогает модели стабильнее соблюдать JSON-формат.
-        "temperature": 0.3,
-    }
 
     try:
-        # AsyncClient используется для асинхронных HTTP-запросов.
-        # timeout=60 означает, что мы готовы ждать ответ
-        # языковой модели не более 60 секунд.
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url=url,
-                headers=headers,
-                json=payload,
-            )
+        model_text = response_data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as error:
+        raise ValueError(
+            "AI-провайдер вернул ответ неизвестной структуры."
+        ) from error
 
-        # Если сервер вернул 400, 401, 404, 500 и подобную ошибку,
-        # httpx создаст исключение HTTPStatusError.
+    if not isinstance(model_text, str) or not model_text.strip():
+        raise ValueError("AI-провайдер вернул пустой ответ.")
+
+    return model_text
+
+
+def _validate_trip_plan(model_text: str) -> TripPlanResponse:
+    """
+    Преобразует JSON модели и проверяет его через Pydantic.
+    """
+
+    trip_data = json.loads(model_text)
+    return TripPlanResponse.model_validate(trip_data)
+
+
+async def _request_model(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Выполняет один HTTP-запрос к AI-провайдеру.
+    """
+
+    try:
+        response = await client.post(
+            url=url,
+            headers=headers,
+            json=payload,
+        )
         response.raise_for_status()
+        return response.json()
 
     except httpx.TimeoutException as error:
+        logger.warning(
+            "AI provider timeout after %.1f seconds",
+            REQUEST_TIMEOUT_SECONDS,
+        )
         raise AIServiceError(
-            "Языковая модель не ответила за 60 секунд."
+            "AI-сервис временно не отвечает. Попробуйте ещё раз."
         ) from error
 
     except httpx.HTTPStatusError as error:
-        # Тело ответа часто содержит полезное описание:
-        # неверный ключ, неизвестная модель или недостаток средств.
-        provider_message = error.response.text
-
+        logger.error(
+            "AI provider returned HTTP %s: %s",
+            error.response.status_code,
+            error.response.text[:1000],
+        )
         raise AIServiceError(
-            f"AI-сервис вернул ошибку: {provider_message}"
+            "AI-сервис временно недоступен. Попробуйте позже."
         ) from error
 
     except httpx.RequestError as error:
+        logger.error(
+            "AI provider connection error: %s",
+            type(error).__name__,
+        )
         raise AIServiceError(
             "Не удалось подключиться к AI-сервису."
         ) from error
 
-    try:
-        # Преобразуем JSON-ответ всего HTTP-запроса
-        # в обычный Python-словарь.
-        response_data = response.json()
-
-        # OpenAI-совместимые API обычно возвращают текст модели
-        # по этому пути:
-        # choices -> первый элемент -> message -> content.
-        model_text = response_data["choices"][0]["message"]["content"]
-
-        # Модель возвращает JSON как обычную строку.
-        # json.loads превращает строку JSON в Python-словарь.
-        trip_data = json.loads(model_text)
-
-        # Pydantic проверяет, что ответ модели действительно
-        # соответствует TripPlanResponse.
-        return TripPlanResponse.model_validate(trip_data)
-
-    except (
-        KeyError,
-        IndexError,
-        TypeError,
-        json.JSONDecodeError,
-        ValidationError,
-    ) as error:
+    except json.JSONDecodeError as error:
+        logger.error("AI provider returned invalid HTTP JSON.")
         raise AIServiceError(
-            "Модель вернула ответ в неправильном формате."
+            "AI-сервис вернул некорректный ответ."
         ) from error
+
+
+async def generate_trip_plan(user_prompt: str) -> TripPlanResponse:
+    """
+    Создаёт и возвращает проверенный план путешествия.
+
+    При некорректном JSON или ошибке Pydantic выполняется
+    одна дополнительная попытка с уточняющей инструкцией.
+    """
+
+    settings = get_settings()
+
+    url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {settings.llm_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": user_prompt,
+        },
+    ]
+
+    timeout = httpx.Timeout(
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        connect=10.0,
+    )
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(1, MAX_FORMAT_ATTEMPTS + 1):
+            payload: dict[str, Any] = {
+                "model": settings.llm_model,
+                "messages": messages,
+                "temperature": 0.2,
+            }
+
+            response_data = await _request_model(
+                client=client,
+                url=url,
+                headers=headers,
+                payload=payload,
+            )
+
+            try:
+                model_text = _extract_model_text(response_data)
+                return _validate_trip_plan(model_text)
+
+            except (
+                ValueError,
+                json.JSONDecodeError,
+                ValidationError,
+            ) as error:
+                logger.warning(
+                    "Invalid model output on attempt %s/%s: %s",
+                    attempt,
+                    MAX_FORMAT_ATTEMPTS,
+                    type(error).__name__,
+                )
+
+                if attempt == MAX_FORMAT_ATTEMPTS:
+                    raise AIServiceError(
+                        "Не удалось сформировать корректный маршрут. "
+                        "Попробуйте изменить запрос."
+                    ) from error
+
+                messages.extend(
+                    [
+                        {
+                            "role": "assistant",
+                            "content": response_data
+                            .get("choices", [{}])[0]
+                            .get("message", {})
+                            .get("content", ""),
+                        },
+                        {
+                            "role": "user",
+                            "content": FORMAT_RETRY_PROMPT,
+                        },
+                    ]
+                )
+
+    raise AIServiceError(
+        "Не удалось сформировать маршрут."
+    )
