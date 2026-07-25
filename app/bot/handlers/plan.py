@@ -85,6 +85,134 @@ async def destination_invalid_handler(
     )
 
 
+@router.message(TripPlanning.duration, F.text)
+async def duration_handler(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """
+    Сохраняет длительность поездки.
+    """
+
+    duration = message.text.strip()
+
+    if len(duration) < 1:
+        await message.answer(
+            "Напишите количество дней."
+        )
+        return
+
+    await state.update_data(
+        duration=duration,
+    )
+
+    await state.set_state(
+        TripPlanning.budget,
+    )
+
+    await message.answer(
+        "Какой примерный бюджет поездки?\n\n"
+        "Например:\n"
+        "1000 €\n"
+        "150000 ₽\n"
+        "Без ограничений"
+    )
+
+
+@router.message(TripPlanning.duration)
+async def duration_invalid_handler(
+    message: Message,
+) -> None:
+    """
+    Просит отправить длительность текстом.
+    """
+
+    await message.answer(
+        "Напишите длительность поездки обычным текстом."
+    )
+
+
+@router.message(TripPlanning.budget, F.text)
+async def budget_handler(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """
+    Сохраняет бюджет поездки.
+    """
+
+    budget = message.text.strip()
+
+    await state.update_data(
+        budget=budget,
+    )
+
+    await state.set_state(
+        TripPlanning.interests,
+    )
+
+    await message.answer(
+        "Что вам особенно интересно?\n\n"
+        "Например:\n"
+        "Музеи, природа, еда, архитектура."
+    )
+
+
+@router.message(TripPlanning.budget)
+async def budget_invalid_handler(
+    message: Message,
+) -> None:
+    """
+    Просит отправить бюджет текстом.
+    """
+
+    await message.answer(
+        "Напишите бюджет обычным текстом."
+    )
+
+
+@router.message(TripPlanning.interests, F.text)
+async def interests_handler(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """
+    Завершает диалог и отправляет запрос в backend.
+    """
+
+    interests = message.text.strip()
+
+    await state.update_data(
+        interests=interests,
+    )
+
+    data = await state.get_data()
+
+    prompt = build_trip_prompt(data)
+
+    await message.answer(
+        "✈️ Генерирую маршрут..."
+    )
+
+    try:
+        trip_plan = await create_trip_plan(prompt)
+
+    except BackendError as error:
+        await state.clear()
+
+        await message.answer(
+            f"Не удалось создать маршрут:\n{error}"
+        )
+        return
+
+    formatted_plan = format_trip_plan(trip_plan)
+
+    for text_part in split_text(formatted_plan):
+        await message.answer(text_part)
+
+    await state.clear()
+
+
 def format_trip_plan(trip_plan: dict[str, Any]) -> str:
     """
     Превращает ответ backend в читаемый текст для Telegram.
@@ -152,3 +280,25 @@ def split_text(
         parts.append("\n".join(current_part))
 
     return parts
+
+
+def build_trip_prompt(data: dict[str, str]) -> str:
+    """
+    Формирует запрос для AI на основе ответов пользователя.
+    """
+
+    return f"""
+Составь подробный маршрут путешествия.
+
+Направление:
+{data["destination"]}
+
+Продолжительность:
+{data["duration"]}
+
+Бюджет:
+{data["budget"]}
+
+Интересы:
+{data["interests"]}
+""".strip()
