@@ -11,6 +11,7 @@ from aiogram.types import Message
 
 from app.bot.api_client import BackendError, create_trip_plan
 from app.bot.states import TripPlanning
+from app.bot.services.trip_prompt import build_trip_prompt
 
 
 # Router хранит обработчики планирования поездки.
@@ -235,11 +236,31 @@ def format_trip_plan(trip_plan: dict[str, Any]) -> str:
 
     for day in days:
         lines.append(f"📍 День {day['day']}: {day['title']}")
-
-        for activity in day["activities"]:
-            lines.append(f"• {activity}")
-
         lines.append("")
+
+        if day["morning"]:
+            lines.append("🌅 Утро")
+
+            for activity in day["morning"]:
+                lines.append(f"• {activity}")
+
+            lines.append("")
+
+        if day["afternoon"]:
+            lines.append("☀️ День")
+
+            for activity in day["afternoon"]:
+                lines.append(f"• {activity}")
+
+            lines.append("")
+
+        if day["evening"]:
+            lines.append("🌙 Вечер")
+
+            for activity in day["evening"]:
+                lines.append(f"• {activity}")
+
+            lines.append("")
 
     if practical_tips:
         lines.append("💡 Практические советы")
@@ -280,25 +301,3 @@ def split_text(
         parts.append("\n".join(current_part))
 
     return parts
-
-
-def build_trip_prompt(data: dict[str, str]) -> str:
-    """
-    Формирует запрос для AI на основе ответов пользователя.
-    """
-
-    return f"""
-Составь подробный маршрут путешествия.
-
-Направление:
-{data["destination"]}
-
-Продолжительность:
-{data["duration"]}
-
-Бюджет:
-{data["budget"]}
-
-Интересы:
-{data["interests"]}
-""".strip()

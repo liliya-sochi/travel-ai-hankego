@@ -45,12 +45,22 @@ class DayPlan(BaseModel):
 
     title: str = Field(
         min_length=1,
-        description="Краткое название дня.",
+        description="Краткое название и основная тема дня.",
     )
 
-    activities: list[str] = Field(
-        min_length=1,
-        description="Список запланированных занятий и мест.",
+    morning: list[str] = Field(
+        default_factory=list,
+        description="План на утро.",
+    )
+
+    afternoon: list[str] = Field(
+        default_factory=list,
+        description="План на день.",
+    )
+
+    evening: list[str] = Field(
+        default_factory=list,
+        description="План на вечер.",
     )
 
 
