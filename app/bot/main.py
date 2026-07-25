@@ -13,32 +13,19 @@
 import asyncio
 from typing import Any
 
-from aiogram import Bot, Dispatcher, Router
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram import Bot, Dispatcher, Router, dispatcher
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import Message
 
+from app import bot
 from app.bot.api_client import BackendError, create_trip_plan
+from app.bot.handlers.start import router as start_router
 from app.config import get_settings
 
 
 # Router хранит обработчики команд Telegram.
 router = Router()
-
-
-@router.message(CommandStart())
-async def start_handler(message: Message) -> None:
-    """
-    Обрабатывает команду /start.
-    """
-
-    await message.answer(
-        "Привет! Я HankeGo — AI-помощник по путешествиям.\n\n"
-        "Опиши желаемую поездку после команды /plan.\n\n"
-        "Например:\n"
-        "/plan Хочу на 5 дней в Стамбул. "
-        "Люблю архитектуру, прогулки и местную еду."
-    )
 
 
 @router.message(Command("plan"))
@@ -198,6 +185,7 @@ async def run_bot() -> None:
     dispatcher = Dispatcher(
         storage=storage,
     )
+    dispatcher.include_router(start_router)
     dispatcher.include_router(router)
 
     # Удаляем старый webhook, если он когда-либо был настроен.
