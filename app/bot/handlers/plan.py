@@ -4,11 +4,13 @@
 
 from typing import Any
 
-from aiogram import Router
-from aiogram.filters import Command, CommandObject
+from aiogram import F, Router
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from app.bot.api_client import BackendError, create_trip_plan
+from app.bot.states import TripPlanning
 
 
 # Router хранит обработчики планирования поездки.
@@ -18,41 +20,69 @@ router = Router()
 @router.message(Command("plan"))
 async def plan_handler(
     message: Message,
-    command: CommandObject,
+    state: FSMContext,
 ) -> None:
     """
-    Получает описание поездки после команды /plan,
-    отправляет его в FastAPI и показывает готовый маршрут.
+    Запускает пошаговое планирование поездки.
     """
 
-    prompt = (command.args or "").strip()
+    # Очищаем предыдущий незавершённый диалог,
+    # если пользователь снова отправил /plan.
+    await state.clear()
 
-    if len(prompt) < 10:
-        await message.answer(
-            "После /plan опиши поездку подробнее.\n\n"
-            "Например:\n"
-            "/plan Хочу на неделю в Японию. "
-            "Люблю природу и современную архитектуру."
-        )
-        return
+    # Устанавливаем состояние:
+    # теперь бот ожидает направление поездки.
+    await state.set_state(TripPlanning.destination)
 
     await message.answer(
-        "✈️ Готовлю маршрут. Это может занять несколько секунд..."
+        "Куда хотите поехать?\n\n"
+        "Например: Япония, Стамбул или Италия."
     )
 
-    try:
-        trip_plan = await create_trip_plan(prompt)
 
-    except BackendError as error:
+@router.message(TripPlanning.destination, F.text)
+async def destination_handler(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """
+    Сохраняет направление и спрашивает длительность поездки.
+    """
+
+    destination = message.text.strip()
+
+    if len(destination) < 2:
         await message.answer(
-            f"Не удалось создать маршрут:\n{error}"
+            "Напишите направление чуть подробнее."
         )
         return
 
-    formatted_plan = format_trip_plan(trip_plan)
+    # Сохраняем ответ пользователя в Redis.
+    await state.update_data(
+        destination=destination,
+    )
 
-    for text_part in split_text(formatted_plan):
-        await message.answer(text_part)
+    # Переводим диалог на следующий этап.
+    await state.set_state(TripPlanning.duration)
+
+    await message.answer(
+        "На сколько дней планируете поездку?\n\n"
+        "Например: 7 дней."
+    )
+
+
+@router.message(TripPlanning.destination)
+async def destination_invalid_handler(
+    message: Message,
+) -> None:
+    """
+    Просит отправить направление обычным текстом.
+    """
+
+    await message.answer(
+        "Напишите направление текстом.\n\n"
+        "Например: Япония."
+    )
 
 
 def format_trip_plan(trip_plan: dict[str, Any]) -> str:
