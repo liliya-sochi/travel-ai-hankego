@@ -22,43 +22,40 @@ class Settings(BaseSettings):
     """
 
     # Адрес OpenAI-совместимого API.
-    # Например:
-    # https://api.openai.com/v1
-    # https://openrouter.ai/api/v1
     llm_base_url: str
 
     # Секретный ключ доступа к выбранному AI-сервису.
     llm_api_key: str
 
-    # Точное название модели, которое понимает AI-сервис.
+    # Точное название модели у AI-провайдера.
     llm_model: str
 
     # Токен Telegram-бота, полученный у BotFather.
     telegram_bot_token: str
 
-    # Полный адрес нашего FastAPI backend.
-    # Пока бот и backend работают на одном компьютере.
+    # Полный адрес FastAPI backend.
     backend_url: str = "http://127.0.0.1:8000"
 
-    # Общий префикс HTTP-маршрутов нашего backend.
+    # Общий префикс HTTP-маршрутов backend.
     api_prefix: str = "/api/v1"
 
-     # Адрес Redis для хранения состояний диалога Telegram-бота.
-    redis_url: str = "redis://127.0.0.1:6379/0"   
+    # Адрес Redis для хранения состояний Telegram-бота.
+    redis_url: str = "redis://127.0.0.1:6379/0"
+
+    # Минимальный уровень сообщений в логах.
+    log_level: str = "INFO"
 
     model_config = SettingsConfigDict(
-        # Имя файла, из которого читаются настройки.
+        # Имя файла с переменными окружения.
         env_file=".env",
 
-        # Кодировка необходима для корректного чтения
-        # русских символов в .env.
+        # Кодировка для корректного чтения русских символов.
         env_file_encoding="utf-8",
 
-        # Позволяет писать переменные в .env заглавными буквами:
-        # LLM_API_KEY вместо llm_api_key.
+        # Разрешает заглавные имена переменных в .env.
         case_sensitive=False,
 
-        # Неизвестные значения в .env не будут ломать приложение.
+        # Неизвестные значения не ломают приложение.
         extra="ignore",
     )
 
@@ -66,12 +63,7 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """
-    Создаёт объект настроек только один раз.
-
-    Без lru_cache новый объект Settings создавался бы
-    при каждом вызове функции. Здесь это не нужно,
-    потому что настройки во время работы приложения
-    не изменяются.
+    Создаёт объект настроек один раз за время работы процесса.
     """
 
     return Settings()

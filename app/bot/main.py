@@ -1,35 +1,34 @@
 """
 Запуск Telegram-бота HankeGo.
 
-Доступные команды:
-
-/start
-    Показывает краткую инструкцию.
-
-/plan <описание поездки>
-    Создаёт маршрут через FastAPI и Groq.
+Бот использует Redis для хранения FSM-состояний
+и передаёт создание маршрута FastAPI backend.
 """
 
 import asyncio
+import logging
 
-from aiogram import Bot, Dispatcher, dispatcher
+from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import RedisStorage
-from aiogram.types import Message
 
-from app import bot
-from app.bot.handlers.start import router as start_router
 from app.bot.handlers.plan import router as plan_router
+from app.bot.handlers.start import router as start_router
 from app.config import get_settings
+from app.core.logging import configure_logging
+
+
+logger = logging.getLogger(__name__)
 
 
 async def run_bot() -> None:
     """
-    Создаёт Telegram-бота и запускает получение сообщений.
+    Создаёт Telegram-бота и запускает polling.
     """
 
     settings = get_settings()
+    configure_logging(settings.log_level)
 
-    bot = Bot(
+    telegram_bot = Bot(
         token=settings.telegram_bot_token,
     )
 
@@ -38,33 +37,39 @@ async def run_bot() -> None:
         settings.redis_url,
     )
 
-    # Dispatcher управляет получением событий от Telegram
-    # и передаёт их подходящим обработчикам Router.
+    # Dispatcher передаёт события подходящим Router.
     dispatcher = Dispatcher(
         storage=storage,
     )
+
     dispatcher.include_router(start_router)
     dispatcher.include_router(plan_router)
 
-    # Удаляем старый webhook, если он когда-либо был настроен.
-    # Для локального запуска используем polling.
-    await bot.delete_webhook(
-        drop_pending_updates=True,
-    )
-
     try:
-        # start_polling работает постоянно и получает
-        # новые сообщения от Telegram.
-        await dispatcher.start_polling(bot)
+        # Удаляем старый webhook перед запуском polling.
+        await telegram_bot.delete_webhook(
+            drop_pending_updates=True,
+        )
+
+        logger.info("HankeGo Telegram bot started")
+
+        await dispatcher.start_polling(telegram_bot)
+
+    except Exception:
+        logger.exception("HankeGo Telegram bot stopped unexpectedly")
+        raise
 
     finally:
+        logger.info("HankeGo Telegram bot is stopping")
+
         # Закрываем соединение с Redis.
         await storage.close()
 
-        # Корректно закрываем сетевое соединение Telegram.
-        await bot.session.close()
+        # Закрываем HTTP-сессию Telegram.
+        await telegram_bot.session.close()
+
+        logger.info("HankeGo Telegram bot stopped")
 
 
 if __name__ == "__main__":
-    # asyncio.run запускает асинхронную функцию run_bot.
     asyncio.run(run_bot())
