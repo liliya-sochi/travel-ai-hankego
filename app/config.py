@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # Адрес Redis для хранения состояний Telegram-бота.
     redis_url: str = "redis://127.0.0.1:6379/0"
 
+    # Строка подключения к PostgreSQL через асинхронный драйвер asyncpg.
+    database_url: str
+
     # Минимальный уровень сообщений в логах.
     log_level: str = "INFO"
 

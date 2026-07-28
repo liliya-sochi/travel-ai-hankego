@@ -9,12 +9,15 @@ authors = [
 ]
 dependencies = [
     "aiogram>=3.29.1",
+    "alembic>=1.18.5",
+    "asyncpg>=0.31.0",
     "fastapi>=0.139.0",
     "gunicorn>=26.0.0",
     "httpx>=0.28.1",
     "pydantic-settings>=2.14.2",
     "redis[hiredis]>=8.0.1",
     "requests>=2.34.2",
+    "sqlalchemy>=2.0.51",
     "uvicorn-worker>=0.4.0",
     "uvicorn[standard]>=0.51.0",
 ]
