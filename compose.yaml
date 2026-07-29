@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: hankego-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: hankego
+      POSTGRES_PASSWORD: hankego_dev_password
+      POSTGRES_DB: hankego
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - hankego_postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hankego -d hankego"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  hankego_postgres_data:
