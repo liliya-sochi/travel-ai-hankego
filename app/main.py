@@ -14,6 +14,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request, Response
 
 from app.api.trip import router as trip_router
+from app.api.user import router as user_router
 from app.config import get_settings
 from app.core.logging import configure_logging
 
@@ -109,6 +110,13 @@ async def get_info() -> dict[str, str]:
         "status": "ok",
         "version": "0.1.0",
     }
+
+
+app.include_router(
+    user_router,
+    prefix=settings.api_prefix,
+    tags=["Users"],
+)
 
 
 app.include_router(
