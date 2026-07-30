@@ -24,6 +24,61 @@ class BackendError(Exception):
     """
 
 
+async def register_telegram_user(
+    telegram_id: int,
+    first_name: str,
+) -> None:
+    """
+    Создаёт или обновляет Telegram-пользователя через FastAPI.
+    """
+
+    settings = get_settings()
+
+    url = (
+        f"{settings.backend_url.rstrip('/')}"
+        f"{settings.api_prefix}/users/telegram"
+    )
+
+    try:
+        # Регистрация пользователя должна выполняться быстро,
+        # поэтому здесь используется короткий тайм-аут.
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.put(
+                url=url,
+                json={
+                    "telegram_id": telegram_id,
+                    "first_name": first_name,
+                },
+            )
+
+        response.raise_for_status()
+
+    except httpx.TimeoutException as error:
+        raise BackendError(
+            "Backend не успел зарегистрировать пользователя."
+        ) from error
+
+    except httpx.HTTPStatusError as error:
+        try:
+            error_data = error.response.json()
+            error_message = error_data.get(
+                "detail",
+                "Backend не смог зарегистрировать пользователя.",
+            )
+        except ValueError:
+            error_message = (
+                "Backend вернул неправильный ответ "
+                "при регистрации пользователя."
+            )
+
+        raise BackendError(str(error_message)) from error
+
+    except httpx.RequestError as error:
+        raise BackendError(
+            "Не удалось подключиться к HankeGo API."
+        ) from error
+
+
 async def create_trip_plan(prompt: str) -> dict[str, Any]:
     """
     Отправляет пользовательский запрос в FastAPI
