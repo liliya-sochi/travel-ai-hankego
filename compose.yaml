@@ -10,16 +10,48 @@ services:
       POSTGRES_DB: hankego
 
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
 
     volumes:
       - hankego_postgres_data:/var/lib/postgresql/data
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hankego -d hankego"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U hankego -d hankego",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8.8.1-alpine
+    container_name: hankego-redis
+    restart: unless-stopped
+
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+
+    ports:
+      - "127.0.0.1:6379:6379"
+
+    volumes:
+      - hankego_redis_data:/data
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping",
+        ]
       interval: 5s
       timeout: 5s
       retries: 5
 
 volumes:
   hankego_postgres_data:
+  hankego_redis_data:
