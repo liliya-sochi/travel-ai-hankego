@@ -79,41 +79,36 @@ async def register_telegram_user(
         ) from error
 
 
-async def create_trip_plan(prompt: str) -> dict[str, Any]:
+async def create_trip_plan(
+    *,
+    telegram_id: int,
+    first_name: str,
+    prompt: str,
+) -> dict[str, Any]:
     """
-    Отправляет пользовательский запрос в FastAPI
-    и возвращает готовый план поездки.
-
-    Возвращаемое значение — обычный Python-словарь,
-    созданный из JSON-ответа backend.
+    Создаёт и сохраняет маршрут через FastAPI.
     """
 
     settings = get_settings()
 
-    # Собираем полный адрес нашего endpoint:
-    # http://127.0.0.1:8000/api/v1/trip-plan
     url = (
         f"{settings.backend_url.rstrip('/')}"
         f"{settings.api_prefix}/trip-plan"
     )
 
     try:
-        # Backend обращается к LLM, поэтому ответ может занять
-        # несколько секунд. Устанавливаем тайм-аут 90 секунд.
         async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(
                 url=url,
                 json={
+                    "telegram_id": telegram_id,
+                    "first_name": first_name,
                     "prompt": prompt,
                 },
             )
 
-        # Преобразует HTTP-статусы 400, 404, 500 и другие
-        # в исключение HTTPStatusError.
         response.raise_for_status()
 
-        # response.json() превращает JSON-ответ backend
-        # в Python-словарь.
         return response.json()
 
     except httpx.TimeoutException as error:
@@ -122,8 +117,6 @@ async def create_trip_plan(prompt: str) -> dict[str, Any]:
         ) from error
 
     except httpx.HTTPStatusError as error:
-        # Пытаемся получить понятное описание ошибки,
-        # которое FastAPI обычно хранит в поле detail.
         try:
             error_data = error.response.json()
             error_message = error_data.get(
@@ -131,7 +124,9 @@ async def create_trip_plan(prompt: str) -> dict[str, Any]:
                 "Backend вернул ошибку.",
             )
         except ValueError:
-            error_message = "Backend вернул неправильный ответ."
+            error_message = (
+                "Backend вернул неправильный ответ."
+            )
 
         raise BackendError(str(error_message)) from error
 
@@ -142,7 +137,6 @@ async def create_trip_plan(prompt: str) -> dict[str, Any]:
         ) from error
 
     except ValueError as error:
-        # Такое возможно, если backend вернул не JSON.
         raise BackendError(
             "Backend вернул данные в неправильном формате."
         ) from error

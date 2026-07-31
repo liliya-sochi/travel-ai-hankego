@@ -1,42 +1,65 @@
 """
 HTTP-маршруты планирования путешествий.
-
-Router принимает HTTP-запрос, вызывает сервис
-и возвращает результат клиенту.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
 
-from app.schemas.trip import TripPlanRequest, TripPlanResponse
-from app.services.ai import AIServiceError, generate_trip_plan
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_session
+from app.schemas.trip import (
+    TripCreateResponse,
+    TripPlanRequest,
+)
+from app.services.ai import AIServiceError
+from app.services.trip import TripService, TripServiceError
 
 
 router = APIRouter()
 
+SessionDependency = Annotated[
+    AsyncSession,
+    Depends(get_session),
+]
+
 
 @router.post(
     "/trip-plan",
-    response_model=TripPlanResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Создать план путешествия",
+    response_model=TripCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать и сохранить план путешествия",
 )
 async def create_trip_plan(
     request: TripPlanRequest,
-) -> TripPlanResponse:
+    session: SessionDependency,
+) -> TripCreateResponse:
     """
-    Создаёт план путешествия по текстовому запросу пользователя.
+    Генерирует маршрут и сохраняет его пользователю.
+    """
 
-    FastAPI автоматически преобразует JSON из тела запроса
-    в объект TripPlanRequest.
-    """
+    service = TripService(session)
 
     try:
-        return await generate_trip_plan(request.prompt)
+        return await service.create_trip_plan(
+            telegram_id=request.telegram_id,
+            first_name=request.first_name,
+            prompt=request.prompt,
+        )
 
     except AIServiceError as error:
-        # Пользователю API не нужно знать внутренние детали Python.
-        # Мы возвращаем понятную HTTP-ошибку.
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    except TripServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(error),
         ) from error

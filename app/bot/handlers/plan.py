@@ -178,8 +178,18 @@ async def interests_handler(
     state: FSMContext,
 ) -> None:
     """
-    Завершает диалог и отправляет запрос в backend.
+    Генерирует, сохраняет и показывает маршрут.
     """
+
+    telegram_user = message.from_user
+
+    if telegram_user is None:
+        await state.clear()
+
+        await message.answer(
+            "Не удалось определить пользователя Telegram."
+        )
+        return
 
     interests = message.text.strip()
 
@@ -192,11 +202,15 @@ async def interests_handler(
     prompt = build_trip_prompt(data)
 
     await message.answer(
-        "✈️ Генерирую маршрут..."
+        "✈️ Генерирую и сохраняю маршрут..."
     )
 
     try:
-        trip_plan = await create_trip_plan(prompt)
+        trip_plan = await create_trip_plan(
+            telegram_id=telegram_user.id,
+            first_name=telegram_user.first_name,
+            prompt=prompt,
+        )
 
     except BackendError as error:
         await state.clear()
