@@ -14,17 +14,38 @@ permissions:
 
 jobs:
   pytest:
-    name: Run pytest
+    name: Run tests
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17
+
+        env:
+          POSTGRES_USER: hankego
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: hankego_test
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd "pg_isready -U hankego -d hankego_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
-      # Это фиктивные значения только для загрузки Settings в тестах.
-      # Реальные ключи и токены в workflow добавлять нельзя.
+      # Фиктивные значения только для загрузки Settings.
+      # Реальные ключи и Telegram-токены в CI добавлять нельзя.
       LLM_BASE_URL: https://example.invalid
       LLM_API_KEY: test-api-key
       LLM_MODEL: test-model
       TELEGRAM_BOT_TOKEN: test-telegram-token
-      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+
+      # Это временная база внутри GitHub Actions.
+      DATABASE_URL: postgresql+asyncpg://hankego:test-password@127.0.0.1:5432/hankego_test
+      TEST_DATABASE_URL: postgresql+asyncpg://hankego:test-password@127.0.0.1:5432/hankego_test
 
     steps:
       - name: Checkout repository
@@ -40,6 +61,12 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked --dev
+
+      - name: Apply database migrations
+        run: uv run alembic upgrade head
+
+      - name: Check migration consistency
+        run: uv run alembic check
 
       - name: Run tests
         run: uv run pytest -q
