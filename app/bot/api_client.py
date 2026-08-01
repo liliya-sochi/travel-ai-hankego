@@ -200,3 +200,63 @@ async def get_trip_history(
         raise BackendError(
             "Backend вернул данные в неправильном формате."
         ) from error
+
+
+async def get_trip_details(
+    *,
+    telegram_id: int,
+    trip_id: int,
+) -> dict[str, Any]:
+    """
+    Получает полный сохранённый маршрут через FastAPI.
+    """
+
+    settings = get_settings()
+
+    url = (
+        f"{settings.backend_url.rstrip('/')}"
+        f"{settings.api_prefix}/trip-details"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                url=url,
+                json={
+                    "telegram_id": telegram_id,
+                    "trip_id": trip_id,
+                },
+            )
+
+        response.raise_for_status()
+
+        return response.json()
+
+    except httpx.TimeoutException as error:
+        raise BackendError(
+            "Backend не успел загрузить маршрут."
+        ) from error
+
+    except httpx.HTTPStatusError as error:
+        try:
+            error_data = error.response.json()
+            error_message = error_data.get(
+                "detail",
+                "Backend не смог загрузить маршрут.",
+            )
+        except ValueError:
+            error_message = (
+                "Backend вернул неправильный ответ."
+            )
+
+        raise BackendError(str(error_message)) from error
+
+    except httpx.RequestError as error:
+        raise BackendError(
+            "Не удалось подключиться к HankeGo API."
+        ) from error
+
+    except ValueError as error:
+        raise BackendError(
+            "Backend вернул данные в неправильном формате."
+        ) from error

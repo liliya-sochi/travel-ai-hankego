@@ -11,10 +11,13 @@ from app.repositories.trip import TripRepository
 from app.repositories.user import UserRepository
 from app.schemas.trip import (
     TripCreateResponse,
+    TripDetailsResponse,
     TripHistoryResponse,
     TripSummaryResponse,
 )
 from app.services.ai import generate_trip_plan
+
+from pydantic import ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -23,6 +26,12 @@ logger = logging.getLogger(__name__)
 class TripServiceError(Exception):
     """
     Безопасная ошибка работы с маршрутами.
+    """
+
+
+class TripNotFoundError(Exception):
+    """
+    Маршрут не существует или не принадлежит пользователю.
     """
 
 
@@ -138,3 +147,64 @@ class TripService:
             count=len(trip_items),
             trips=trip_items,
         )
+
+    async def get_trip_details(
+        self,
+        telegram_id: int,
+        trip_id: int,
+    ) -> TripDetailsResponse:
+        """
+        Возвращает полный маршрут только его владельцу.
+        """
+
+        try:
+            user = await self._user_repository.get_by_telegram_id(
+                telegram_id=telegram_id,
+            )
+
+            if user is None:
+                raise TripNotFoundError(
+                    "Маршрут не найден."
+                )
+
+            trip = (
+                await self._trip_repository.get_by_id_and_user_id(
+                    trip_id=trip_id,
+                    user_id=user.id,
+                )
+            )
+
+            if trip is None:
+                raise TripNotFoundError(
+                    "Маршрут не найден."
+                )
+
+            return TripDetailsResponse(
+                **trip.plan_data,
+                trip_id=trip.id,
+                created_at=trip.created_at,
+            )
+
+        except TripNotFoundError:
+            raise
+
+        except ValidationError as error:
+            logger.exception(
+                "Invalid persisted trip data"
+            )
+
+            raise TripServiceError(
+                "Не удалось прочитать сохранённый маршрут."
+            ) from error
+
+        except SQLAlchemyError as error:
+            await self._session.rollback()
+
+            # Не записываем Telegram ID в лог.
+            logger.exception(
+                "Failed to load trip details"
+            )
+
+            raise TripServiceError(
+                "Не удалось загрузить сохранённый маршрут."
+            ) from error

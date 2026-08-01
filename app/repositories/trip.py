@@ -44,11 +44,7 @@ class TripRepository:
 
         self._session.add(trip)
 
-        # Отправляем INSERT в PostgreSQL,
-        # не завершая транзакцию.
         await self._session.flush()
-
-        # Получаем id и created_at, созданные PostgreSQL.
         await self._session.refresh(trip)
 
         return trip
@@ -75,3 +71,21 @@ class TripRepository:
         result = await self._session.execute(statement)
 
         return list(result.scalars().all())
+
+    async def get_by_id_and_user_id(
+        self,
+        trip_id: int,
+        user_id: int,
+    ) -> Trip | None:
+        """
+        Возвращает маршрут только его владельцу.
+        """
+
+        statement = select(Trip).where(
+            Trip.id == trip_id,
+            Trip.user_id == user_id,
+        )
+
+        result = await self._session.execute(statement)
+
+        return result.scalar_one_or_none()
