@@ -2,8 +2,6 @@
 Тесты внутренней авторизации FastAPI.
 """
 
-from collections.abc import Iterator
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -27,7 +25,7 @@ from app.main import app
 )
 async def test_protected_api_rejects_invalid_key(
     headers: dict[str, str],
-    enable_internal_api_auth: Iterator[None],
+    enable_internal_api_auth: None,
 ) -> None:
     """
     Проверяет одинаковый отказ без ключа и с неверным ключом.
@@ -58,7 +56,7 @@ async def test_protected_api_rejects_invalid_key(
 
 @pytest.mark.asyncio
 async def test_protected_api_accepts_valid_key(
-    enable_internal_api_auth: Iterator[None],
+    enable_internal_api_auth: None,
 ) -> None:
     """
     Проверяет прохождение security dependency с верным ключом.
@@ -91,7 +89,7 @@ async def test_protected_api_accepts_valid_key(
 
 @pytest.mark.asyncio
 async def test_info_endpoint_remains_public(
-    enable_internal_api_auth: Iterator[None],
+    enable_internal_api_auth: None,
 ) -> None:
     """
     Проверяет публичный health-check без API key.
