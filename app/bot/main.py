@@ -11,6 +11,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import RedisStorage
 
+from app.bot.handlers.history import router as history_router
 from app.bot.handlers.plan import router as plan_router
 from app.bot.handlers.start import router as start_router
 from app.config import get_settings
@@ -44,6 +45,7 @@ async def run_bot() -> None:
 
     dispatcher.include_router(start_router)
     dispatcher.include_router(plan_router)
+    dispatcher.include_router(history_router)
 
     try:
         # Удаляем старый webhook перед запуском polling.
@@ -56,7 +58,9 @@ async def run_bot() -> None:
         await dispatcher.start_polling(telegram_bot)
 
     except Exception:
-        logger.exception("HankeGo Telegram bot stopped unexpectedly")
+        logger.exception(
+            "HankeGo Telegram bot stopped unexpectedly"
+        )
         raise
 
     finally:

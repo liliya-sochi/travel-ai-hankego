@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.trip import TripRepository
 from app.repositories.user import UserRepository
-from app.schemas.trip import TripCreateResponse
+from app.schemas.trip import (
+    TripCreateResponse,
+    TripHistoryResponse,
+    TripSummaryResponse,
+)
 from app.services.ai import generate_trip_plan
 
 
@@ -18,13 +22,13 @@ logger = logging.getLogger(__name__)
 
 class TripServiceError(Exception):
     """
-    Безопасная ошибка сохранения маршрута.
+    Безопасная ошибка работы с маршрутами.
     """
 
 
 class TripService:
     """
-    Управляет созданием и сохранением маршрута.
+    Управляет созданием и чтением маршрутов.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -51,8 +55,6 @@ class TripService:
         trip_plan = await generate_trip_plan(prompt)
 
         try:
-            # Повторный upsert безопасен и гарантирует,
-            # что пользователь существует перед INSERT маршрута.
             user = await self._user_repository.upsert_telegram_user(
                 telegram_id=telegram_id,
                 first_name=first_name,
@@ -83,4 +85,56 @@ class TripService:
             **trip_plan.model_dump(),
             trip_id=trip.id,
             created_at=trip.created_at,
+        )
+
+    async def get_trip_history(
+        self,
+        telegram_id: int,
+        limit: int,
+    ) -> TripHistoryResponse:
+        """
+        Возвращает последние маршруты Telegram-пользователя.
+        """
+
+        try:
+            user = await self._user_repository.get_by_telegram_id(
+                telegram_id=telegram_id,
+            )
+
+            if user is None:
+                return TripHistoryResponse(
+                    count=0,
+                    trips=[],
+                )
+
+            trips = await self._trip_repository.list_by_user_id(
+                user_id=user.id,
+                limit=limit,
+            )
+
+        except SQLAlchemyError as error:
+            await self._session.rollback()
+
+            # Telegram ID не записываем в лог.
+            logger.exception(
+                "Failed to load trip history"
+            )
+
+            raise TripServiceError(
+                "Не удалось загрузить сохранённые маршруты."
+            ) from error
+
+        trip_items = [
+            TripSummaryResponse(
+                trip_id=trip.id,
+                destination=trip.destination,
+                duration_days=trip.duration_days,
+                created_at=trip.created_at,
+            )
+            for trip in trips
+        ]
+
+        return TripHistoryResponse(
+            count=len(trip_items),
+            trips=trip_items,
         )

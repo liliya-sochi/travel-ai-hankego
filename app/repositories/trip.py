@@ -1,11 +1,12 @@
 """
 Репозиторий маршрутов.
 
-Содержит только операции записи в PostgreSQL.
+Содержит только операции чтения и записи PostgreSQL.
 """
 
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.trip import Trip
@@ -51,3 +52,26 @@ class TripRepository:
         await self._session.refresh(trip)
 
         return trip
+
+    async def list_by_user_id(
+        self,
+        user_id: int,
+        limit: int,
+    ) -> list[Trip]:
+        """
+        Возвращает последние маршруты пользователя.
+        """
+
+        statement = (
+            select(Trip)
+            .where(Trip.user_id == user_id)
+            .order_by(
+                Trip.created_at.desc(),
+                Trip.id.desc(),
+            )
+            .limit(limit)
+        )
+
+        result = await self._session.execute(statement)
+
+        return list(result.scalars().all())

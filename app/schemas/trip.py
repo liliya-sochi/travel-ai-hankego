@@ -56,6 +56,25 @@ class TripPlanRequest(StrictSchema):
     )
 
 
+class TripHistoryRequest(StrictSchema):
+    """
+    Запрос истории маршрутов пользователя.
+    """
+
+    telegram_id: int = Field(
+        gt=0,
+        description="Уникальный идентификатор пользователя Telegram.",
+        examples=[9000000001],
+    )
+
+    limit: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        description="Максимальное количество маршрутов.",
+    )
+
+
 class DayPlan(StrictSchema):
     """
     План одного дня путешествия.
@@ -162,4 +181,47 @@ class TripCreateResponse(TripPlanResponse):
 
     created_at: datetime = Field(
         description="Время сохранения маршрута.",
+    )
+
+
+class TripSummaryResponse(StrictSchema):
+    """
+    Краткая информация о сохранённом маршруте.
+    """
+
+    trip_id: int = Field(
+        gt=0,
+        description="Внутренний идентификатор маршрута.",
+    )
+
+    destination: str = Field(
+        min_length=1,
+        max_length=255,
+        description="Направление поездки.",
+    )
+
+    duration_days: int = Field(
+        ge=1,
+        le=30,
+        description="Продолжительность поездки.",
+    )
+
+    created_at: datetime = Field(
+        description="Время сохранения маршрута.",
+    )
+
+
+class TripHistoryResponse(StrictSchema):
+    """
+    История маршрутов пользователя.
+    """
+
+    count: int = Field(
+        ge=0,
+        description="Количество возвращённых маршрутов.",
+    )
+
+    trips: list[TripSummaryResponse] = Field(
+        default_factory=list,
+        description="Последние сохранённые маршруты.",
     )

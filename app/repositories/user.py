@@ -5,6 +5,7 @@
 Бизнес-логика в этом модуле не размещается.
 """
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,3 +53,19 @@ class UserRepository:
         result = await self._session.execute(statement)
 
         return result.scalar_one()
+
+    async def get_by_telegram_id(
+        self,
+        telegram_id: int,
+    ) -> User | None:
+        """
+        Возвращает пользователя по Telegram ID.
+        """
+
+        statement = select(User).where(
+            User.telegram_id == telegram_id
+        )
+
+        result = await self._session.execute(statement)
+
+        return result.scalar_one_or_none()
