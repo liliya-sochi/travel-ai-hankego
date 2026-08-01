@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_session
 from app.schemas.trip import (
     TripCreateResponse,
+    TripDeleteRequest,
+    TripDeleteResponse,
     TripDetailsRequest,
     TripDetailsResponse,
     TripHistoryRequest,
@@ -120,6 +122,41 @@ async def get_trip_details(
 
     try:
         return await service.get_trip_details(
+            telegram_id=request.telegram_id,
+            trip_id=request.trip_id,
+        )
+
+    except TripNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+
+    except TripServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(error),
+        ) from error
+
+
+@router.post(
+    "/trip-delete",
+    response_model=TripDeleteResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Удалить сохранённый маршрут",
+)
+async def delete_trip(
+    request: TripDeleteRequest,
+    session: SessionDependency,
+) -> TripDeleteResponse:
+    """
+    Удаляет маршрут только его владельца.
+    """
+
+    service = TripService(session)
+
+    try:
+        return await service.delete_trip(
             telegram_id=request.telegram_id,
             trip_id=request.trip_id,
         )

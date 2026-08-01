@@ -11,6 +11,7 @@ from app.repositories.trip import TripRepository
 from app.repositories.user import UserRepository
 from app.schemas.trip import (
     TripCreateResponse,
+    TripDeleteResponse,
     TripDetailsResponse,
     TripHistoryResponse,
     TripSummaryResponse,
@@ -208,3 +209,57 @@ class TripService:
             raise TripServiceError(
                 "Не удалось загрузить сохранённый маршрут."
             ) from error
+
+
+    async def delete_trip(
+        self,
+        telegram_id: int,
+        trip_id: int,
+    ) -> TripDeleteResponse:
+        """
+        Удаляет маршрут только его владельца.
+        """
+
+        try:
+            user = await self._user_repository.get_by_telegram_id(
+                telegram_id=telegram_id,
+            )
+
+            if user is None:
+                raise TripNotFoundError(
+                    "Маршрут не найден."
+                )
+
+            deleted_trip_id = (
+                await self._trip_repository.delete_by_id_and_user_id(
+                    trip_id=trip_id,
+                    user_id=user.id,
+                )
+            )
+
+            if deleted_trip_id is None:
+                raise TripNotFoundError(
+                    "Маршрут не найден."
+                )
+
+            await self._session.commit()
+
+        except TripNotFoundError:
+            await self._session.rollback()
+            raise
+
+        except SQLAlchemyError as error:
+            await self._session.rollback()
+
+            # Не записываем пользовательские ID в лог.
+            logger.exception(
+                "Failed to delete trip"
+            )
+
+            raise TripServiceError(
+                "Не удалось удалить сохранённый маршрут."
+            ) from error
+
+        return TripDeleteResponse(
+            trip_id=deleted_trip_id,
+        )

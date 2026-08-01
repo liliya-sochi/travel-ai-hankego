@@ -6,7 +6,7 @@
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.trip import Trip
@@ -84,6 +84,30 @@ class TripRepository:
         statement = select(Trip).where(
             Trip.id == trip_id,
             Trip.user_id == user_id,
+        )
+
+        result = await self._session.execute(statement)
+
+        return result.scalar_one_or_none()
+
+    async def delete_by_id_and_user_id(
+        self,
+        trip_id: int,
+        user_id: int,
+    ) -> int | None:
+        """
+        Удаляет маршрут только его владельца.
+
+        Возвращает ID удалённой записи или None.
+        """
+
+        statement = (
+            delete(Trip)
+            .where(
+                Trip.id == trip_id,
+                Trip.user_id == user_id,
+            )
+            .returning(Trip.id)
         )
 
         result = await self._session.execute(statement)

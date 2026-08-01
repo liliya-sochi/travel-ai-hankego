@@ -3,7 +3,7 @@ Pydantic-схемы планирования путешествий.
 """
 
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -78,6 +78,24 @@ class TripHistoryRequest(StrictSchema):
 class TripDetailsRequest(StrictSchema):
     """
     Запрос полного сохранённого маршрута.
+    """
+
+    telegram_id: int = Field(
+        gt=0,
+        description="Уникальный идентификатор пользователя Telegram.",
+        examples=[9000000001],
+    )
+
+    trip_id: int = Field(
+        gt=0,
+        description="Внутренний идентификатор маршрута.",
+        examples=[7],
+    )
+
+
+class TripDeleteRequest(StrictSchema):
+    """
+    Запрос удаления сохранённого маршрута.
     """
 
     telegram_id: int = Field(
@@ -214,6 +232,22 @@ class TripDetailsResponse(TripPlanResponse):
 
     created_at: datetime = Field(
         description="Время сохранения маршрута.",
+    )
+
+
+class TripDeleteResponse(StrictSchema):
+    """
+    Результат успешного удаления маршрута.
+    """
+
+    trip_id: int = Field(
+        gt=0,
+        description="Идентификатор удалённого маршрута.",
+    )
+
+    deleted: Literal[True] = Field(
+        default=True,
+        description="Подтверждение успешного удаления.",
     )
 
 

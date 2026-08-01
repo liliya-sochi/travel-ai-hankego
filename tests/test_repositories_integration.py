@@ -249,3 +249,79 @@ async def test_database_rejects_invalid_trip_duration(
     )
 
     assert trip_count == 0
+
+
+@pytest.mark.asyncio
+async def test_trip_repository_deletes_only_owned_trip(
+    database_session: AsyncSession,
+) -> None:
+    """
+    Проверяет атомарное удаление только владельцем.
+    """
+
+    user_repository = UserRepository(
+        database_session
+    )
+    trip_repository = TripRepository(
+        database_session
+    )
+
+    owner = await user_repository.upsert_telegram_user(
+        telegram_id=9000000001,
+        first_name="Liliya",
+    )
+
+    other_user = (
+        await user_repository.upsert_telegram_user(
+            telegram_id=9000000002,
+            first_name="Other",
+        )
+    )
+
+    trip = await trip_repository.create_trip(
+        user_id=owner.id,
+        destination="Токио",
+        duration_days=1,
+        plan_data=build_plan_data(
+            destination="Токио"
+        ),
+    )
+
+    await database_session.commit()
+
+    foreign_delete_result = (
+        await trip_repository.delete_by_id_and_user_id(
+            trip_id=trip.id,
+            user_id=other_user.id,
+        )
+    )
+
+    assert foreign_delete_result is None
+
+    existing_trip = (
+        await trip_repository.get_by_id_and_user_id(
+            trip_id=trip.id,
+            user_id=owner.id,
+        )
+    )
+
+    assert existing_trip is not None
+
+    owner_delete_result = (
+        await trip_repository.delete_by_id_and_user_id(
+            trip_id=trip.id,
+            user_id=owner.id,
+        )
+    )
+
+    await database_session.commit()
+
+    deleted_trip = (
+        await trip_repository.get_by_id_and_user_id(
+            trip_id=trip.id,
+            user_id=owner.id,
+        )
+    )
+
+    assert owner_delete_result == trip.id
+    assert deleted_trip is None
