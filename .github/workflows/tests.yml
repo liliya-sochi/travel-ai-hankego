@@ -36,14 +36,16 @@ jobs:
           --health-retries 10
 
     env:
-      # Фиктивные значения только для загрузки Settings.
-      # Реальные ключи и Telegram-токены в CI добавлять нельзя.
+      # Фиктивные значения только для тестов.
       LLM_BASE_URL: https://example.invalid
       LLM_API_KEY: test-api-key
       LLM_MODEL: test-model
       TELEGRAM_BOT_TOKEN: test-telegram-token
 
-      # Это временная база внутри GitHub Actions.
+      # Отдельный фиктивный ключ внутреннего API.
+      INTERNAL_API_KEY: test-internal-api-key-at-least-32-characters
+
+      # Временная PostgreSQL внутри GitHub Actions.
       DATABASE_URL: postgresql+asyncpg://hankego:test-password@127.0.0.1:5432/hankego_test
       TEST_DATABASE_URL: postgresql+asyncpg://hankego:test-password@127.0.0.1:5432/hankego_test
 

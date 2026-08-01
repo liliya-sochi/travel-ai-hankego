@@ -3,7 +3,10 @@
 """
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import (
+    AsyncIterator,
+    Iterator,
+)
 
 import pytest
 import pytest_asyncio
@@ -15,6 +18,45 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
+
+from app.core.security import verify_internal_api_key
+from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def bypass_internal_api_auth() -> Iterator[None]:
+    """
+    Отключает внутреннюю авторизацию в обычных unit-тестах.
+
+    Настоящая проверка API key выполняется отдельными тестами.
+    """
+
+    app.dependency_overrides[
+        verify_internal_api_key
+    ] = lambda: None
+
+    yield
+
+    app.dependency_overrides.pop(
+        verify_internal_api_key,
+        None,
+    )
+
+
+@pytest.fixture
+def enable_internal_api_auth(
+    bypass_internal_api_auth: None,
+) -> Iterator[None]:
+    """
+    Включает настоящую проверку API key для security-тестов.
+    """
+
+    app.dependency_overrides.pop(
+        verify_internal_api_key,
+        None,
+    )
+
+    yield
 
 
 def get_test_database_url() -> str:
@@ -55,7 +97,6 @@ async def database_session() -> AsyncIterator[AsyncSession]:
 
     database_url = get_test_database_url()
 
-    # NullPool не переиспользует соединения между event loop.
     test_engine = create_async_engine(
         database_url,
         poolclass=NullPool,
@@ -86,7 +127,6 @@ async def database_session() -> AsyncIterator[AsyncSession]:
         async with test_session_factory() as session:
             yield session
 
-            # Восстанавливает Session после неуспешного теста.
             await session.rollback()
 
     finally:

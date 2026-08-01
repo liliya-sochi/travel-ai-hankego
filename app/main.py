@@ -11,12 +11,18 @@ from time import perf_counter
 from typing import AsyncIterator
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    Request,
+    Response,
+)
 
 from app.api.trip import router as trip_router
 from app.api.user import router as user_router
 from app.config import get_settings
 from app.core.logging import configure_logging
+from app.core.security import verify_internal_api_key
 
 
 settings = get_settings()
@@ -26,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+async def lifespan(
+    application: FastAPI,
+) -> AsyncIterator[None]:
     """
     Выполняет действия при запуске и остановке FastAPI.
     """
@@ -40,7 +48,9 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="HankeGo API",
-    description="Backend AI-помощника для планирования путешествий.",
+    description=(
+        "Backend AI-помощника для планирования путешествий."
+    ),
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -58,18 +68,24 @@ async def log_http_request(
     чтобы не сохранять пользовательские данные.
     """
 
-    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    request_id = (
+        request.headers.get("X-Request-ID")
+        or str(uuid4())
+    )
+
     started_at = perf_counter()
 
     try:
         response = await call_next(request)
 
     except Exception:
-        duration_ms = (perf_counter() - started_at) * 1000
+        duration_ms = (
+            perf_counter() - started_at
+        ) * 1000
 
         logger.exception(
-            "HTTP request failed | request_id=%s | method=%s | "
-            "path=%s | duration_ms=%.2f",
+            "HTTP request failed | request_id=%s | "
+            "method=%s | path=%s | duration_ms=%.2f",
             request_id,
             request.method,
             request.url.path,
@@ -78,11 +94,14 @@ async def log_http_request(
 
         raise
 
-    duration_ms = (perf_counter() - started_at) * 1000
+    duration_ms = (
+        perf_counter() - started_at
+    ) * 1000
 
     logger.info(
-        "HTTP request completed | request_id=%s | method=%s | "
-        "path=%s | status=%s | duration_ms=%.2f",
+        "HTTP request completed | request_id=%s | "
+        "method=%s | path=%s | status=%s | "
+        "duration_ms=%.2f",
         request_id,
         request.method,
         request.url.path,
@@ -103,6 +122,8 @@ async def log_http_request(
 async def get_info() -> dict[str, str]:
     """
     Возвращает техническое состояние backend.
+
+    Этот endpoint специально остаётся публичным.
     """
 
     return {
@@ -112,10 +133,16 @@ async def get_info() -> dict[str, str]:
     }
 
 
+internal_api_dependencies = [
+    Depends(verify_internal_api_key),
+]
+
+
 app.include_router(
     user_router,
     prefix=settings.api_prefix,
     tags=["Users"],
+    dependencies=internal_api_dependencies,
 )
 
 
@@ -123,4 +150,5 @@ app.include_router(
     trip_router,
     prefix=settings.api_prefix,
     tags=["Trips"],
+    dependencies=internal_api_dependencies,
 )

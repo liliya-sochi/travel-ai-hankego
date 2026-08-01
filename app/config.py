@@ -8,6 +8,7 @@
 
 from functools import lru_cache
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,10 +40,16 @@ class Settings(BaseSettings):
     # Общий префикс HTTP-маршрутов backend.
     api_prefix: str = "/api/v1"
 
+    # Секретный ключ между Telegram-ботом и FastAPI.
+    # SecretStr скрывает значение при выводе Settings в лог.
+    internal_api_key: SecretStr = Field(
+        min_length=32,
+    )
+
     # Адрес Redis для хранения состояний Telegram-бота.
     redis_url: str = "redis://127.0.0.1:6379/0"
 
-    # Строка подключения к PostgreSQL через асинхронный драйвер asyncpg.
+    # Строка подключения к PostgreSQL через asyncpg.
     database_url: str
 
     # Минимальный уровень сообщений в логах.

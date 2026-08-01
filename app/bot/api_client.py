@@ -1,27 +1,113 @@
 """
-Клиент для общения Telegram-бота с FastAPI backend.
+Клиент Telegram-бота для общения с FastAPI backend.
 
-Telegram-бот не обращается к Groq напрямую.
-Он отправляет запрос нашему backend, а backend уже:
-1. обращается к языковой модели;
-2. проверяет ответ;
-3. возвращает структурированный план.
+Telegram-бот не обращается к LLM или PostgreSQL напрямую.
+Все операции выполняются через внутренний HTTP API.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from app.config import get_settings
 
 
+HttpMethod = Literal[
+    "GET",
+    "POST",
+    "PUT",
+    "DELETE",
+]
+
+
 class BackendError(Exception):
     """
-    Ошибка при обращении Telegram-бота к backend.
-
-    Благодаря собственному исключению main.py не должен знать
-    детали работы библиотеки httpx.
+    Безопасная ошибка обращения к FastAPI backend.
     """
+
+
+async def _request_backend(
+    *,
+    method: HttpMethod,
+    path: str,
+    payload: dict[str, Any],
+    timeout: float,
+    timeout_message: str,
+    default_error_message: str,
+) -> dict[str, Any]:
+    """
+    Выполняет авторизованный запрос к внутреннему API.
+    """
+
+    settings = get_settings()
+
+    url = (
+        f"{settings.backend_url.rstrip('/')}"
+        f"{settings.api_prefix}"
+        f"{path}"
+    )
+
+    headers = {
+        "X-Internal-API-Key": (
+            settings.internal_api_key.get_secret_value()
+        ),
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+        ) as client:
+            response = await client.request(
+                method=method,
+                url=url,
+                json=payload,
+                headers=headers,
+            )
+
+        response.raise_for_status()
+
+        response_data = response.json()
+
+        if not isinstance(response_data, dict):
+            raise ValueError(
+                "Backend response must be a JSON object."
+            )
+
+        return response_data
+
+    except httpx.TimeoutException as error:
+        raise BackendError(
+            timeout_message
+        ) from error
+
+    except httpx.HTTPStatusError as error:
+        error_message = default_error_message
+
+        try:
+            error_data = error.response.json()
+
+            if isinstance(error_data, dict):
+                detail = error_data.get("detail")
+
+                if isinstance(detail, str):
+                    error_message = detail
+
+        except ValueError:
+            pass
+
+        raise BackendError(
+            error_message
+        ) from error
+
+    except httpx.RequestError as error:
+        raise BackendError(
+            "Не удалось подключиться к HankeGo API."
+        ) from error
+
+    except ValueError as error:
+        raise BackendError(
+            "Backend вернул данные в неправильном формате."
+        ) from error
 
 
 async def register_telegram_user(
@@ -29,54 +115,24 @@ async def register_telegram_user(
     first_name: str,
 ) -> None:
     """
-    Создаёт или обновляет Telegram-пользователя через FastAPI.
+    Создаёт или обновляет Telegram-пользователя.
     """
 
-    settings = get_settings()
-
-    url = (
-        f"{settings.backend_url.rstrip('/')}"
-        f"{settings.api_prefix}/users/telegram"
-    )
-
-    try:
-        # Регистрация пользователя должна выполняться быстро,
-        # поэтому здесь используется короткий тайм-аут.
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.put(
-                url=url,
-                json={
-                    "telegram_id": telegram_id,
-                    "first_name": first_name,
-                },
-            )
-
-        response.raise_for_status()
-
-    except httpx.TimeoutException as error:
-        raise BackendError(
+    await _request_backend(
+        method="PUT",
+        path="/users/telegram",
+        payload={
+            "telegram_id": telegram_id,
+            "first_name": first_name,
+        },
+        timeout=10.0,
+        timeout_message=(
             "Backend не успел зарегистрировать пользователя."
-        ) from error
-
-    except httpx.HTTPStatusError as error:
-        try:
-            error_data = error.response.json()
-            error_message = error_data.get(
-                "detail",
-                "Backend не смог зарегистрировать пользователя.",
-            )
-        except ValueError:
-            error_message = (
-                "Backend вернул неправильный ответ "
-                "при регистрации пользователя."
-            )
-
-        raise BackendError(str(error_message)) from error
-
-    except httpx.RequestError as error:
-        raise BackendError(
-            "Не удалось подключиться к HankeGo API."
-        ) from error
+        ),
+        default_error_message=(
+            "Backend не смог зарегистрировать пользователя."
+        ),
+    )
 
 
 async def create_trip_plan(
@@ -86,60 +142,25 @@ async def create_trip_plan(
     prompt: str,
 ) -> dict[str, Any]:
     """
-    Создаёт и сохраняет маршрут через FastAPI.
+    Создаёт и сохраняет маршрут.
     """
 
-    settings = get_settings()
-
-    url = (
-        f"{settings.backend_url.rstrip('/')}"
-        f"{settings.api_prefix}/trip-plan"
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            response = await client.post(
-                url=url,
-                json={
-                    "telegram_id": telegram_id,
-                    "first_name": first_name,
-                    "prompt": prompt,
-                },
-            )
-
-        response.raise_for_status()
-
-        return response.json()
-
-    except httpx.TimeoutException as error:
-        raise BackendError(
+    return await _request_backend(
+        method="POST",
+        path="/trip-plan",
+        payload={
+            "telegram_id": telegram_id,
+            "first_name": first_name,
+            "prompt": prompt,
+        },
+        timeout=90.0,
+        timeout_message=(
             "Backend не успел подготовить маршрут."
-        ) from error
-
-    except httpx.HTTPStatusError as error:
-        try:
-            error_data = error.response.json()
-            error_message = error_data.get(
-                "detail",
-                "Backend вернул ошибку.",
-            )
-        except ValueError:
-            error_message = (
-                "Backend вернул неправильный ответ."
-            )
-
-        raise BackendError(str(error_message)) from error
-
-    except httpx.RequestError as error:
-        raise BackendError(
-            "Не удалось подключиться к HankeGo API. "
-            "Проверь, запущен ли FastAPI."
-        ) from error
-
-    except ValueError as error:
-        raise BackendError(
-            "Backend вернул данные в неправильном формате."
-        ) from error
+        ),
+        default_error_message=(
+            "Backend не смог создать маршрут."
+        ),
+    )
 
 
 async def get_trip_history(
@@ -148,58 +169,24 @@ async def get_trip_history(
     limit: int = 10,
 ) -> dict[str, Any]:
     """
-    Получает историю маршрутов через FastAPI.
+    Получает историю сохранённых маршрутов.
     """
 
-    settings = get_settings()
-
-    url = (
-        f"{settings.backend_url.rstrip('/')}"
-        f"{settings.api_prefix}/trip-history"
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                url=url,
-                json={
-                    "telegram_id": telegram_id,
-                    "limit": limit,
-                },
-            )
-
-        response.raise_for_status()
-
-        return response.json()
-
-    except httpx.TimeoutException as error:
-        raise BackendError(
+    return await _request_backend(
+        method="POST",
+        path="/trip-history",
+        payload={
+            "telegram_id": telegram_id,
+            "limit": limit,
+        },
+        timeout=10.0,
+        timeout_message=(
             "Backend не успел загрузить маршруты."
-        ) from error
-
-    except httpx.HTTPStatusError as error:
-        try:
-            error_data = error.response.json()
-            error_message = error_data.get(
-                "detail",
-                "Backend не смог загрузить маршруты.",
-            )
-        except ValueError:
-            error_message = (
-                "Backend вернул неправильный ответ."
-            )
-
-        raise BackendError(str(error_message)) from error
-
-    except httpx.RequestError as error:
-        raise BackendError(
-            "Не удалось подключиться к HankeGo API."
-        ) from error
-
-    except ValueError as error:
-        raise BackendError(
-            "Backend вернул данные в неправильном формате."
-        ) from error
+        ),
+        default_error_message=(
+            "Backend не смог загрузить маршруты."
+        ),
+    )
 
 
 async def get_trip_details(
@@ -208,58 +195,24 @@ async def get_trip_details(
     trip_id: int,
 ) -> dict[str, Any]:
     """
-    Получает полный сохранённый маршрут через FastAPI.
+    Получает полный сохранённый маршрут.
     """
 
-    settings = get_settings()
-
-    url = (
-        f"{settings.backend_url.rstrip('/')}"
-        f"{settings.api_prefix}/trip-details"
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                url=url,
-                json={
-                    "telegram_id": telegram_id,
-                    "trip_id": trip_id,
-                },
-            )
-
-        response.raise_for_status()
-
-        return response.json()
-
-    except httpx.TimeoutException as error:
-        raise BackendError(
+    return await _request_backend(
+        method="POST",
+        path="/trip-details",
+        payload={
+            "telegram_id": telegram_id,
+            "trip_id": trip_id,
+        },
+        timeout=10.0,
+        timeout_message=(
             "Backend не успел загрузить маршрут."
-        ) from error
-
-    except httpx.HTTPStatusError as error:
-        try:
-            error_data = error.response.json()
-            error_message = error_data.get(
-                "detail",
-                "Backend не смог загрузить маршрут.",
-            )
-        except ValueError:
-            error_message = (
-                "Backend вернул неправильный ответ."
-            )
-
-        raise BackendError(str(error_message)) from error
-
-    except httpx.RequestError as error:
-        raise BackendError(
-            "Не удалось подключиться к HankeGo API."
-        ) from error
-
-    except ValueError as error:
-        raise BackendError(
-            "Backend вернул данные в неправильном формате."
-        ) from error
+        ),
+        default_error_message=(
+            "Backend не смог загрузить маршрут."
+        ),
+    )
 
 
 async def delete_trip(
@@ -268,55 +221,21 @@ async def delete_trip(
     trip_id: int,
 ) -> dict[str, Any]:
     """
-    Удаляет сохранённый маршрут через FastAPI.
+    Удаляет сохранённый маршрут.
     """
 
-    settings = get_settings()
-
-    url = (
-        f"{settings.backend_url.rstrip('/')}"
-        f"{settings.api_prefix}/trip-delete"
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                url=url,
-                json={
-                    "telegram_id": telegram_id,
-                    "trip_id": trip_id,
-                },
-            )
-
-        response.raise_for_status()
-
-        return response.json()
-
-    except httpx.TimeoutException as error:
-        raise BackendError(
+    return await _request_backend(
+        method="POST",
+        path="/trip-delete",
+        payload={
+            "telegram_id": telegram_id,
+            "trip_id": trip_id,
+        },
+        timeout=10.0,
+        timeout_message=(
             "Backend не успел удалить маршрут."
-        ) from error
-
-    except httpx.HTTPStatusError as error:
-        try:
-            error_data = error.response.json()
-            error_message = error_data.get(
-                "detail",
-                "Backend не смог удалить маршрут.",
-            )
-        except ValueError:
-            error_message = (
-                "Backend вернул неправильный ответ."
-            )
-
-        raise BackendError(str(error_message)) from error
-
-    except httpx.RequestError as error:
-        raise BackendError(
-            "Не удалось подключиться к HankeGo API."
-        ) from error
-
-    except ValueError as error:
-        raise BackendError(
-            "Backend вернул данные в неправильном формате."
-        ) from error
+        ),
+        default_error_message=(
+            "Backend не смог удалить маршрут."
+        ),
+    )
