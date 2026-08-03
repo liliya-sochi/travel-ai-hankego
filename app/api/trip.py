@@ -2,6 +2,7 @@
 HTTP-маршруты планирования путешествий.
 """
 
+from math import ceil
 from typing import Annotated
 
 from fastapi import (
@@ -12,6 +13,9 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import (
+    get_trip_plan_rate_limiter,
+)
 from app.database import get_session
 from app.schemas.trip import (
     TripCreateResponse,
@@ -24,6 +28,11 @@ from app.schemas.trip import (
     TripPlanRequest,
 )
 from app.services.ai import AIServiceError
+from app.services.rate_limit import (
+    RateLimitExceededError,
+    RateLimitUnavailableError,
+    TripPlanRateLimiter,
+)
 from app.services.trip import (
     TripNotFoundError,
     TripService,
@@ -38,6 +47,11 @@ SessionDependency = Annotated[
     Depends(get_session),
 ]
 
+RateLimiterDependency = Annotated[
+    TripPlanRateLimiter,
+    Depends(get_trip_plan_rate_limiter),
+]
+
 
 @router.post(
     "/trip-plan",
@@ -48,10 +62,44 @@ SessionDependency = Annotated[
 async def create_trip_plan(
     request: TripPlanRequest,
     session: SessionDependency,
+    rate_limiter: RateLimiterDependency,
 ) -> TripCreateResponse:
     """
     Генерирует маршрут и сохраняет его пользователю.
     """
+
+    try:
+        await rate_limiter.check(
+            telegram_id=request.telegram_id,
+        )
+
+    except RateLimitExceededError as error:
+        retry_minutes = max(
+            1,
+            ceil(error.retry_after_seconds / 60),
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Лимит генерации маршрутов исчерпан. "
+                f"Попробуйте снова примерно через "
+                f"{retry_minutes} мин."
+            ),
+            headers={
+                "Retry-After": str(
+                    error.retry_after_seconds
+                ),
+            },
+        ) from error
+
+    except RateLimitUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Генерация маршрутов временно недоступна."
+            ),
+        ) from error
 
     service = TripService(session)
 

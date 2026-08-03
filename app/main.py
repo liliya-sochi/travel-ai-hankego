@@ -22,6 +22,7 @@ from app.api.trip import router as trip_router
 from app.api.user import router as user_router
 from app.config import get_settings
 from app.core.logging import configure_logging
+from app.core.redis import create_redis_client
 from app.core.security import verify_internal_api_key
 
 
@@ -36,14 +37,24 @@ async def lifespan(
     application: FastAPI,
 ) -> AsyncIterator[None]:
     """
-    Выполняет действия при запуске и остановке FastAPI.
+    Управляет ресурсами при запуске и остановке FastAPI.
     """
+
+    redis_client = create_redis_client(
+        settings.redis_url
+    )
+
+    application.state.redis_client = redis_client
 
     logger.info("HankeGo API started")
 
-    yield
+    try:
+        yield
 
-    logger.info("HankeGo API stopped")
+    finally:
+        await redis_client.aclose()
+
+        logger.info("HankeGo API stopped")
 
 
 app = FastAPI(
@@ -122,8 +133,6 @@ async def log_http_request(
 async def get_info() -> dict[str, str]:
     """
     Возвращает техническое состояние backend.
-
-    Этот endpoint специально остаётся публичным.
     """
 
     return {

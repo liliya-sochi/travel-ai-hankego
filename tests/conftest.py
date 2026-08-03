@@ -19,16 +19,31 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from app.api.dependencies import (
+    get_trip_plan_rate_limiter,
+)
 from app.core.security import verify_internal_api_key
 from app.main import app
+
+
+class NoOpTripPlanRateLimiter:
+    """
+    Rate limiter, который ничего не запрещает.
+    """
+
+    async def check(
+        self,
+        telegram_id: int,
+    ) -> None:
+        """
+        Разрешает тестовый запрос.
+        """
 
 
 @pytest.fixture(autouse=True)
 def bypass_internal_api_auth() -> Iterator[None]:
     """
-    Отключает внутреннюю авторизацию в обычных unit-тестах.
-
-    Настоящая проверка API key выполняется отдельными тестами.
+    Отключает авторизацию в обычных unit-тестах.
     """
 
     app.dependency_overrides[
@@ -43,12 +58,30 @@ def bypass_internal_api_auth() -> Iterator[None]:
     )
 
 
+@pytest.fixture(autouse=True)
+def bypass_trip_plan_rate_limit() -> Iterator[None]:
+    """
+    Отключает настоящий Redis rate limiter в unit-тестах.
+    """
+
+    app.dependency_overrides[
+        get_trip_plan_rate_limiter
+    ] = lambda: NoOpTripPlanRateLimiter()
+
+    yield
+
+    app.dependency_overrides.pop(
+        get_trip_plan_rate_limiter,
+        None,
+    )
+
+
 @pytest.fixture
 def enable_internal_api_auth(
     bypass_internal_api_auth: None,
 ) -> Iterator[None]:
     """
-    Включает настоящую проверку API key для security-тестов.
+    Включает настоящую проверку API key.
     """
 
     app.dependency_overrides.pop(
@@ -77,7 +110,6 @@ def get_test_database_url() -> str:
     parsed_url = make_url(database_url)
     database_name = parsed_url.database or ""
 
-    # Защищает production-базу от случайного TRUNCATE.
     if not database_name.endswith("_test"):
         raise RuntimeError(
             "Integration-тесты разрешены только для базы, "
@@ -91,8 +123,6 @@ def get_test_database_url() -> str:
 async def database_session() -> AsyncIterator[AsyncSession]:
     """
     Выдаёт изолированную сессию тестовой PostgreSQL.
-
-    Перед и после теста очищает таблицы приложения.
     """
 
     database_url = get_test_database_url()

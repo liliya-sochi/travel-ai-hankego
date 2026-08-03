@@ -41,13 +41,26 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
 
     # Секретный ключ между Telegram-ботом и FastAPI.
-    # SecretStr скрывает значение при выводе Settings в лог.
     internal_api_key: SecretStr = Field(
         min_length=32,
     )
 
-    # Адрес Redis для хранения состояний Telegram-бота.
+    # Адрес Redis.
     redis_url: str = "redis://127.0.0.1:6379/0"
+
+    # Максимальное количество генераций за одно окно.
+    trip_plan_rate_limit: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+    )
+
+    # Продолжительность окна rate limit в секундах.
+    trip_plan_rate_window_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+    )
 
     # Строка подключения к PostgreSQL через asyncpg.
     database_url: str
@@ -56,16 +69,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(
-        # Имя файла с переменными окружения.
         env_file=".env",
-
-        # Кодировка для корректного чтения русских символов.
         env_file_encoding="utf-8",
-
-        # Разрешает заглавные имена переменных в .env.
         case_sensitive=False,
-
-        # Неизвестные значения не ломают приложение.
         extra="ignore",
     )
 
