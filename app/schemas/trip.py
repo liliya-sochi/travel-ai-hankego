@@ -128,17 +128,14 @@ class DayPlan(StrictSchema):
     )
 
     morning: list[str] = Field(
-        default_factory=list,
         description="План на утро.",
     )
 
     afternoon: list[str] = Field(
-        default_factory=list,
         description="План на день.",
     )
 
     evening: list[str] = Field(
-        default_factory=list,
         description="План на вечер.",
     )
 
@@ -171,7 +168,6 @@ class TripPlanResponse(StrictSchema):
     )
 
     practical_tips: list[str] = Field(
-        default_factory=list,
         description="Практические советы.",
     )
 
