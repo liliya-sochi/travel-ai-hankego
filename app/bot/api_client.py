@@ -153,7 +153,7 @@ async def create_trip_plan(
             "first_name": first_name,
             "prompt": prompt,
         },
-        timeout=90.0,
+        timeout=150.0,
         timeout_message=(
             "Backend не успел подготовить маршрут."
         ),

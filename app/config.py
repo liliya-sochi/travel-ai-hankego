@@ -62,6 +62,13 @@ class Settings(BaseSettings):
         le=86400,
     )
 
+    # Максимальное время блокировки одной генерации.
+    trip_plan_lock_ttl_seconds: int = Field(
+        default=180,
+        ge=120,
+        le=600,
+    )
+
     # Строка подключения к PostgreSQL через asyncpg.
     database_url: str
 

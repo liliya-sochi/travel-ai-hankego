@@ -14,6 +14,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
+    get_trip_generation_lock,
     get_trip_plan_rate_limiter,
 )
 from app.database import get_session
@@ -38,6 +39,11 @@ from app.services.trip import (
     TripService,
     TripServiceError,
 )
+from app.services.trip_lock import (
+    TripGenerationInProgressError,
+    TripGenerationLock,
+    TripGenerationLockUnavailableError,
+)
 
 
 router = APIRouter()
@@ -52,6 +58,11 @@ RateLimiterDependency = Annotated[
     Depends(get_trip_plan_rate_limiter),
 ]
 
+GenerationLockDependency = Annotated[
+    TripGenerationLock,
+    Depends(get_trip_generation_lock),
+]
+
 
 @router.post(
     "/trip-plan",
@@ -63,15 +74,44 @@ async def create_trip_plan(
     request: TripPlanRequest,
     session: SessionDependency,
     rate_limiter: RateLimiterDependency,
+    generation_lock: GenerationLockDependency,
 ) -> TripCreateResponse:
     """
     Генерирует маршрут и сохраняет его пользователю.
     """
 
+    service = TripService(session)
+
     try:
-        await rate_limiter.check(
+        async with generation_lock.hold(
             telegram_id=request.telegram_id,
-        )
+        ):
+            await rate_limiter.check(
+                telegram_id=request.telegram_id,
+            )
+
+            return await service.create_trip_plan(
+                telegram_id=request.telegram_id,
+                first_name=request.first_name,
+                prompt=request.prompt,
+            )
+
+    except TripGenerationInProgressError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ваш маршрут уже создаётся. "
+                "Дождитесь завершения текущей генерации."
+            ),
+        ) from error
+
+    except TripGenerationLockUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Генерация маршрутов временно недоступна."
+            ),
+        ) from error
 
     except RateLimitExceededError as error:
         retry_minutes = max(
@@ -100,15 +140,6 @@ async def create_trip_plan(
                 "Генерация маршрутов временно недоступна."
             ),
         ) from error
-
-    service = TripService(session)
-
-    try:
-        return await service.create_trip_plan(
-            telegram_id=request.telegram_id,
-            first_name=request.first_name,
-            prompt=request.prompt,
-        )
 
     except AIServiceError as error:
         raise HTTPException(

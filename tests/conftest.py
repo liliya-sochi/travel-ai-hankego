@@ -7,6 +7,7 @@ from collections.abc import (
     AsyncIterator,
     Iterator,
 )
+from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from app.api.dependencies import (
+    get_trip_generation_lock,
     get_trip_plan_rate_limiter,
 )
 from app.core.security import verify_internal_api_key
@@ -38,6 +40,23 @@ class NoOpTripPlanRateLimiter:
         """
         Разрешает тестовый запрос.
         """
+
+
+class NoOpTripGenerationLock:
+    """
+    Блокировка, которая всегда разрешает запрос.
+    """
+
+    @asynccontextmanager
+    async def hold(
+        self,
+        telegram_id: int,
+    ) -> AsyncIterator[None]:
+        """
+        Имитирует успешный захват блокировки.
+        """
+
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +80,7 @@ def bypass_internal_api_auth() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def bypass_trip_plan_rate_limit() -> Iterator[None]:
     """
-    Отключает настоящий Redis rate limiter в unit-тестах.
+    Отключает настоящий Redis rate limiter.
     """
 
     app.dependency_overrides[
@@ -72,6 +91,24 @@ def bypass_trip_plan_rate_limit() -> Iterator[None]:
 
     app.dependency_overrides.pop(
         get_trip_plan_rate_limiter,
+        None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def bypass_trip_generation_lock() -> Iterator[None]:
+    """
+    Отключает настоящий Redis lock в unit-тестах.
+    """
+
+    app.dependency_overrides[
+        get_trip_generation_lock
+    ] = lambda: NoOpTripGenerationLock()
+
+    yield
+
+    app.dependency_overrides.pop(
+        get_trip_generation_lock,
         None,
     )
 
