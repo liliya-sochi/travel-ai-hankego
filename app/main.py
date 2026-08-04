@@ -18,6 +18,7 @@ from fastapi import (
     Response,
 )
 
+from app.api.system import router as system_router
 from app.api.trip import router as trip_router
 from app.api.user import router as user_router
 from app.config import get_settings
@@ -125,21 +126,11 @@ async def log_http_request(
     return response
 
 
-@app.get(
-    "/info",
-    tags=["System"],
-    summary="Проверить работу backend",
+# Системные endpoint остаются публичными,
+# чтобы их мог вызывать мониторинг сервера.
+app.include_router(
+    system_router,
 )
-async def get_info() -> dict[str, str]:
-    """
-    Возвращает техническое состояние backend.
-    """
-
-    return {
-        "name": "HankeGo API",
-        "status": "ok",
-        "version": "0.1.0",
-    }
 
 
 internal_api_dependencies = [

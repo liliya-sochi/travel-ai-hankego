@@ -92,7 +92,7 @@ async def test_info_endpoint_remains_public(
     enable_internal_api_auth: None,
 ) -> None:
     """
-    Проверяет публичный health-check без API key.
+    Проверяет публичный информационный endpoint без API key.
     """
 
     transport = ASGITransport(
@@ -108,4 +108,8 @@ async def test_info_endpoint_remains_public(
         )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+
+    assert response.json() == {
+        "name": "HankeGo API",
+        "version": "0.1.0",
+    }

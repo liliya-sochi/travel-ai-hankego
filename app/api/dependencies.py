@@ -9,6 +9,8 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.core.redis import get_redis_client
+from app.database import engine
+from app.services.health import HealthService
 from app.services.rate_limit import TripPlanRateLimiter
 from app.services.trip_lock import TripGenerationLock
 
@@ -17,6 +19,19 @@ RedisDependency = Annotated[
     Redis,
     Depends(get_redis_client),
 ]
+
+
+def get_health_service(
+    redis_client: RedisDependency,
+) -> HealthService:
+    """
+    Создаёт сервис проверки инфраструктуры.
+    """
+
+    return HealthService(
+        database_engine=engine,
+        redis_client=redis_client,
+    )
 
 
 def get_trip_plan_rate_limiter(
