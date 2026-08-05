@@ -6,11 +6,14 @@
 - формирует строгую JSON Schema из Pydantic;
 - отправляет HTTP-запрос;
 - извлекает структурированный ответ;
-- повторно проверяет его через Pydantic.
+- повторно проверяет его через Pydantic;
+- безопасно логирует технические метрики каждого вызова.
 """
 
+from dataclasses import dataclass
 import json
 import logging
+from time import perf_counter
 from typing import Any
 
 import httpx
@@ -26,6 +29,8 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT_SECONDS = 60.0
 MAX_SEMANTIC_ATTEMPTS = 2
 STRUCTURED_OUTPUT_NAME = "trip_plan"
+UNKNOWN_OBSERVABILITY_VALUE = "unknown"
+MAX_LOG_TEXT_LENGTH = 200
 
 
 SYSTEM_PROMPT = """
@@ -64,6 +69,177 @@ class AIServiceError(Exception):
     Технические детали записываются в журнал приложения,
     но не передаются пользователю API.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class LLMProviderResponse:
+    """Внутренний результат одного HTTP-вызова LLM."""
+
+    # data содержит маршрут и никогда не логируется целиком.
+    data: dict[str, Any]
+    duration_ms: int
+    header_request_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LLMResponseMetadata:
+    """Разрешённые для логирования поля ответа LLM."""
+
+    model: str
+    request_id: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+    finish_reason: str
+
+
+def _safe_log_text(
+    value: object,
+    *,
+    fallback: str = UNKNOWN_OBSERVABILITY_VALUE,
+) -> str:
+    """Ограничивает длину строкового поля для безопасного лога."""
+
+    if not isinstance(value, str):
+        return fallback
+
+    normalized_value = value.strip()
+    return normalized_value[:MAX_LOG_TEXT_LENGTH] or fallback
+
+
+def _safe_token_count(value: object) -> int | None:
+    """Возвращает только корректное число токенов."""
+
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+
+    return None
+
+
+def _extract_llm_response_metadata(
+    response_data: dict[str, Any],
+    *,
+    requested_model: str,
+    fallback_request_id: str | None,
+) -> LLMResponseMetadata:
+    """
+    Извлекает только безопасные технические поля ответа Groq.
+
+    Ошибка наблюдаемости не должна ломать генерацию маршрута,
+    поэтому отсутствующие или неверные поля заменяются fallback.
+    """
+
+    usage_value = response_data.get("usage")
+    usage = usage_value if isinstance(usage_value, dict) else {}
+
+    choices = response_data.get("choices")
+    has_first_choice = (
+        isinstance(choices, list)
+        and bool(choices)
+        and isinstance(choices[0], dict)
+    )
+    first_choice = choices[0] if has_first_choice else {}
+
+    groq_metadata = response_data.get("x_groq")
+    groq_request_id = (
+        groq_metadata.get("id")
+        if isinstance(groq_metadata, dict)
+        else None
+    )
+
+    return LLMResponseMetadata(
+        model=_safe_log_text(
+            response_data.get("model"),
+            fallback=_safe_log_text(requested_model),
+        ),
+        request_id=_safe_log_text(
+            groq_request_id,
+            fallback=_safe_log_text(fallback_request_id),
+        ),
+        prompt_tokens=_safe_token_count(usage.get("prompt_tokens")),
+        completion_tokens=_safe_token_count(usage.get("completion_tokens")),
+        total_tokens=_safe_token_count(usage.get("total_tokens")),
+        finish_reason=_safe_log_text(first_choice.get("finish_reason")),
+    )
+
+
+def _log_llm_call(
+    *,
+    level: int,
+    outcome: str,
+    metadata: LLMResponseMetadata,
+    attempt: int,
+    duration_ms: int,
+    error_type: str | None = None,
+    http_status: int | None = None,
+) -> None:
+    """
+    Записывает одно событие вызова LLM по белому списку полей.
+    """
+
+    event: dict[str, str | int | None] = {
+        "event": "llm_call",
+        "outcome": outcome,
+        "model": metadata.model,
+        "attempt": attempt,
+        "max_attempts": MAX_SEMANTIC_ATTEMPTS,
+        "duration_ms": duration_ms,
+        "request_id": metadata.request_id,
+        "prompt_tokens": metadata.prompt_tokens,
+        "completion_tokens": metadata.completion_tokens,
+        "total_tokens": metadata.total_tokens,
+        "finish_reason": metadata.finish_reason,
+    }
+
+    if error_type is not None:
+        event["error_type"] = error_type
+
+    if http_status is not None:
+        event["http_status"] = http_status
+
+    # JSON экранирует управляющие символы и защищает формат строки лога.
+    logger.log(
+        level,
+        "LLM call | %s",
+        json.dumps(
+            event, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+        ),
+    )
+
+
+def _elapsed_milliseconds(started_at: float) -> int:
+    """Возвращает длительность вызова в миллисекундах."""
+
+    return max(0, round((perf_counter() - started_at) * 1000))
+
+
+def _log_llm_error(
+    *,
+    level: int,
+    outcome: str,
+    model: str,
+    attempt: int,
+    started_at: float,
+    error: Exception,
+    request_id: str | None = None,
+    http_status: int | None = None,
+) -> None:
+    """Логирует ошибку вызова без payload и текста исключения."""
+
+    metadata = _extract_llm_response_metadata(
+        {},
+        requested_model=model,
+        fallback_request_id=request_id,
+    )
+    _log_llm_call(
+        level=level,
+        outcome=outcome,
+        metadata=metadata,
+        attempt=attempt,
+        duration_ms=_elapsed_milliseconds(started_at),
+        error_type=type(error).__name__,
+        http_status=http_status,
+    )
 
 
 def _build_response_format() -> dict[str, Any]:
@@ -132,10 +308,6 @@ def _extract_model_text(
         isinstance(refusal, str)
         and refusal.strip()
     ):
-        logger.warning(
-            "AI provider refused to generate a trip plan"
-        )
-
         raise AIServiceError(
             "AI-сервис не смог обработать этот запрос."
         )
@@ -171,10 +343,15 @@ async def _request_model(
     url: str,
     headers: dict[str, str],
     payload: dict[str, Any],
-) -> dict[str, Any]:
+    model: str,
+    attempt: int,
+) -> LLMProviderResponse:
     """
     Выполняет один HTTP-запрос к AI-провайдеру.
     """
+
+    started_at = perf_counter()
+    response: httpx.Response | None = None
 
     try:
         response = await client.post(
@@ -192,59 +369,70 @@ async def _request_model(
                 "AI provider response must be a JSON object."
             )
 
-        return response_data
-
-    except httpx.TimeoutException as error:
-        logger.warning(
-            "AI provider timeout after %.1f seconds",
-            REQUEST_TIMEOUT_SECONDS,
+        return LLMProviderResponse(
+            data=response_data,
+            duration_ms=_elapsed_milliseconds(started_at),
+            header_request_id=response.headers.get("x-request-id"),
         )
 
+    except httpx.TimeoutException as error:
+        _log_llm_error(
+            level=logging.WARNING,
+            outcome="timeout",
+            model=model,
+            attempt=attempt,
+            started_at=started_at,
+            error=error,
+        )
         raise AIServiceError(
             "AI-сервис временно не отвечает. "
             "Попробуйте ещё раз."
         ) from error
 
     except httpx.HTTPStatusError as error:
-        provider_request_id = (
-            error.response.headers.get(
-                "x-request-id",
-                "unknown",
-            )
+        _log_llm_error(
+            level=logging.ERROR,
+            outcome="http_error",
+            model=model,
+            attempt=attempt,
+            started_at=started_at,
+            error=error,
+            request_id=error.response.headers.get("x-request-id"),
+            http_status=error.response.status_code,
         )
-
-        # Тело ответа не логируем:
-        # оно может содержать пользовательские данные.
-        logger.error(
-            "AI provider HTTP error | "
-            "status=%s | request_id=%s",
-            error.response.status_code,
-            provider_request_id,
-        )
-
         raise AIServiceError(
             "AI-сервис временно недоступен. "
             "Попробуйте позже."
         ) from error
 
     except httpx.RequestError as error:
-        logger.error(
-            "AI provider connection error: %s",
-            type(error).__name__,
+        _log_llm_error(
+            level=logging.ERROR,
+            outcome="connection_error",
+            model=model,
+            attempt=attempt,
+            started_at=started_at,
+            error=error,
         )
-
         raise AIServiceError(
             "Не удалось подключиться к AI-сервису."
         ) from error
 
-    except (
-        json.JSONDecodeError,
-        ValueError,
-    ) as error:
-        logger.error(
-            "AI provider returned invalid HTTP JSON."
+    except (json.JSONDecodeError, ValueError) as error:
+        request_id = (
+            response.headers.get("x-request-id")
+            if response is not None
+            else None
         )
-
+        _log_llm_error(
+            level=logging.ERROR,
+            outcome="invalid_response",
+            model=model,
+            attempt=attempt,
+            started_at=started_at,
+            error=error,
+            request_id=request_id,
+        )
         raise AIServiceError(
             "AI-сервис вернул некорректный ответ."
         ) from error
@@ -303,30 +491,57 @@ async def generate_trip_plan(
                 messages=messages,
             )
 
-            response_data = await _request_model(
+            provider_response = await _request_model(
                 client=client,
                 url=url,
                 headers=headers,
                 payload=payload,
+                model=settings.llm_model,
+                attempt=attempt,
             )
 
-            model_text = _extract_model_text(
-                response_data
+            metadata = _extract_llm_response_metadata(
+                provider_response.data,
+                requested_model=settings.llm_model,
+                fallback_request_id=(
+                    provider_response.header_request_id
+                ),
             )
 
             try:
-                return _validate_trip_plan(
+                model_text = _extract_model_text(
+                    provider_response.data
+                )
+
+            except AIServiceError as error:
+                _log_llm_call(
+                    level=logging.WARNING,
+                    outcome="invalid_output",
+                    metadata=metadata,
+                    attempt=attempt,
+                    duration_ms=(
+                        provider_response.duration_ms
+                    ),
+                    error_type=type(error).__name__,
+                )
+
+                raise
+
+            try:
+                trip_plan = _validate_trip_plan(
                     model_text
                 )
 
             except ValidationError as error:
-                logger.warning(
-                    "Structured trip plan failed "
-                    "semantic validation | "
-                    "attempt=%s/%s | error=%s",
-                    attempt,
-                    MAX_SEMANTIC_ATTEMPTS,
-                    type(error).__name__,
+                _log_llm_call(
+                    level=logging.WARNING,
+                    outcome="semantic_validation_failed",
+                    metadata=metadata,
+                    attempt=attempt,
+                    duration_ms=(
+                        provider_response.duration_ms
+                    ),
+                    error_type=type(error).__name__,
                 )
 
                 if (
@@ -353,6 +568,18 @@ async def generate_trip_plan(
                         },
                     ]
                 )
+
+                continue
+
+            _log_llm_call(
+                level=logging.INFO,
+                outcome="success",
+                metadata=metadata,
+                attempt=attempt,
+                duration_ms=provider_response.duration_ms,
+            )
+
+            return trip_plan
 
     raise AIServiceError(
         "Не удалось сформировать маршрут."
