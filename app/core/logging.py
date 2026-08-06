@@ -8,10 +8,29 @@
 import logging
 from logging.config import dictConfig
 
+from app.core.request_context import (
+    EMPTY_CORRELATION_ID,
+    get_correlation_id,
+)
+
 
 LOG_FORMAT = (
-    "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    "%(asctime)s | %(levelname)s | %(name)s | "
+    "correlation_id=%(correlation_id)s | %(message)s"
 )
+
+
+class CorrelationIdFilter(logging.Filter):
+    """Добавляет correlation ID текущей операции в каждую запись."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Обогащает LogRecord и разрешает его дальнейшую обработку."""
+
+        record.correlation_id = (
+            get_correlation_id() or EMPTY_CORRELATION_ID
+        )
+
+        return True
 
 
 def configure_logging(log_level: str = "INFO") -> None:
@@ -37,6 +56,11 @@ def configure_logging(log_level: str = "INFO") -> None:
         {
             "version": 1,
             "disable_existing_loggers": False,
+            "filters": {
+                "correlation_id": {
+                    "()": CorrelationIdFilter,
+                },
+            },
             "formatters": {
                 "default": {
                     "format": LOG_FORMAT,
@@ -47,6 +71,7 @@ def configure_logging(log_level: str = "INFO") -> None:
                 "console": {
                     "class": "logging.StreamHandler",
                     "formatter": "default",
+                    "filters": ["correlation_id"],
                     "level": normalized_level,
                 },
             },

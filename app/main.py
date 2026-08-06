@@ -9,7 +9,6 @@ import logging
 from contextlib import asynccontextmanager
 from time import perf_counter
 from typing import AsyncIterator
-from uuid import uuid4
 
 from fastapi import (
     Depends,
@@ -23,6 +22,12 @@ from app.api.trip import router as trip_router
 from app.api.user import router as user_router
 from app.config import get_settings
 from app.core.logging import configure_logging
+from app.core.request_context import (
+    CORRELATION_ID_HEADER,
+    reset_correlation_id,
+    resolve_correlation_id,
+    set_correlation_id,
+)
 from app.core.redis import create_redis_client
 from app.core.security import verify_internal_api_key
 
@@ -74,17 +79,18 @@ async def log_http_request(
     call_next,
 ) -> Response:
     """
-    Записывает результат и длительность каждого HTTP-запроса.
+    Устанавливает correlation ID и записывает результат HTTP-запроса.
 
     Тело запроса и query-параметры намеренно не логируются,
     чтобы не сохранять пользовательские данные.
     """
 
-    request_id = (
-        request.headers.get("X-Request-ID")
-        or str(uuid4())
+    correlation_id = resolve_correlation_id(
+        request.headers.get(CORRELATION_ID_HEADER)
     )
-
+    context_token = set_correlation_id(
+        correlation_id
+    )
     started_at = perf_counter()
 
     try:
@@ -96,9 +102,8 @@ async def log_http_request(
         ) * 1000
 
         logger.exception(
-            "HTTP request failed | request_id=%s | "
+            "HTTP request failed | "
             "method=%s | path=%s | duration_ms=%.2f",
-            request_id,
             request.method,
             request.url.path,
             duration_ms,
@@ -106,24 +111,29 @@ async def log_http_request(
 
         raise
 
-    duration_ms = (
-        perf_counter() - started_at
-    ) * 1000
+    else:
+        duration_ms = (
+            perf_counter() - started_at
+        ) * 1000
 
-    logger.info(
-        "HTTP request completed | request_id=%s | "
-        "method=%s | path=%s | status=%s | "
-        "duration_ms=%.2f",
-        request_id,
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration_ms,
-    )
+        logger.info(
+            "HTTP request completed | "
+            "method=%s | path=%s | status=%s | "
+            "duration_ms=%.2f",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
 
-    response.headers["X-Request-ID"] = request_id
+        response.headers[
+            CORRELATION_ID_HEADER
+        ] = correlation_id
 
-    return response
+        return response
+
+    finally:
+        reset_correlation_id(context_token)
 
 
 # Системные endpoint остаются публичными,

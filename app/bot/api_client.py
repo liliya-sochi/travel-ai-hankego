@@ -10,6 +10,13 @@ from typing import Any, Literal
 import httpx
 
 from app.config import get_settings
+from app.core.request_context import (
+    CORRELATION_ID_HEADER,
+    create_correlation_id,
+    get_correlation_id,
+    reset_correlation_id,
+    set_correlation_id,
+)
 
 
 HttpMethod = Literal[
@@ -41,6 +48,17 @@ async def _request_backend(
 
     settings = get_settings()
 
+    correlation_id = get_correlation_id()
+    context_token = None
+
+    # При обычной работе ID уже установило Telegram middleware.
+    # Резервное создание нужно для прямых вызовов клиента и тестов.
+    if correlation_id is None:
+        correlation_id = create_correlation_id()
+        context_token = set_correlation_id(
+            correlation_id
+        )
+
     url = (
         f"{settings.backend_url.rstrip('/')}"
         f"{settings.api_prefix}"
@@ -51,6 +69,7 @@ async def _request_backend(
         "X-Internal-API-Key": (
             settings.internal_api_key.get_secret_value()
         ),
+        CORRELATION_ID_HEADER: correlation_id,
     }
 
     try:
@@ -108,6 +127,10 @@ async def _request_backend(
         raise BackendError(
             "Backend вернул данные в неправильном формате."
         ) from error
+
+    finally:
+        if context_token is not None:
+            reset_correlation_id(context_token)
 
 
 async def register_telegram_user(

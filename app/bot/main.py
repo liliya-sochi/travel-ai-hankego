@@ -14,6 +14,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from app.bot.handlers.history import router as history_router
 from app.bot.handlers.plan import router as plan_router
 from app.bot.handlers.start import router as start_router
+from app.bot.middleware import CorrelationIdMiddleware
 from app.config import get_settings
 from app.core.logging import configure_logging
 
@@ -41,6 +42,11 @@ async def run_bot() -> None:
     # Dispatcher передаёт события подходящим Router.
     dispatcher = Dispatcher(
         storage=storage,
+    )
+
+    # Создаём один correlation ID для каждого Telegram update.
+    dispatcher.update.outer_middleware(
+        CorrelationIdMiddleware()
     )
 
     dispatcher.include_router(start_router)
