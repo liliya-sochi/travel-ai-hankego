@@ -9,15 +9,36 @@ from aiogram.types import Message
 
 from app.bot.api_client import BackendError, create_trip_plan
 from app.bot.states import TripPlanning
-from app.bot.services.trip_prompt import build_trip_prompt
 from app.bot.services.trip_formatter import (
     format_trip_plan,
     split_text,
 )
+from app.schemas.trip import TripPreferences
+
+from pydantic import ValidationError
 
 
 # Router хранит обработчики планирования поездки.
 router = Router()
+
+
+def parse_duration_days(value: str) -> int | None:
+    """Преобразует целое количество дней от 1 до 30."""
+
+    normalized_value = value.strip()
+
+    if (
+        not normalized_value.isdecimal()
+        or len(normalized_value) > 2
+    ):
+        return None
+
+    duration_days = int(normalized_value)
+
+    if not 1 <= duration_days <= 30:
+        return None
+
+    return duration_days
 
 
 @router.message(Command("plan"))
@@ -70,7 +91,7 @@ async def destination_handler(
 
     await message.answer(
         "На сколько дней планируете поездку?\n\n"
-        "Например: 7 дней."
+        "Отправьте число от 1 до 30. Например: 7."
     )
 
 
@@ -94,19 +115,22 @@ async def duration_handler(
     state: FSMContext,
 ) -> None:
     """
-    Сохраняет длительность поездки.
+    Проверяет и сохраняет длительность поездки.
     """
 
-    duration = message.text.strip()
+    duration_days = parse_duration_days(
+        message.text
+    )
 
-    if len(duration) < 1:
+    if duration_days is None:
         await message.answer(
-            "Напишите количество дней."
+            "Отправьте количество дней числом от 1 до 30.\n\n"
+            "Например: 7."
         )
         return
 
     await state.update_data(
-        duration=duration,
+        duration_days=duration_days,
     )
 
     await state.set_state(
@@ -127,11 +151,11 @@ async def duration_invalid_handler(
     message: Message,
 ) -> None:
     """
-    Просит отправить длительность текстом.
+    Просит отправить допустимое количество дней.
     """
 
     await message.answer(
-        "Напишите длительность поездки обычным текстом."
+        "Отправьте количество дней числом от 1 до 30."
     )
 
 
@@ -180,7 +204,7 @@ async def interests_handler(
     state: FSMContext,
 ) -> None:
     """
-    Генерирует, сохраняет и показывает маршрут.
+    Проверяет параметры, генерирует и показывает маршрут.
     """
 
     telegram_user = message.from_user
@@ -195,13 +219,30 @@ async def interests_handler(
 
     interests = message.text.strip()
 
-    await state.update_data(
-        interests=interests,
-    )
+    if not 2 <= len(interests) <= 1000:
+        await message.answer(
+            "Опишите интересы длиной от 2 до 1000 символов."
+        )
+        return
 
     data = await state.get_data()
 
-    prompt = build_trip_prompt(data)
+    try:
+        preferences = TripPreferences.model_validate(
+            {
+                **data,
+                "interests": interests,
+            }
+        )
+
+    except ValidationError:
+        await state.clear()
+
+        await message.answer(
+            "Параметры поездки заполнены неверно. "
+            "Отправьте /plan и попробуйте ещё раз."
+        )
+        return
 
     await message.answer(
         "✈️ Генерирую и сохраняю маршрут..."
@@ -211,7 +252,7 @@ async def interests_handler(
         trip_plan = await create_trip_plan(
             telegram_id=telegram_user.id,
             first_name=telegram_user.first_name,
-            prompt=prompt,
+            preferences=preferences,
         )
 
     except BackendError as error:

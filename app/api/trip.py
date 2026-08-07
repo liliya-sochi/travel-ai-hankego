@@ -93,7 +93,7 @@ async def create_trip_plan(
             return await service.create_trip_plan(
                 telegram_id=request.telegram_id,
                 first_name=request.first_name,
-                prompt=request.prompt,
+                preferences=request.preferences,
             )
 
     except TripGenerationInProgressError as error:

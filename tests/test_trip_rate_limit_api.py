@@ -78,9 +78,12 @@ async def test_trip_plan_returns_429(
             json={
                 "telegram_id": 9000000001,
                 "first_name": "Liliya",
-                "prompt": (
-                    "Хочу провести три дня в Стамбуле."
-                ),
+                "preferences": {
+                    "destination": "Стамбул",
+                    "duration_days": 3,
+                    "budget": "150000 ₽",
+                    "interests": "Архитектура и еда",
+                },
             },
         )
 

@@ -16,10 +16,12 @@ from app.services.ai import (
     _request_model,
     generate_trip_plan,
 )
+from app.schemas.trip import TripPreferences
 
 
-PRIVATE_PROMPT = "PRIVATE_PROMPT_DO_NOT_LOG"
+PRIVATE_INTERESTS = "PRIVATE_INTERESTS_DO_NOT_LOG"
 PRIVATE_ROUTE = "PRIVATE_ROUTE_DO_NOT_LOG"
+PRIVATE_BUDGET = "PRIVATE_BUDGET_DO_NOT_LOG"
 PRIVATE_API_KEY = "PRIVATE_API_KEY_DO_NOT_LOG"
 
 
@@ -34,6 +36,17 @@ class DummyAsyncClient:
 
     async def __aexit__(self, *_: object) -> None:
         return None
+
+
+def build_private_preferences() -> TripPreferences:
+    """Создаёт приватные параметры поездки для проверки логов."""
+
+    return TripPreferences(
+        destination=PRIVATE_ROUTE,
+        duration_days=1,
+        budget=PRIVATE_BUDGET,
+        interests=PRIVATE_INTERESTS,
+    )
 
 
 def build_response_data(
@@ -163,7 +176,9 @@ async def test_logs_attempts_and_success_without_private_data(
     monkeypatch.setattr(ai_service.httpx, "AsyncClient", DummyAsyncClient)
 
     with caplog.at_level(logging.INFO, logger=ai_service.__name__):
-        trip_plan = await generate_trip_plan(PRIVATE_PROMPT)
+        trip_plan = await generate_trip_plan(
+            build_private_preferences()
+        )
 
     events = read_llm_events(caplog)
     assert trip_plan.destination == PRIVATE_ROUTE
@@ -185,9 +200,10 @@ async def test_logs_attempts_and_success_without_private_data(
         for record in caplog.records
         if record.name == ai_service.__name__
     )
-    assert PRIVATE_PROMPT not in service_logs
+    assert PRIVATE_INTERESTS not in service_logs
     assert PRIVATE_ROUTE not in service_logs
     assert PRIVATE_API_KEY not in service_logs
+    assert PRIVATE_BUDGET not in service_logs
 
 
 @pytest.mark.asyncio
@@ -214,7 +230,7 @@ async def test_logs_http_error_without_sensitive_payload(
                     headers={"Authorization": f"Bearer {PRIVATE_API_KEY}"},
                     payload={
                         "messages": [
-                            {"role": "user", "content": PRIVATE_PROMPT}
+                            {"role": "user", "content": PRIVATE_INTERESTS}
                         ]
                     },
                     model="openai/gpt-oss-120b",
@@ -233,6 +249,6 @@ async def test_logs_http_error_without_sensitive_payload(
         for record in caplog.records
         if record.name == ai_service.__name__
     )
-    assert PRIVATE_PROMPT not in service_logs
+    assert PRIVATE_INTERESTS not in service_logs
     assert PRIVATE_API_KEY not in service_logs
     assert "PRIVATE_ERROR_BODY_DO_NOT_LOG" not in service_logs

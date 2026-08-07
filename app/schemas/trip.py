@@ -25,6 +25,43 @@ class StrictSchema(BaseModel):
     )
 
 
+class TripPreferences(StrictSchema):
+    """
+    Проверенные пользовательские параметры будущей поездки.
+
+    Схема не содержит Telegram- или HTTP-специфичных данных,
+    поэтому её смогут использовать разные интерфейсы HankeGo.
+    """
+
+    destination: str = Field(
+        min_length=2,
+        max_length=255,
+        description="Страна, город или регион поездки.",
+        examples=["Стамбул"],
+    )
+
+    duration_days: int = Field(
+        ge=1,
+        le=30,
+        description="Продолжительность поездки в днях.",
+        examples=[5],
+    )
+
+    budget: str = Field(
+        min_length=1,
+        max_length=255,
+        description="Бюджет поездки в свободной форме.",
+        examples=["150000 ₽"],
+    )
+
+    interests: str = Field(
+        min_length=2,
+        max_length=1000,
+        description="Интересы и пожелания путешественника.",
+        examples=["Архитектура, местная еда и прогулки"],
+    )
+
+
 class TripPlanRequest(StrictSchema):
     """
     Запрос на создание и сохранение маршрута.
@@ -43,16 +80,31 @@ class TripPlanRequest(StrictSchema):
         examples=["Liliya"],
     )
 
-    prompt: str = Field(
-        min_length=10,
-        max_length=2000,
-        description="Описание желаемой поездки.",
-        examples=[
-            (
-                "Хочу на 5 дней в Стамбул. "
-                "Люблю архитектуру и местную еду."
-            )
-        ],
+    preferences: TripPreferences = Field(
+        description="Проверенные параметры будущей поездки.",
+    )
+
+
+class TripPlanRequest(StrictSchema):
+    """
+    Запрос на создание и сохранение маршрута.
+    """
+
+    telegram_id: int = Field(
+        gt=0,
+        description="Уникальный идентификатор пользователя Telegram.",
+        examples=[9000000001],
+    )
+
+    first_name: str = Field(
+        min_length=1,
+        max_length=255,
+        description="Имя пользователя Telegram.",
+        examples=["Liliya"],
+    )
+
+    preferences: TripPreferences = Field(
+        description="Проверенные параметры будущей поездки.",
     )
 
 

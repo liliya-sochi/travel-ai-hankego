@@ -14,6 +14,7 @@ from app.main import app
 from app.schemas.trip import (
     TripCreateResponse,
     TripHistoryResponse,
+    TripPreferences,
 )
 
 
@@ -24,7 +25,7 @@ class FakeTripService:
 
     received_telegram_id: int | None = None
     received_first_name: str | None = None
-    received_prompt: str | None = None
+    received_preferences: TripPreferences | None = None
     received_limit: int | None = None
 
     def __init__(self, session: object) -> None:
@@ -38,7 +39,7 @@ class FakeTripService:
         self,
         telegram_id: int,
         first_name: str,
-        prompt: str,
+        preferences: TripPreferences,
     ) -> TripCreateResponse:
         """
         Возвращает готовый тестовый маршрут.
@@ -46,7 +47,7 @@ class FakeTripService:
 
         type(self).received_telegram_id = telegram_id
         type(self).received_first_name = first_name
-        type(self).received_prompt = prompt
+        type(self).received_preferences = preferences
 
         return TripCreateResponse(
             trip_id=7,
@@ -162,9 +163,12 @@ async def test_create_trip_returns_persisted_trip(
             json={
                 "telegram_id": 9000000001,
                 "first_name": "Liliya",
-                "prompt": (
-                    "Хочу на один день в Стамбул."
-                ),
+                "preferences": {
+                    "destination": "Стамбул",
+                    "duration_days": 1,
+                    "budget": "150000 ₽",
+                    "interests": "Архитектура и еда",
+                },
             },
         )
 
@@ -177,13 +181,15 @@ async def test_create_trip_returns_persisted_trip(
 
     assert "telegram_id" not in response_data
     assert "first_name" not in response_data
-    assert "prompt" not in response_data
+    assert "preferences" not in response_data
 
     assert FakeTripService.received_telegram_id == 9000000001
     assert FakeTripService.received_first_name == "Liliya"
-    assert (
-        FakeTripService.received_prompt
-        == "Хочу на один день в Стамбул."
+    assert FakeTripService.received_preferences == TripPreferences(
+        destination="Стамбул",
+        duration_days=1,
+        budget="150000 ₽",
+        interests="Архитектура и еда",
     )
 
 
@@ -206,10 +212,44 @@ async def test_create_trip_rejects_unknown_field(
             json={
                 "telegram_id": 9000000001,
                 "first_name": "Liliya",
-                "prompt": (
-                    "Хочу на один день в Стамбул."
-                ),
+                "preferences": {
+                    "destination": "Стамбул",
+                    "duration_days": 1,
+                    "budget": "150000 ₽",
+                    "interests": "Архитектура и еда",
+                },
                 "admin": True,
+            },
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_trip_rejects_string_duration(
+    override_database_session: None,
+) -> None:
+    """
+    Проверяет строгий тип количества дней на HTTP-границе.
+    """
+
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/v1/trip-plan",
+            json={
+                "telegram_id": 9000000001,
+                "first_name": "Liliya",
+                "preferences": {
+                    "destination": "Стамбул",
+                    "duration_days": "1",
+                    "budget": "150000 ₽",
+                    "interests": "Архитектура и еда",
+                },
             },
         )
 

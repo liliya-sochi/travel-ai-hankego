@@ -17,6 +17,7 @@ from app.core.request_context import (
     reset_correlation_id,
     set_correlation_id,
 )
+from app.schemas.trip import TripPreferences
 
 
 HttpMethod = Literal[
@@ -162,7 +163,7 @@ async def create_trip_plan(
     *,
     telegram_id: int,
     first_name: str,
-    prompt: str,
+    preferences: TripPreferences,
 ) -> dict[str, Any]:
     """
     Создаёт и сохраняет маршрут.
@@ -174,7 +175,9 @@ async def create_trip_plan(
         payload={
             "telegram_id": telegram_id,
             "first_name": first_name,
-            "prompt": prompt,
+            "preferences": preferences.model_dump(
+                mode="json"
+            ),
         },
         timeout=150.0,
         timeout_message=(

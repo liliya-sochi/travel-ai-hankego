@@ -15,6 +15,7 @@ from app.schemas.trip import (
     TripDetailsResponse,
     TripHistoryResponse,
     TripSummaryResponse,
+    TripPreferences,
 )
 from app.services.ai import generate_trip_plan
 
@@ -54,7 +55,7 @@ class TripService:
         self,
         telegram_id: int,
         first_name: str,
-        prompt: str,
+        preferences: TripPreferences,
     ) -> TripCreateResponse:
         """
         Генерирует маршрут и сохраняет его пользователю.
@@ -62,7 +63,7 @@ class TripService:
 
         # LLM вызывается до начала операций с PostgreSQL,
         # чтобы не держать транзакцию открытой десятки секунд.
-        trip_plan = await generate_trip_plan(prompt)
+        trip_plan = await generate_trip_plan(preferences)
 
         try:
             user = await self._user_repository.upsert_telegram_user(
@@ -82,7 +83,8 @@ class TripService:
         except SQLAlchemyError as error:
             await self._session.rollback()
 
-            # Не записываем prompt и персональные данные в лог.
+            # Не записываем параметры поездки
+            # и персональные данные в лог.
             logger.exception(
                 "Failed to save generated trip"
             )
