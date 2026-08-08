@@ -13,7 +13,6 @@ from sqlalchemy.pool import NullPool
 
 from app.services.health import HealthService
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -22,23 +21,16 @@ def get_safe_test_database_url() -> str:
     Возвращает адрес только тестовой PostgreSQL.
     """
 
-    database_url = os.getenv(
-        "TEST_DATABASE_URL"
-    )
+    database_url = os.getenv("TEST_DATABASE_URL")
 
     if database_url is None:
-        pytest.skip(
-            "TEST_DATABASE_URL не задан."
-        )
+        pytest.skip("TEST_DATABASE_URL не задан.")
 
     parsed_url = make_url(database_url)
 
-    if not (
-        parsed_url.database or ""
-    ).endswith("_test"):
+    if not (parsed_url.database or "").endswith("_test"):
         raise RuntimeError(
-            "Health integration-тест разрешён "
-            "только для базы с суффиксом '_test'."
+            "Health integration-тест разрешён только для базы с суффиксом '_test'."
         )
 
     return database_url
@@ -49,14 +41,10 @@ def get_safe_test_redis_url() -> str:
     Возвращает адрес только локального Redis DB 15.
     """
 
-    redis_url = os.getenv(
-        "TEST_REDIS_URL"
-    )
+    redis_url = os.getenv("TEST_REDIS_URL")
 
     if redis_url is None:
-        pytest.skip(
-            "TEST_REDIS_URL не задан."
-        )
+        pytest.skip("TEST_REDIS_URL не задан.")
 
     parsed_url = urlparse(redis_url)
 
@@ -65,14 +53,12 @@ def get_safe_test_redis_url() -> str:
         "localhost",
     }:
         raise RuntimeError(
-            "Health integration-тест разрешён "
-            "только для локального Redis."
+            "Health integration-тест разрешён только для локального Redis."
         )
 
     if parsed_url.path != "/15":
         raise RuntimeError(
-            "Health integration-тест разрешён "
-            "только для Redis database 15."
+            "Health integration-тест разрешён только для Redis database 15."
         )
 
     return redis_url
@@ -101,9 +87,7 @@ async def test_health_service_with_real_dependencies() -> None:
     )
 
     try:
-        readiness = (
-            await health_service.check_readiness()
-        )
+        readiness = await health_service.check_readiness()
 
         assert readiness.status == "ready"
         assert readiness.checks.postgresql == "up"

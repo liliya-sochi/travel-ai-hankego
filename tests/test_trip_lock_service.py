@@ -42,9 +42,7 @@ class FakeRedisLockClient:
         Имитирует создание Redis lock.
         """
 
-        self.set_calls.append(
-            (name, value, ex, nx)
-        )
+        self.set_calls.append((name, value, ex, nx))
 
         if self._set_error is not None:
             raise self._set_error
@@ -121,9 +119,7 @@ async def test_lock_rejects_parallel_generation() -> None:
         ttl_seconds=180,
     )
 
-    with pytest.raises(
-        TripGenerationInProgressError
-    ):
+    with pytest.raises(TripGenerationInProgressError):
         async with generation_lock.hold(
             telegram_id=9000000001,
         ):
@@ -139,9 +135,7 @@ async def test_lock_handles_redis_error() -> None:
     """
 
     redis_client = FakeRedisLockClient(
-        set_error=RedisError(
-            "Redis connection failed."
-        ),
+        set_error=RedisError("Redis connection failed."),
     )
 
     generation_lock = TripGenerationLock(
@@ -149,9 +143,7 @@ async def test_lock_handles_redis_error() -> None:
         ttl_seconds=180,
     )
 
-    with pytest.raises(
-        TripGenerationLockUnavailableError
-    ):
+    with pytest.raises(TripGenerationLockUnavailableError):
         async with generation_lock.hold(
             telegram_id=9000000001,
         ):

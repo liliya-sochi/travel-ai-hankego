@@ -35,9 +35,7 @@ class BlockingTripGenerationLock:
         Имитирует уже занятую блокировку.
         """
 
-        raise TripGenerationInProgressError(
-            "Trip generation is already in progress."
-        )
+        raise TripGenerationInProgressError("Trip generation is already in progress.")
 
         yield
 
@@ -51,13 +49,11 @@ def override_dependencies() -> Iterator[None]:
     async def fake_get_session() -> AsyncIterator[object]:
         yield object()
 
-    app.dependency_overrides[get_session] = (
-        fake_get_session
-    )
+    app.dependency_overrides[get_session] = fake_get_session
 
-    app.dependency_overrides[
-        get_trip_generation_lock
-    ] = lambda: BlockingTripGenerationLock()
+    app.dependency_overrides[get_trip_generation_lock] = lambda: (
+        BlockingTripGenerationLock()
+    )
 
     yield
 
@@ -97,8 +93,5 @@ async def test_trip_plan_returns_409(
     assert response.status_code == 409
 
     assert response.json() == {
-        "detail": (
-            "Ваш маршрут уже создаётся. "
-            "Дождитесь завершения текущей генерации."
-        )
+        "detail": ("Ваш маршрут уже создаётся. Дождитесь завершения текущей генерации.")
     }

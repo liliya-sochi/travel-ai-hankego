@@ -45,7 +45,6 @@ from app.services.trip_lock import (
     TripGenerationLockUnavailableError,
 )
 
-
 router = APIRouter()
 
 SessionDependency = Annotated[
@@ -100,17 +99,14 @@ async def create_trip_plan(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Ваш маршрут уже создаётся. "
-                "Дождитесь завершения текущей генерации."
+                "Ваш маршрут уже создаётся. Дождитесь завершения текущей генерации."
             ),
         ) from error
 
     except TripGenerationLockUnavailableError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Генерация маршрутов временно недоступна."
-            ),
+            detail=("Генерация маршрутов временно недоступна."),
         ) from error
 
     except RateLimitExceededError as error:
@@ -127,18 +123,14 @@ async def create_trip_plan(
                 f"{retry_minutes} мин."
             ),
             headers={
-                "Retry-After": str(
-                    error.retry_after_seconds
-                ),
+                "Retry-After": str(error.retry_after_seconds),
             },
         ) from error
 
     except RateLimitUnavailableError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Генерация маршрутов временно недоступна."
-            ),
+            detail=("Генерация маршрутов временно недоступна."),
         ) from error
 
     except AIServiceError as error:

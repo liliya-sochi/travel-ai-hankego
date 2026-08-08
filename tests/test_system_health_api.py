@@ -64,14 +64,10 @@ async def test_liveness_endpoint() -> None:
         transport=transport,
         base_url="http://test",
     ) as client:
-        response = await client.get(
-            "/health/live"
-        )
+        response = await client.get("/health/live")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "alive"
-    }
+    assert response.json() == {"status": "alive"}
 
 
 @pytest.mark.asyncio
@@ -116,9 +112,7 @@ async def test_readiness_endpoint(
     Проверяет HTTP-код readiness endpoint.
     """
 
-    app.dependency_overrides[
-        get_health_service
-    ] = lambda: FakeHealthService(
+    app.dependency_overrides[get_health_service] = lambda: FakeHealthService(
         readiness=readiness,
     )
 
@@ -130,15 +124,8 @@ async def test_readiness_endpoint(
         transport=transport,
         base_url="http://test",
     ) as client:
-        response = await client.get(
-            "/health/ready"
-        )
+        response = await client.get("/health/ready")
 
-    assert (
-        response.status_code
-        == expected_status_code
-    )
+    assert response.status_code == expected_status_code
 
-    assert response.json() == (
-        readiness.model_dump()
-    )
+    assert response.json() == (readiness.model_dump())

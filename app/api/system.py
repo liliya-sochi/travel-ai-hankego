@@ -19,7 +19,6 @@ from app.schemas.system import (
 )
 from app.services.health import HealthService
 
-
 router = APIRouter(
     tags=["System"],
 )
@@ -71,9 +70,7 @@ async def get_liveness() -> LivenessResponse:
     responses={
         status.HTTP_503_SERVICE_UNAVAILABLE: {
             "model": ReadinessResponse,
-            "description": (
-                "Одна или несколько зависимостей недоступны."
-            ),
+            "description": ("Одна или несколько зависимостей недоступны."),
         },
     },
     summary="Проверить готовность backend",
@@ -86,13 +83,9 @@ async def get_readiness(
     Проверяет PostgreSQL и Redis.
     """
 
-    readiness = (
-        await health_service.check_readiness()
-    )
+    readiness = await health_service.check_readiness()
 
     if readiness.status == "not_ready":
-        response.status_code = (
-            status.HTTP_503_SERVICE_UNAVAILABLE
-        )
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
     return readiness

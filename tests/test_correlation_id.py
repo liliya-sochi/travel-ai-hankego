@@ -16,7 +16,6 @@ from app.core.request_context import (
 )
 from app.main import app
 
-
 VALID_CORRELATION_ID = "11111111-1111-4111-8111-111111111111"
 
 
@@ -36,9 +35,7 @@ async def test_fastapi_preserves_valid_correlation_id() -> None:
         )
 
     assert response.status_code == 200
-    assert response.headers[
-        CORRELATION_ID_HEADER
-    ] == VALID_CORRELATION_ID
+    assert response.headers[CORRELATION_ID_HEADER] == VALID_CORRELATION_ID
     assert get_correlation_id() is None
 
 

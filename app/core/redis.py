@@ -34,8 +34,6 @@ def get_redis_client(
     )
 
     if redis_client is None:
-        raise RuntimeError(
-            "Redis client is not initialized."
-        )
+        raise RuntimeError("Redis client is not initialized.")
 
     return redis_client

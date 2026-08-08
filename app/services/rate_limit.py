@@ -7,7 +7,6 @@ from typing import Any, Protocol
 
 from redis.exceptions import RedisError
 
-
 RATE_LIMIT_SCRIPT = """
 local current = redis.call("INCR", KEYS[1])
 
@@ -52,9 +51,7 @@ class RateLimitExceededError(Exception):
 
         self.retry_after_seconds = retry_after_seconds
 
-        super().__init__(
-            "Trip plan generation rate limit exceeded."
-        )
+        super().__init__("Trip plan generation rate limit exceeded.")
 
 
 class RateLimitUnavailableError(Exception):
@@ -92,9 +89,7 @@ class TripPlanRateLimiter:
         Увеличивает счётчик и проверяет лимит пользователя.
         """
 
-        redis_key = self._build_key(
-            telegram_id=telegram_id
-        )
+        redis_key = self._build_key(telegram_id=telegram_id)
 
         try:
             result = await self._redis_client.eval(
@@ -125,11 +120,7 @@ class TripPlanRateLimiter:
         if request_count <= self._limit:
             return
 
-        retry_after_seconds = (
-            ttl_seconds
-            if ttl_seconds > 0
-            else self._window_seconds
-        )
+        retry_after_seconds = ttl_seconds if ttl_seconds > 0 else self._window_seconds
 
         raise RateLimitExceededError(
             retry_after_seconds=retry_after_seconds,
@@ -143,11 +134,6 @@ class TripPlanRateLimiter:
         Создаёт Redis-ключ без открытого Telegram ID.
         """
 
-        telegram_id_hash = sha256(
-            str(telegram_id).encode("utf-8")
-        ).hexdigest()
+        telegram_id_hash = sha256(str(telegram_id).encode("utf-8")).hexdigest()
 
-        return (
-            f"{self._key_prefix}:"
-            f"{telegram_id_hash}"
-        )
+        return f"{self._key_prefix}:{telegram_id_hash}"

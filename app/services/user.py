@@ -48,8 +48,6 @@ class UserService:
         except SQLAlchemyError as error:
             await self._session.rollback()
 
-            raise UserServiceError(
-                "Не удалось сохранить пользователя."
-            ) from error
+            raise UserServiceError("Не удалось сохранить пользователя.") from error
 
         return user

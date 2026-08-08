@@ -62,9 +62,7 @@ class UserRepository:
         Возвращает пользователя по Telegram ID.
         """
 
-        statement = select(User).where(
-            User.telegram_id == telegram_id
-        )
+        statement = select(User).where(User.telegram_id == telegram_id)
 
         result = await self._session.execute(statement)
 

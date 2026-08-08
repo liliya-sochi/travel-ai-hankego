@@ -10,7 +10,6 @@ from aiogram.types import Message
 
 from app.bot.api_client import BackendError, register_telegram_user
 
-
 logger = logging.getLogger(__name__)
 
 # Router хранит обработчики стартовых сообщений.
@@ -35,9 +34,7 @@ async def start_handler(message: Message) -> None:
         except BackendError:
             # Не записываем telegram_id и имя в лог,
             # чтобы не распространять персональные данные.
-            logger.exception(
-                "Failed to register Telegram user"
-            )
+            logger.exception("Failed to register Telegram user")
 
     await message.answer(
         "Привет! Я HankeGo — AI-помощник по путешествиям.\n\n"

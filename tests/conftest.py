@@ -65,9 +65,7 @@ def bypass_internal_api_auth() -> Iterator[None]:
     Отключает авторизацию в обычных unit-тестах.
     """
 
-    app.dependency_overrides[
-        verify_internal_api_key
-    ] = lambda: None
+    app.dependency_overrides[verify_internal_api_key] = lambda: None
 
     yield
 
@@ -83,9 +81,9 @@ def bypass_trip_plan_rate_limit() -> Iterator[None]:
     Отключает настоящий Redis rate limiter.
     """
 
-    app.dependency_overrides[
-        get_trip_plan_rate_limiter
-    ] = lambda: NoOpTripPlanRateLimiter()
+    app.dependency_overrides[get_trip_plan_rate_limiter] = lambda: (
+        NoOpTripPlanRateLimiter()
+    )
 
     yield
 
@@ -101,9 +99,9 @@ def bypass_trip_generation_lock() -> Iterator[None]:
     Отключает настоящий Redis lock в unit-тестах.
     """
 
-    app.dependency_overrides[
-        get_trip_generation_lock
-    ] = lambda: NoOpTripGenerationLock()
+    app.dependency_overrides[get_trip_generation_lock] = lambda: (
+        NoOpTripGenerationLock()
+    )
 
     yield
 
@@ -134,14 +132,11 @@ def get_test_database_url() -> str:
     Возвращает адрес только явно указанной тестовой базы.
     """
 
-    database_url = os.getenv(
-        "TEST_DATABASE_URL"
-    )
+    database_url = os.getenv("TEST_DATABASE_URL")
 
     if database_url is None:
         pytest.skip(
-            "TEST_DATABASE_URL не задан: "
-            "integration-тесты PostgreSQL пропущены."
+            "TEST_DATABASE_URL не задан: integration-тесты PostgreSQL пропущены."
         )
 
     parsed_url = make_url(database_url)
@@ -182,10 +177,7 @@ async def database_session() -> AsyncIterator[AsyncSession]:
 
         async with test_engine.begin() as connection:
             await connection.execute(
-                text(
-                    "TRUNCATE TABLE trips, users "
-                    "RESTART IDENTITY CASCADE"
-                )
+                text("TRUNCATE TABLE trips, users RESTART IDENTITY CASCADE")
             )
 
     await clear_database()

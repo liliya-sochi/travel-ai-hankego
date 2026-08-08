@@ -31,9 +31,7 @@ def format_trip_plan(
     ]
 
     for day in days:
-        lines.append(
-            f"📍 День {day['day']}: {day['title']}"
-        )
+        lines.append(f"📍 День {day['day']}: {day['title']}")
         lines.append("")
 
         if day["morning"]:
@@ -87,13 +85,8 @@ def split_text(
     for line in text.splitlines():
         line_length = len(line) + 1
 
-        if (
-            current_part
-            and current_length + line_length > max_length
-        ):
-            parts.append(
-                "\n".join(current_part)
-            )
+        if current_part and current_length + line_length > max_length:
+            parts.append("\n".join(current_part))
 
             current_part = []
             current_length = 0
@@ -102,8 +95,6 @@ def split_text(
         current_length += line_length
 
     if current_part:
-        parts.append(
-            "\n".join(current_part)
-        )
+        parts.append("\n".join(current_part))
 
     return parts

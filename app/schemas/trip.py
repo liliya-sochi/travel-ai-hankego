@@ -208,23 +208,16 @@ class TripPlanResponse(StrictSchema):
 
         if len(self.days) != self.duration_days:
             raise ValueError(
-                "Количество элементов days должно "
-                "соответствовать duration_days."
+                "Количество элементов days должно соответствовать duration_days."
             )
 
-        actual_days = [
-            day.day
-            for day in self.days
-        ]
+        actual_days = [day.day for day in self.days]
 
-        expected_days = list(
-            range(1, self.duration_days + 1)
-        )
+        expected_days = list(range(1, self.duration_days + 1))
 
         if actual_days != expected_days:
             raise ValueError(
-                "Номера дней должны идти последовательно "
-                "от 1 до duration_days."
+                "Номера дней должны идти последовательно от 1 до duration_days."
             )
 
         return self

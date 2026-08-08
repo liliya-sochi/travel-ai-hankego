@@ -25,7 +25,6 @@ from app.bot.services.trip_formatter import (
     split_text,
 )
 
-
 router = Router()
 
 DELETE_CONFIRM_PREFIX = "trip_delete_confirm:"
@@ -43,9 +42,7 @@ async def trips_handler(
     telegram_user = message.from_user
 
     if telegram_user is None:
-        await message.answer(
-            "Не удалось определить пользователя Telegram."
-        )
+        await message.answer("Не удалось определить пользователя Telegram.")
         return
 
     try:
@@ -55,23 +52,18 @@ async def trips_handler(
         )
 
     except BackendError as error:
-        await message.answer(
-            f"Не удалось загрузить маршруты:\n{error}"
-        )
+        await message.answer(f"Не удалось загрузить маршруты:\n{error}")
         return
 
     trips = history.get("trips", [])
 
     if not trips:
         await message.answer(
-            "У вас пока нет сохранённых маршрутов.\n\n"
-            "Создать первый маршрут: /plan"
+            "У вас пока нет сохранённых маршрутов.\n\nСоздать первый маршрут: /plan"
         )
         return
 
-    await message.answer(
-        format_trip_history(trips)
-    )
+    await message.answer(format_trip_history(trips))
 
 
 @router.message(Command("trip"))
@@ -85,20 +77,14 @@ async def trip_handler(
     telegram_user = message.from_user
 
     if telegram_user is None:
-        await message.answer(
-            "Не удалось определить пользователя Telegram."
-        )
+        await message.answer("Не удалось определить пользователя Telegram.")
         return
 
-    trip_id = extract_trip_id(
-        message.text
-    )
+    trip_id = extract_trip_id(message.text)
 
     if trip_id is None:
         await message.answer(
-            "Укажите ID маршрута.\n\n"
-            "Например: /trip 7\n\n"
-            "Список маршрутов: /trips"
+            "Укажите ID маршрута.\n\nНапример: /trip 7\n\nСписок маршрутов: /trips"
         )
         return
 
@@ -109,9 +95,7 @@ async def trip_handler(
         )
 
     except BackendError as error:
-        await message.answer(
-            f"Не удалось загрузить маршрут:\n{error}"
-        )
+        await message.answer(f"Не удалось загрузить маршрут:\n{error}")
         return
 
     formatted_trip = format_trip_plan(trip)
@@ -119,9 +103,7 @@ async def trip_handler(
     for text_part in split_text(formatted_trip):
         await message.answer(text_part)
 
-    await message.answer(
-        f"Удалить этот маршрут: /delete_trip {trip_id}"
-    )
+    await message.answer(f"Удалить этот маршрут: /delete_trip {trip_id}")
 
 
 @router.message(Command("delete_trip"))
@@ -135,14 +117,10 @@ async def delete_trip_handler(
     telegram_user = message.from_user
 
     if telegram_user is None:
-        await message.answer(
-            "Не удалось определить пользователя Telegram."
-        )
+        await message.answer("Не удалось определить пользователя Telegram.")
         return
 
-    trip_id = extract_trip_id(
-        message.text
-    )
+    trip_id = extract_trip_id(message.text)
 
     if trip_id is None:
         await message.answer(
@@ -159,9 +137,7 @@ async def delete_trip_handler(
         )
 
     except BackendError as error:
-        await message.answer(
-            f"Не удалось загрузить маршрут:\n{error}"
-        )
+        await message.answer(f"Не удалось загрузить маршрут:\n{error}")
         return
 
     confirmation_keyboard = InlineKeyboardMarkup(
@@ -169,32 +145,23 @@ async def delete_trip_handler(
             [
                 InlineKeyboardButton(
                     text="🗑 Удалить",
-                    callback_data=(
-                        f"{DELETE_CONFIRM_PREFIX}{trip_id}"
-                    ),
+                    callback_data=(f"{DELETE_CONFIRM_PREFIX}{trip_id}"),
                 ),
                 InlineKeyboardButton(
                     text="Отмена",
-                    callback_data=(
-                        f"{DELETE_CANCEL_PREFIX}{trip_id}"
-                    ),
+                    callback_data=(f"{DELETE_CANCEL_PREFIX}{trip_id}"),
                 ),
             ]
         ]
     )
 
     await message.answer(
-        (
-            f"Удалить маршрут «{trip['destination']}»?\n\n"
-            "Это действие нельзя отменить."
-        ),
+        (f"Удалить маршрут «{trip['destination']}»?\n\nЭто действие нельзя отменить."),
         reply_markup=confirmation_keyboard,
     )
 
 
-@router.callback_query(
-    F.data.startswith(DELETE_CONFIRM_PREFIX)
-)
+@router.callback_query(F.data.startswith(DELETE_CONFIRM_PREFIX))
 async def confirm_trip_delete_handler(
     callback: CallbackQuery,
 ) -> None:
@@ -226,26 +193,17 @@ async def confirm_trip_delete_handler(
     except BackendError as error:
         await replace_callback_message(
             callback,
-            (
-                "Не удалось удалить маршрут:\n"
-                f"{error}"
-            ),
+            (f"Не удалось удалить маршрут:\n{error}"),
         )
         return
 
     await replace_callback_message(
         callback,
-        (
-            "Маршрут удалён.\n\n"
-            f"ID: {result['trip_id']}\n"
-            "Оставшиеся маршруты: /trips"
-        ),
+        (f"Маршрут удалён.\n\nID: {result['trip_id']}\nОставшиеся маршруты: /trips"),
     )
 
 
-@router.callback_query(
-    F.data.startswith(DELETE_CANCEL_PREFIX)
-)
+@router.callback_query(F.data.startswith(DELETE_CANCEL_PREFIX))
 async def cancel_trip_delete_handler(
     callback: CallbackQuery,
 ) -> None:
@@ -265,16 +223,11 @@ async def cancel_trip_delete_handler(
         )
         return
 
-    await callback.answer(
-        "Удаление отменено."
-    )
+    await callback.answer("Удаление отменено.")
 
     await replace_callback_message(
         callback,
-        (
-            "Удаление маршрута отменено.\n\n"
-            f"Открыть маршрут: /trip {trip_id}"
-        ),
+        (f"Удаление маршрута отменено.\n\nОткрыть маршрут: /trip {trip_id}"),
     )
 
 
@@ -312,9 +265,7 @@ def extract_trip_id(
     if message_text is None:
         return None
 
-    command_parts = message_text.split(
-        maxsplit=1
-    )
+    command_parts = message_text.split(maxsplit=1)
 
     if len(command_parts) != 2:
         return None
@@ -340,15 +291,10 @@ def extract_callback_trip_id(
     Извлекает положительный ID из callback data.
     """
 
-    if (
-        callback_data is None
-        or not callback_data.startswith(prefix)
-    ):
+    if callback_data is None or not callback_data.startswith(prefix):
         return None
 
-    raw_trip_id = callback_data.removeprefix(
-        prefix
-    )
+    raw_trip_id = callback_data.removeprefix(prefix)
 
     if not raw_trip_id.isdigit():
         return None
@@ -377,31 +323,21 @@ def format_trip_history(
         trips,
         start=1,
     ):
-        created_at = format_created_at(
-            str(trip["created_at"])
-        )
+        created_at = format_created_at(str(trip["created_at"]))
 
         trip_id = trip["trip_id"]
 
         lines.extend(
             [
-                (
-                    f"{index}. {trip['destination']} — "
-                    f"{trip['duration_days']} дн."
-                ),
-                (
-                    f"Сохранён: {created_at} · "
-                    f"ID: {trip_id}"
-                ),
+                (f"{index}. {trip['destination']} — {trip['duration_days']} дн."),
+                (f"Сохранён: {created_at} · ID: {trip_id}"),
                 f"Открыть: /trip {trip_id}",
                 f"Удалить: /delete_trip {trip_id}",
                 "",
             ]
         )
 
-    lines.append(
-        "Создать новый маршрут: /plan"
-    )
+    lines.append("Создать новый маршрут: /plan")
 
     return "\n".join(lines)
 
@@ -414,13 +350,9 @@ def format_created_at(
     """
 
     try:
-        parsed_datetime = datetime.fromisoformat(
-            created_at.replace("Z", "+00:00")
-        )
+        parsed_datetime = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
 
-        return parsed_datetime.strftime(
-            "%d.%m.%Y"
-        )
+        return parsed_datetime.strftime("%d.%m.%Y")
 
     except ValueError:
         return "дата неизвестна"

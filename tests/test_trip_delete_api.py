@@ -59,9 +59,7 @@ class MissingTripDeleteService:
         Возвращает одинаковую безопасную ошибку.
         """
 
-        raise TripNotFoundError(
-            "Маршрут не найден."
-        )
+        raise TripNotFoundError("Маршрут не найден.")
 
 
 @pytest.fixture
@@ -115,10 +113,7 @@ async def test_delete_trip_returns_success(
         "deleted": True,
     }
 
-    assert (
-        FakeTripDeleteService.received_telegram_id
-        == 9000000001
-    )
+    assert FakeTripDeleteService.received_telegram_id == 9000000001
     assert FakeTripDeleteService.received_trip_id == 7
 
 
@@ -152,6 +147,4 @@ async def test_delete_trip_hides_foreign_trip(
         )
 
     assert response.status_code == 404
-    assert response.json() == {
-        "detail": "Маршрут не найден."
-    }
+    assert response.json() == {"detail": "Маршрут не найден."}

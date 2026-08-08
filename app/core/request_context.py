@@ -8,7 +8,6 @@ HTTP-запрос к FastAPI и все внутренние логи этого 
 from contextvars import ContextVar, Token
 from uuid import UUID, uuid4
 
-
 CORRELATION_ID_HEADER = "X-Request-ID"
 EMPTY_CORRELATION_ID = "-"
 

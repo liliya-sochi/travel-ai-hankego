@@ -15,7 +15,6 @@ from app.services.rate_limit import (
     TripPlanRateLimiter,
 )
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -24,15 +23,10 @@ def get_test_redis_url() -> str:
     Возвращает адрес только безопасного тестового Redis.
     """
 
-    redis_url = os.getenv(
-        "TEST_REDIS_URL"
-    )
+    redis_url = os.getenv("TEST_REDIS_URL")
 
     if redis_url is None:
-        pytest.skip(
-            "TEST_REDIS_URL не задан: "
-            "Redis integration-тест пропущен."
-        )
+        pytest.skip("TEST_REDIS_URL не задан: Redis integration-тест пропущен.")
 
     parsed_url = urlparse(redis_url)
 
@@ -40,16 +34,10 @@ def get_test_redis_url() -> str:
         "127.0.0.1",
         "localhost",
     }:
-        raise RuntimeError(
-            "Integration-тест разрешён только "
-            "для локального Redis."
-        )
+        raise RuntimeError("Integration-тест разрешён только для локального Redis.")
 
     if parsed_url.path != "/15":
-        raise RuntimeError(
-            "Integration-тест разрешён только "
-            "для Redis database 15."
-        )
+        raise RuntimeError("Integration-тест разрешён только для Redis database 15.")
 
     return redis_url
 
@@ -68,17 +56,11 @@ async def test_rate_limiter_with_real_redis() -> None:
     )
 
     telegram_id = 9000000001
-    key_prefix = (
-        f"test:rate-limit:{uuid4().hex}"
-    )
+    key_prefix = f"test:rate-limit:{uuid4().hex}"
 
-    telegram_id_hash = sha256(
-        str(telegram_id).encode("utf-8")
-    ).hexdigest()
+    telegram_id_hash = sha256(str(telegram_id).encode("utf-8")).hexdigest()
 
-    redis_key = (
-        f"{key_prefix}:{telegram_id_hash}"
-    )
+    redis_key = f"{key_prefix}:{telegram_id_hash}"
 
     rate_limiter = TripPlanRateLimiter(
         redis_client=redis_client,
@@ -96,22 +78,14 @@ async def test_rate_limiter_with_real_redis() -> None:
             telegram_id=telegram_id,
         )
 
-        with pytest.raises(
-            RateLimitExceededError
-        ) as error_info:
+        with pytest.raises(RateLimitExceededError) as error_info:
             await rate_limiter.check(
                 telegram_id=telegram_id,
             )
 
-        assert (
-            1
-            <= error_info.value.retry_after_seconds
-            <= 60
-        )
+        assert 1 <= error_info.value.retry_after_seconds <= 60
 
     finally:
-        await redis_client.delete(
-            redis_key
-        )
+        await redis_client.delete(redis_key)
 
         await redis_client.aclose()

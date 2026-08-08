@@ -13,7 +13,6 @@ from app.core.request_context import (
     get_correlation_id,
 )
 
-
 LOG_FORMAT = (
     "%(asctime)s | %(levelname)s | %(name)s | "
     "correlation_id=%(correlation_id)s | %(message)s"
@@ -26,9 +25,7 @@ class CorrelationIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         """Обогащает LogRecord и разрешает его дальнейшую обработку."""
 
-        record.correlation_id = (
-            get_correlation_id() or EMPTY_CORRELATION_ID
-        )
+        record.correlation_id = get_correlation_id() or EMPTY_CORRELATION_ID
 
         return True
 

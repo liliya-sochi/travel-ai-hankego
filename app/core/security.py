@@ -10,15 +10,12 @@ from fastapi.security import APIKeyHeader
 
 from app.config import get_settings
 
-
 INTERNAL_API_KEY_HEADER = "X-Internal-API-Key"
 
 internal_api_key_header = APIKeyHeader(
     name=INTERNAL_API_KEY_HEADER,
     auto_error=False,
-    description=(
-        "Секретный ключ для внутренних клиентов HankeGo."
-    ),
+    description=("Секретный ключ для внутренних клиентов HankeGo."),
 )
 
 
@@ -34,9 +31,7 @@ async def verify_internal_api_key(
 
     settings = get_settings()
 
-    expected_api_key = (
-        settings.internal_api_key.get_secret_value()
-    )
+    expected_api_key = settings.internal_api_key.get_secret_value()
 
     candidate_api_key = provided_api_key or ""
 

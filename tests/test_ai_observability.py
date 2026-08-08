@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 import app.services.ai as ai_service
+from app.schemas.trip import TripPreferences
 from app.services.ai import (
     AIServiceError,
     LLMProviderResponse,
@@ -16,8 +17,6 @@ from app.services.ai import (
     _request_model,
     generate_trip_plan,
 )
-from app.schemas.trip import TripPreferences
-
 
 PRIVATE_INTERESTS = "PRIVATE_INTERESTS_DO_NOT_LOG"
 PRIVATE_ROUTE = "PRIVATE_ROUTE_DO_NOT_LOG"
@@ -176,9 +175,7 @@ async def test_logs_attempts_and_success_without_private_data(
     monkeypatch.setattr(ai_service.httpx, "AsyncClient", DummyAsyncClient)
 
     with caplog.at_level(logging.INFO, logger=ai_service.__name__):
-        trip_plan = await generate_trip_plan(
-            build_private_preferences()
-        )
+        trip_plan = await generate_trip_plan(build_private_preferences())
 
     events = read_llm_events(caplog)
     assert trip_plan.destination == PRIVATE_ROUTE
@@ -220,18 +217,14 @@ async def test_logs_http_error_without_sensitive_payload(
         )
 
     with caplog.at_level(logging.ERROR, logger=ai_service.__name__):
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             with pytest.raises(AIServiceError):
                 await _request_model(
                     client=client,
                     url="https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {PRIVATE_API_KEY}"},
                     payload={
-                        "messages": [
-                            {"role": "user", "content": PRIVATE_INTERESTS}
-                        ]
+                        "messages": [{"role": "user", "content": PRIVATE_INTERESTS}]
                     },
                     model="openai/gpt-oss-120b",
                     attempt=1,

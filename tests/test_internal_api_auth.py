@@ -49,9 +49,7 @@ async def test_protected_api_rejects_invalid_key(
         )
 
     assert response.status_code == 401
-    assert response.json() == {
-        "detail": "Ошибка внутренней авторизации."
-    }
+    assert response.json() == {"detail": "Ошибка внутренней авторизации."}
 
 
 @pytest.mark.asyncio
@@ -75,9 +73,7 @@ async def test_protected_api_accepts_valid_key(
         response = await client.post(
             "/api/v1/trip-history",
             headers={
-                "X-Internal-API-Key": (
-                    settings.internal_api_key.get_secret_value()
-                ),
+                "X-Internal-API-Key": (settings.internal_api_key.get_secret_value()),
             },
             # Пустое тело специально вызывает следующую стадию:
             # Pydantic-валидацию после успешной авторизации.
@@ -103,9 +99,7 @@ async def test_info_endpoint_remains_public(
         transport=transport,
         base_url="http://test",
     ) as client:
-        response = await client.get(
-            "/info"
-        )
+        response = await client.get("/info")
 
     assert response.status_code == 200
 

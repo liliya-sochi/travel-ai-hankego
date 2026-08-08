@@ -15,7 +15,6 @@ from app.services.trip_lock import (
     TripGenerationLock,
 )
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -24,15 +23,10 @@ def get_test_redis_url() -> str:
     Возвращает адрес безопасного тестового Redis.
     """
 
-    redis_url = os.getenv(
-        "TEST_REDIS_URL"
-    )
+    redis_url = os.getenv("TEST_REDIS_URL")
 
     if redis_url is None:
-        pytest.skip(
-            "TEST_REDIS_URL не задан: "
-            "Redis integration-тест пропущен."
-        )
+        pytest.skip("TEST_REDIS_URL не задан: Redis integration-тест пропущен.")
 
     parsed_url = urlparse(redis_url)
 
@@ -40,16 +34,10 @@ def get_test_redis_url() -> str:
         "127.0.0.1",
         "localhost",
     }:
-        raise RuntimeError(
-            "Integration-тест разрешён только "
-            "для локального Redis."
-        )
+        raise RuntimeError("Integration-тест разрешён только для локального Redis.")
 
     if parsed_url.path != "/15":
-        raise RuntimeError(
-            "Integration-тест разрешён только "
-            "для Redis database 15."
-        )
+        raise RuntimeError("Integration-тест разрешён только для Redis database 15.")
 
     return redis_url
 
@@ -68,13 +56,9 @@ async def test_only_one_lock_can_be_held() -> None:
     telegram_id = 9000000001
     key_prefix = f"test:trip-lock:{uuid4().hex}"
 
-    telegram_id_hash = sha256(
-        str(telegram_id).encode("utf-8")
-    ).hexdigest()
+    telegram_id_hash = sha256(str(telegram_id).encode("utf-8")).hexdigest()
 
-    redis_key = (
-        f"{key_prefix}:{telegram_id_hash}"
-    )
+    redis_key = f"{key_prefix}:{telegram_id_hash}"
 
     first_lock = TripGenerationLock(
         redis_client=redis_client,
@@ -92,9 +76,7 @@ async def test_only_one_lock_can_be_held() -> None:
         async with first_lock.hold(
             telegram_id=telegram_id,
         ):
-            with pytest.raises(
-                TripGenerationInProgressError
-            ):
+            with pytest.raises(TripGenerationInProgressError):
                 async with second_lock.hold(
                     telegram_id=telegram_id,
                 ):
@@ -107,8 +89,6 @@ async def test_only_one_lock_can_be_held() -> None:
             pass
 
     finally:
-        await redis_client.delete(
-            redis_key
-        )
+        await redis_client.delete(redis_key)
 
         await redis_client.aclose()

@@ -1,6 +1,6 @@
 """Тесты correlation ID в цепочке Telegram-бота."""
 
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 import httpx
@@ -18,7 +18,7 @@ from app.core.request_context import (
 class FakeAsyncClient:
     """Перехватывает HTTP-запрос без обращения к backend."""
 
-    sent_headers: dict[str, str] = {}
+    sent_headers: ClassVar[dict[str, str]] = {}
 
     def __init__(self, **_: object) -> None:
         pass
@@ -55,7 +55,7 @@ async def request_test_endpoint() -> dict[str, Any]:
         method="GET",
         path="/test",
         payload={},
-        timeout=1.0,
+        request_timeout=1.0,
         timeout_message="timeout",
         default_error_message="error",
     )
@@ -89,9 +89,7 @@ async def test_telegram_update_forwards_one_correlation_id(
         {},
     )
 
-    sent_id = FakeAsyncClient.sent_headers[
-        CORRELATION_ID_HEADER
-    ]
+    sent_id = FakeAsyncClient.sent_headers[CORRELATION_ID_HEADER]
 
     assert result == {"status": "ok"}
     assert sent_id == observed_id
@@ -113,9 +111,7 @@ async def test_direct_client_cleans_fallback_correlation_id(
 
     await request_test_endpoint()
 
-    sent_id = FakeAsyncClient.sent_headers[
-        CORRELATION_ID_HEADER
-    ]
+    sent_id = FakeAsyncClient.sent_headers[CORRELATION_ID_HEADER]
 
     assert str(UUID(sent_id)) == sent_id
     assert get_correlation_id() is None

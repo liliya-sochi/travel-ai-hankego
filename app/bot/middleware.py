@@ -14,7 +14,6 @@ from app.core.request_context import (
     set_correlation_id,
 )
 
-
 TelegramHandler = Callable[
     [TelegramObject, dict[str, Any]],
     Awaitable[Any],
@@ -34,9 +33,7 @@ class CorrelationIdMiddleware(BaseMiddleware):
     ) -> Any:
         """Устанавливает ID на всё время обработки одного update."""
 
-        context_token = set_correlation_id(
-            create_correlation_id()
-        )
+        context_token = set_correlation_id(create_correlation_id())
 
         try:
             return await handler(event, data)

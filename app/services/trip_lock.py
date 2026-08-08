@@ -11,7 +11,6 @@ from typing import Any, Protocol
 
 from redis.exceptions import RedisError
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -148,9 +147,7 @@ class TripGenerationLock:
             # Ошибка удаления не должна превращать
             # успешную генерацию в HTTP 500.
             # Redis удалит ключ автоматически по TTL.
-            logger.exception(
-                "Failed to release trip generation lock"
-            )
+            logger.exception("Failed to release trip generation lock")
 
     def _build_key(
         self,
@@ -160,11 +157,6 @@ class TripGenerationLock:
         Создаёт Redis-ключ без открытого Telegram ID.
         """
 
-        telegram_id_hash = sha256(
-            str(telegram_id).encode("utf-8")
-        ).hexdigest()
+        telegram_id_hash = sha256(str(telegram_id).encode("utf-8")).hexdigest()
 
-        return (
-            f"{self._key_prefix}:"
-            f"{telegram_id_hash}"
-        )
+        return f"{self._key_prefix}:{telegram_id_hash}"

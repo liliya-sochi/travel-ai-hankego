@@ -18,7 +18,6 @@ from app.bot.middleware import CorrelationIdMiddleware
 from app.config import get_settings
 from app.core.logging import configure_logging
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -45,9 +44,7 @@ async def run_bot() -> None:
     )
 
     # Создаём один correlation ID для каждого Telegram update.
-    dispatcher.update.outer_middleware(
-        CorrelationIdMiddleware()
-    )
+    dispatcher.update.outer_middleware(CorrelationIdMiddleware())
 
     dispatcher.include_router(start_router)
     dispatcher.include_router(plan_router)
@@ -64,9 +61,7 @@ async def run_bot() -> None:
         await dispatcher.start_polling(telegram_bot)
 
     except Exception:
-        logger.exception(
-            "HankeGo Telegram bot stopped unexpectedly"
-        )
+        logger.exception("HankeGo Telegram bot stopped unexpectedly")
         raise
 
     finally:

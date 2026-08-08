@@ -4,6 +4,7 @@
 
 import logging
 
+from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,13 +15,10 @@ from app.schemas.trip import (
     TripDeleteResponse,
     TripDetailsResponse,
     TripHistoryResponse,
-    TripSummaryResponse,
     TripPreferences,
+    TripSummaryResponse,
 )
 from app.services.ai import generate_trip_plan
-
-from pydantic import ValidationError
-
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +83,7 @@ class TripService:
 
             # Не записываем параметры поездки
             # и персональные данные в лог.
-            logger.exception(
-                "Failed to save generated trip"
-            )
+            logger.exception("Failed to save generated trip")
 
             raise TripServiceError(
                 "Маршрут создан, но не удалось сохранить его."
@@ -128,9 +124,7 @@ class TripService:
             await self._session.rollback()
 
             # Telegram ID не записываем в лог.
-            logger.exception(
-                "Failed to load trip history"
-            )
+            logger.exception("Failed to load trip history")
 
             raise TripServiceError(
                 "Не удалось загрузить сохранённые маршруты."
@@ -166,21 +160,15 @@ class TripService:
             )
 
             if user is None:
-                raise TripNotFoundError(
-                    "Маршрут не найден."
-                )
+                raise TripNotFoundError("Маршрут не найден.")
 
-            trip = (
-                await self._trip_repository.get_by_id_and_user_id(
-                    trip_id=trip_id,
-                    user_id=user.id,
-                )
+            trip = await self._trip_repository.get_by_id_and_user_id(
+                trip_id=trip_id,
+                user_id=user.id,
             )
 
             if trip is None:
-                raise TripNotFoundError(
-                    "Маршрут не найден."
-                )
+                raise TripNotFoundError("Маршрут не найден.")
 
             return TripDetailsResponse(
                 **trip.plan_data,
@@ -192,9 +180,7 @@ class TripService:
             raise
 
         except ValidationError as error:
-            logger.exception(
-                "Invalid persisted trip data"
-            )
+            logger.exception("Invalid persisted trip data")
 
             raise TripServiceError(
                 "Не удалось прочитать сохранённый маршрут."
@@ -204,14 +190,11 @@ class TripService:
             await self._session.rollback()
 
             # Не записываем Telegram ID в лог.
-            logger.exception(
-                "Failed to load trip details"
-            )
+            logger.exception("Failed to load trip details")
 
             raise TripServiceError(
                 "Не удалось загрузить сохранённый маршрут."
             ) from error
-
 
     async def delete_trip(
         self,
@@ -228,21 +211,15 @@ class TripService:
             )
 
             if user is None:
-                raise TripNotFoundError(
-                    "Маршрут не найден."
-                )
+                raise TripNotFoundError("Маршрут не найден.")
 
-            deleted_trip_id = (
-                await self._trip_repository.delete_by_id_and_user_id(
-                    trip_id=trip_id,
-                    user_id=user.id,
-                )
+            deleted_trip_id = await self._trip_repository.delete_by_id_and_user_id(
+                trip_id=trip_id,
+                user_id=user.id,
             )
 
             if deleted_trip_id is None:
-                raise TripNotFoundError(
-                    "Маршрут не найден."
-                )
+                raise TripNotFoundError("Маршрут не найден.")
 
             await self._session.commit()
 
@@ -254,13 +231,9 @@ class TripService:
             await self._session.rollback()
 
             # Не записываем пользовательские ID в лог.
-            logger.exception(
-                "Failed to delete trip"
-            )
+            logger.exception("Failed to delete trip")
 
-            raise TripServiceError(
-                "Не удалось удалить сохранённый маршрут."
-            ) from error
+            raise TripServiceError("Не удалось удалить сохранённый маршрут.") from error
 
         return TripDeleteResponse(
             trip_id=deleted_trip_id,

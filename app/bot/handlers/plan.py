@@ -6,17 +6,15 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
+from pydantic import ValidationError
 
 from app.bot.api_client import BackendError, create_trip_plan
-from app.bot.states import TripPlanning
 from app.bot.services.trip_formatter import (
     format_trip_plan,
     split_text,
 )
+from app.bot.states import TripPlanning
 from app.schemas.trip import TripPreferences
-
-from pydantic import ValidationError
-
 
 # Router хранит обработчики планирования поездки.
 router = Router()
@@ -27,10 +25,7 @@ def parse_duration_days(value: str) -> int | None:
 
     normalized_value = value.strip()
 
-    if (
-        not normalized_value.isdecimal()
-        or len(normalized_value) > 2
-    ):
+    if not normalized_value.isdecimal() or len(normalized_value) > 2:
         return None
 
     duration_days = int(normalized_value)
@@ -59,8 +54,7 @@ async def plan_handler(
     await state.set_state(TripPlanning.destination)
 
     await message.answer(
-        "Куда хотите поехать?\n\n"
-        "Например: Япония, Стамбул или Италия."
+        "Куда хотите поехать?\n\nНапример: Япония, Стамбул или Италия."
     )
 
 
@@ -76,9 +70,7 @@ async def destination_handler(
     destination = message.text.strip()
 
     if len(destination) < 2:
-        await message.answer(
-            "Напишите направление чуть подробнее."
-        )
+        await message.answer("Напишите направление чуть подробнее.")
         return
 
     # Сохраняем ответ пользователя в Redis.
@@ -103,10 +95,7 @@ async def destination_invalid_handler(
     Просит отправить направление обычным текстом.
     """
 
-    await message.answer(
-        "Напишите направление текстом.\n\n"
-        "Например: Япония."
-    )
+    await message.answer("Напишите направление текстом.\n\nНапример: Япония.")
 
 
 @router.message(TripPlanning.duration, F.text)
@@ -118,14 +107,11 @@ async def duration_handler(
     Проверяет и сохраняет длительность поездки.
     """
 
-    duration_days = parse_duration_days(
-        message.text
-    )
+    duration_days = parse_duration_days(message.text)
 
     if duration_days is None:
         await message.answer(
-            "Отправьте количество дней числом от 1 до 30.\n\n"
-            "Например: 7."
+            "Отправьте количество дней числом от 1 до 30.\n\nНапример: 7."
         )
         return
 
@@ -154,9 +140,7 @@ async def duration_invalid_handler(
     Просит отправить допустимое количество дней.
     """
 
-    await message.answer(
-        "Отправьте количество дней числом от 1 до 30."
-    )
+    await message.answer("Отправьте количество дней числом от 1 до 30.")
 
 
 @router.message(TripPlanning.budget, F.text)
@@ -179,9 +163,7 @@ async def budget_handler(
     )
 
     await message.answer(
-        "Что вам особенно интересно?\n\n"
-        "Например:\n"
-        "Музеи, природа, еда, архитектура."
+        "Что вам особенно интересно?\n\nНапример:\nМузеи, природа, еда, архитектура."
     )
 
 
@@ -193,9 +175,7 @@ async def budget_invalid_handler(
     Просит отправить бюджет текстом.
     """
 
-    await message.answer(
-        "Напишите бюджет обычным текстом."
-    )
+    await message.answer("Напишите бюджет обычным текстом.")
 
 
 @router.message(TripPlanning.interests, F.text)
@@ -212,17 +192,13 @@ async def interests_handler(
     if telegram_user is None:
         await state.clear()
 
-        await message.answer(
-            "Не удалось определить пользователя Telegram."
-        )
+        await message.answer("Не удалось определить пользователя Telegram.")
         return
 
     interests = message.text.strip()
 
     if not 2 <= len(interests) <= 1000:
-        await message.answer(
-            "Опишите интересы длиной от 2 до 1000 символов."
-        )
+        await message.answer("Опишите интересы длиной от 2 до 1000 символов.")
         return
 
     data = await state.get_data()
@@ -239,14 +215,11 @@ async def interests_handler(
         await state.clear()
 
         await message.answer(
-            "Параметры поездки заполнены неверно. "
-            "Отправьте /plan и попробуйте ещё раз."
+            "Параметры поездки заполнены неверно. Отправьте /plan и попробуйте ещё раз."
         )
         return
 
-    await message.answer(
-        "✈️ Генерирую и сохраняю маршрут..."
-    )
+    await message.answer("✈️ Генерирую и сохраняю маршрут...")
 
     try:
         trip_plan = await create_trip_plan(
@@ -258,9 +231,7 @@ async def interests_handler(
     except BackendError as error:
         await state.clear()
 
-        await message.answer(
-            f"Не удалось создать маршрут:\n{error}"
-        )
+        await message.answer(f"Не удалось создать маршрут:\n{error}")
         return
 
     formatted_plan = format_trip_plan(trip_plan)

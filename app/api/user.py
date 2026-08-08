@@ -14,7 +14,6 @@ from app.schemas.user import (
 )
 from app.services.user import UserService, UserServiceError
 
-
 router = APIRouter(
     prefix="/users",
 )

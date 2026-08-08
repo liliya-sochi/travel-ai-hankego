@@ -44,13 +44,11 @@ def override_dependencies() -> Iterator[None]:
     async def fake_get_session() -> AsyncIterator[object]:
         yield object()
 
-    app.dependency_overrides[get_session] = (
-        fake_get_session
-    )
+    app.dependency_overrides[get_session] = fake_get_session
 
-    app.dependency_overrides[
-        get_trip_plan_rate_limiter
-    ] = lambda: BlockingTripPlanRateLimiter()
+    app.dependency_overrides[get_trip_plan_rate_limiter] = lambda: (
+        BlockingTripPlanRateLimiter()
+    )
 
     yield
 
@@ -92,7 +90,6 @@ async def test_trip_plan_returns_429(
 
     assert response.json() == {
         "detail": (
-            "Лимит генерации маршрутов исчерпан. "
-            "Попробуйте снова примерно через 3 мин."
+            "Лимит генерации маршрутов исчерпан. Попробуйте снова примерно через 3 мин."
         )
     }

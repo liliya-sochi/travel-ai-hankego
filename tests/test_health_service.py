@@ -138,9 +138,7 @@ async def test_health_service_reports_ready() -> None:
         redis_client=FakeRedisClient(),  # type: ignore[arg-type]
     )
 
-    readiness = (
-        await health_service.check_readiness()
-    )
+    readiness = await health_service.check_readiness()
 
     assert readiness.status == "ready"
     assert readiness.checks.postgresql == "up"
@@ -155,16 +153,12 @@ async def test_health_service_reports_postgresql_down() -> None:
 
     health_service = HealthService(
         database_engine=FakeDatabaseEngine(
-            error=SQLAlchemyError(
-                "PostgreSQL unavailable."
-            ),
+            error=SQLAlchemyError("PostgreSQL unavailable."),
         ),  # type: ignore[arg-type]
         redis_client=FakeRedisClient(),  # type: ignore[arg-type]
     )
 
-    readiness = (
-        await health_service.check_readiness()
-    )
+    readiness = await health_service.check_readiness()
 
     assert readiness.status == "not_ready"
     assert readiness.checks.postgresql == "down"
@@ -180,15 +174,11 @@ async def test_health_service_reports_redis_down() -> None:
     health_service = HealthService(
         database_engine=FakeDatabaseEngine(),  # type: ignore[arg-type]
         redis_client=FakeRedisClient(
-            error=RedisError(
-                "Redis unavailable."
-            ),
+            error=RedisError("Redis unavailable."),
         ),  # type: ignore[arg-type]
     )
 
-    readiness = (
-        await health_service.check_readiness()
-    )
+    readiness = await health_service.check_readiness()
 
     assert readiness.status == "not_ready"
     assert readiness.checks.postgresql == "up"

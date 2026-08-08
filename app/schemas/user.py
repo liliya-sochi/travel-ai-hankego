@@ -15,7 +15,6 @@ class TelegramUserUpsertRequest(BaseModel):
     model_config = ConfigDict(
         # Удаляет пробелы в начале и конце строк.
         str_strip_whitespace=True,
-
         # Запрещает неизвестные поля в JSON.
         extra="forbid",
     )

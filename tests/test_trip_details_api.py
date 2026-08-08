@@ -60,9 +60,7 @@ class FakeTripDetailsService:
                     "evening": ["Ужин"],
                 }
             ],
-            practical_tips=[
-                "Проверяйте расписание."
-            ],
+            practical_tips=["Проверяйте расписание."],
         )
 
 
@@ -83,9 +81,7 @@ class MissingTripService:
         Имитирует отсутствующий или чужой маршрут.
         """
 
-        raise TripNotFoundError(
-            "Маршрут не найден."
-        )
+        raise TripNotFoundError("Маршрут не найден.")
 
 
 @pytest.fixture
@@ -143,10 +139,7 @@ async def test_trip_details_returns_owned_trip(
     assert "telegram_id" not in response_data
     assert "user_id" not in response_data
 
-    assert (
-        FakeTripDetailsService.received_telegram_id
-        == 9000000001
-    )
+    assert FakeTripDetailsService.received_telegram_id == 9000000001
     assert FakeTripDetailsService.received_trip_id == 7
 
 
@@ -180,6 +173,4 @@ async def test_trip_details_hides_missing_or_foreign_trip(
         )
 
     assert response.status_code == 404
-    assert response.json() == {
-        "detail": "Маршрут не найден."
-    }
+    assert response.json() == {"detail": "Маршрут не найден."}

@@ -17,7 +17,6 @@ from app.models.user import User
 from app.repositories.trip import TripRepository
 from app.repositories.user import UserRepository
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -41,9 +40,7 @@ def build_plan_data(
                 "evening": ["Ужин"],
             }
         ],
-        "practical_tips": [
-            "Проверяйте актуальное расписание."
-        ],
+        "practical_tips": ["Проверяйте актуальное расписание."],
     }
 
 
@@ -55,9 +52,7 @@ async def test_user_upsert_updates_existing_row(
     Проверяет настоящий PostgreSQL upsert пользователя.
     """
 
-    repository = UserRepository(
-        database_session
-    )
+    repository = UserRepository(database_session)
 
     created_user = await repository.upsert_telegram_user(
         telegram_id=9000000001,
@@ -79,14 +74,10 @@ async def test_user_upsert_updates_existing_row(
     database_session.expire_all()
 
     stored_user = await database_session.scalar(
-        select(User).where(
-            User.telegram_id == 9000000001
-        )
+        select(User).where(User.telegram_id == 9000000001)
     )
 
-    user_count = await database_session.scalar(
-        select(func.count()).select_from(User)
-    )
+    user_count = await database_session.scalar(select(func.count()).select_from(User))
 
     assert updated_user.id == created_user_id
     assert stored_user is not None
@@ -102,28 +93,20 @@ async def test_trip_repository_enforces_ownership(
     Проверяет создание, историю и защиту владельца.
     """
 
-    user_repository = UserRepository(
-        database_session
-    )
-    trip_repository = TripRepository(
-        database_session
-    )
+    user_repository = UserRepository(database_session)
+    trip_repository = TripRepository(database_session)
 
     owner = await user_repository.upsert_telegram_user(
         telegram_id=9000000001,
         first_name="Liliya",
     )
 
-    other_user = (
-        await user_repository.upsert_telegram_user(
-            telegram_id=9000000002,
-            first_name="Other",
-        )
+    other_user = await user_repository.upsert_telegram_user(
+        telegram_id=9000000002,
+        first_name="Other",
     )
 
-    plan_data = build_plan_data(
-        destination="Токио"
-    )
+    plan_data = build_plan_data(destination="Токио")
 
     created_trip = await trip_repository.create_trip(
         user_id=owner.id,
@@ -139,18 +122,14 @@ async def test_trip_repository_enforces_ownership(
         limit=10,
     )
 
-    owned_trip = (
-        await trip_repository.get_by_id_and_user_id(
-            trip_id=created_trip.id,
-            user_id=owner.id,
-        )
+    owned_trip = await trip_repository.get_by_id_and_user_id(
+        trip_id=created_trip.id,
+        user_id=owner.id,
     )
 
-    foreign_trip = (
-        await trip_repository.get_by_id_and_user_id(
-            trip_id=created_trip.id,
-            user_id=other_user.id,
-        )
+    foreign_trip = await trip_repository.get_by_id_and_user_id(
+        trip_id=created_trip.id,
+        user_id=other_user.id,
     )
 
     assert len(history) == 1
@@ -171,12 +150,8 @@ async def test_user_deletion_cascades_to_trips(
     Проверяет ON DELETE CASCADE из Alembic-миграции.
     """
 
-    user_repository = UserRepository(
-        database_session
-    )
-    trip_repository = TripRepository(
-        database_session
-    )
+    user_repository = UserRepository(database_session)
+    trip_repository = TripRepository(database_session)
 
     user = await user_repository.upsert_telegram_user(
         telegram_id=9000000001,
@@ -187,24 +162,16 @@ async def test_user_deletion_cascades_to_trips(
         user_id=user.id,
         destination="Стамбул",
         duration_days=1,
-        plan_data=build_plan_data(
-            destination="Стамбул"
-        ),
+        plan_data=build_plan_data(destination="Стамбул"),
     )
 
     await database_session.commit()
 
-    await database_session.execute(
-        delete(User).where(
-            User.id == user.id
-        )
-    )
+    await database_session.execute(delete(User).where(User.id == user.id))
 
     await database_session.commit()
 
-    trip_count = await database_session.scalar(
-        select(func.count()).select_from(Trip)
-    )
+    trip_count = await database_session.scalar(select(func.count()).select_from(Trip))
 
     assert trip_count == 0
 
@@ -217,12 +184,8 @@ async def test_database_rejects_invalid_trip_duration(
     Проверяет CHECK duration_days BETWEEN 1 AND 30.
     """
 
-    user_repository = UserRepository(
-        database_session
-    )
-    trip_repository = TripRepository(
-        database_session
-    )
+    user_repository = UserRepository(database_session)
+    trip_repository = TripRepository(database_session)
 
     user = await user_repository.upsert_telegram_user(
         telegram_id=9000000001,
@@ -244,9 +207,7 @@ async def test_database_rejects_invalid_trip_duration(
 
     await database_session.rollback()
 
-    trip_count = await database_session.scalar(
-        select(func.count()).select_from(Trip)
-    )
+    trip_count = await database_session.scalar(select(func.count()).select_from(Trip))
 
     assert trip_count == 0
 
@@ -259,68 +220,52 @@ async def test_trip_repository_deletes_only_owned_trip(
     Проверяет атомарное удаление только владельцем.
     """
 
-    user_repository = UserRepository(
-        database_session
-    )
-    trip_repository = TripRepository(
-        database_session
-    )
+    user_repository = UserRepository(database_session)
+    trip_repository = TripRepository(database_session)
 
     owner = await user_repository.upsert_telegram_user(
         telegram_id=9000000001,
         first_name="Liliya",
     )
 
-    other_user = (
-        await user_repository.upsert_telegram_user(
-            telegram_id=9000000002,
-            first_name="Other",
-        )
+    other_user = await user_repository.upsert_telegram_user(
+        telegram_id=9000000002,
+        first_name="Other",
     )
 
     trip = await trip_repository.create_trip(
         user_id=owner.id,
         destination="Токио",
         duration_days=1,
-        plan_data=build_plan_data(
-            destination="Токио"
-        ),
+        plan_data=build_plan_data(destination="Токио"),
     )
 
     await database_session.commit()
 
-    foreign_delete_result = (
-        await trip_repository.delete_by_id_and_user_id(
-            trip_id=trip.id,
-            user_id=other_user.id,
-        )
+    foreign_delete_result = await trip_repository.delete_by_id_and_user_id(
+        trip_id=trip.id,
+        user_id=other_user.id,
     )
 
     assert foreign_delete_result is None
 
-    existing_trip = (
-        await trip_repository.get_by_id_and_user_id(
-            trip_id=trip.id,
-            user_id=owner.id,
-        )
+    existing_trip = await trip_repository.get_by_id_and_user_id(
+        trip_id=trip.id,
+        user_id=owner.id,
     )
 
     assert existing_trip is not None
 
-    owner_delete_result = (
-        await trip_repository.delete_by_id_and_user_id(
-            trip_id=trip.id,
-            user_id=owner.id,
-        )
+    owner_delete_result = await trip_repository.delete_by_id_and_user_id(
+        trip_id=trip.id,
+        user_id=owner.id,
     )
 
     await database_session.commit()
 
-    deleted_trip = (
-        await trip_repository.get_by_id_and_user_id(
-            trip_id=trip.id,
-            user_id=owner.id,
-        )
+    deleted_trip = await trip_repository.get_by_id_and_user_id(
+        trip_id=trip.id,
+        user_id=owner.id,
     )
 
     assert owner_delete_result == trip.id

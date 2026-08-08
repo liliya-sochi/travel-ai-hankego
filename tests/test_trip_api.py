@@ -71,9 +71,7 @@ class FakeTripService:
                     "evening": ["Ужин"],
                 }
             ],
-            practical_tips=[
-                "Проверяйте актуальное расписание."
-            ],
+            practical_tips=["Проверяйте актуальное расписание."],
         )
 
     async def get_trip_history(

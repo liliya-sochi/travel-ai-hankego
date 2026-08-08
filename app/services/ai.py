@@ -10,9 +10,9 @@
 - безопасно логирует технические метрики каждого вызова.
 """
 
-from dataclasses import dataclass
 import json
 import logging
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
@@ -24,7 +24,6 @@ from app.schemas.trip import (
     TripPlanResponse,
     TripPreferences,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -145,17 +144,13 @@ def _extract_llm_response_metadata(
 
     choices = response_data.get("choices")
     has_first_choice = (
-        isinstance(choices, list)
-        and bool(choices)
-        and isinstance(choices[0], dict)
+        isinstance(choices, list) and bool(choices) and isinstance(choices[0], dict)
     )
     first_choice = choices[0] if has_first_choice else {}
 
     groq_metadata = response_data.get("x_groq")
     groq_request_id = (
-        groq_metadata.get("id")
-        if isinstance(groq_metadata, dict)
-        else None
+        groq_metadata.get("id") if isinstance(groq_metadata, dict) else None
     )
 
     return LLMResponseMetadata(
@@ -212,9 +207,7 @@ def _log_llm_call(
     logger.log(
         level,
         "LLM call | %s",
-        json.dumps(
-            event, ensure_ascii=True, separators=(",", ":"), sort_keys=True
-        ),
+        json.dumps(event, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
     )
 
 
@@ -263,9 +256,7 @@ def _build_response_format() -> dict[str, Any]:
         "json_schema": {
             "name": STRUCTURED_OUTPUT_NAME,
             "strict": True,
-            "schema": (
-                TripPlanResponse.model_json_schema()
-            ),
+            "schema": (TripPlanResponse.model_json_schema()),
         },
     }
 
@@ -308,43 +299,27 @@ def _extract_model_text(
     """
 
     try:
-        message = response_data[
-            "choices"
-        ][0]["message"]
+        message = response_data["choices"][0]["message"]
 
     except (
         KeyError,
         IndexError,
         TypeError,
     ) as error:
-        raise AIServiceError(
-            "AI-сервис вернул ответ неизвестной структуры."
-        ) from error
+        raise AIServiceError("AI-сервис вернул ответ неизвестной структуры.") from error
 
     if not isinstance(message, dict):
-        raise AIServiceError(
-            "AI-сервис вернул ответ неизвестной структуры."
-        )
+        raise AIServiceError("AI-сервис вернул ответ неизвестной структуры.")
 
     refusal = message.get("refusal")
 
-    if (
-        isinstance(refusal, str)
-        and refusal.strip()
-    ):
-        raise AIServiceError(
-            "AI-сервис не смог обработать этот запрос."
-        )
+    if isinstance(refusal, str) and refusal.strip():
+        raise AIServiceError("AI-сервис не смог обработать этот запрос.")
 
     model_text = message.get("content")
 
-    if (
-        not isinstance(model_text, str)
-        or not model_text.strip()
-    ):
-        raise AIServiceError(
-            "AI-сервис вернул пустой ответ."
-        )
+    if not isinstance(model_text, str) or not model_text.strip():
+        raise AIServiceError("AI-сервис вернул пустой ответ.")
 
     return model_text
 
@@ -358,14 +333,10 @@ def _validate_trip_plan(
     Проверяет JSON и бизнес-правила через Pydantic.
     """
 
-    trip_plan = TripPlanResponse.model_validate_json(
-        model_text
-    )
+    trip_plan = TripPlanResponse.model_validate_json(model_text)
 
     if trip_plan.duration_days != expected_duration_days:
-        raise ValueError(
-            "LLM duration_days does not match trip preferences."
-        )
+        raise ValueError("LLM duration_days does not match trip preferences.")
 
     return trip_plan
 
@@ -398,9 +369,7 @@ async def _request_model(
         response_data = response.json()
 
         if not isinstance(response_data, dict):
-            raise ValueError(
-                "AI provider response must be a JSON object."
-            )
+            raise ValueError("AI provider response must be a JSON object.")
 
         return LLMProviderResponse(
             data=response_data,
@@ -418,8 +387,7 @@ async def _request_model(
             error=error,
         )
         raise AIServiceError(
-            "AI-сервис временно не отвечает. "
-            "Попробуйте ещё раз."
+            "AI-сервис временно не отвечает. Попробуйте ещё раз."
         ) from error
 
     except httpx.HTTPStatusError as error:
@@ -434,8 +402,7 @@ async def _request_model(
             http_status=error.response.status_code,
         )
         raise AIServiceError(
-            "AI-сервис временно недоступен. "
-            "Попробуйте позже."
+            "AI-сервис временно недоступен. Попробуйте позже."
         ) from error
 
     except httpx.RequestError as error:
@@ -447,15 +414,11 @@ async def _request_model(
             started_at=started_at,
             error=error,
         )
-        raise AIServiceError(
-            "Не удалось подключиться к AI-сервису."
-        ) from error
+        raise AIServiceError("Не удалось подключиться к AI-сервису.") from error
 
     except (json.JSONDecodeError, ValueError) as error:
         request_id = (
-            response.headers.get("x-request-id")
-            if response is not None
-            else None
+            response.headers.get("x-request-id") if response is not None else None
         )
         _log_llm_error(
             level=logging.ERROR,
@@ -466,9 +429,7 @@ async def _request_model(
             error=error,
             request_id=request_id,
         )
-        raise AIServiceError(
-            "AI-сервис вернул некорректный ответ."
-        ) from error
+        raise AIServiceError("AI-сервис вернул некорректный ответ.") from error
 
 
 async def generate_trip_plan(
@@ -484,15 +445,10 @@ async def generate_trip_plan(
 
     settings = get_settings()
 
-    url = (
-        f"{settings.llm_base_url.rstrip('/')}"
-        "/chat/completions"
-    )
+    url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
 
     headers = {
-        "Authorization": (
-            f"Bearer {settings.llm_api_key}"
-        ),
+        "Authorization": (f"Bearer {settings.llm_api_key}"),
         "Content-Type": "application/json",
     }
 
@@ -536,15 +492,11 @@ async def generate_trip_plan(
             metadata = _extract_llm_response_metadata(
                 provider_response.data,
                 requested_model=settings.llm_model,
-                fallback_request_id=(
-                    provider_response.header_request_id
-                ),
+                fallback_request_id=(provider_response.header_request_id),
             )
 
             try:
-                model_text = _extract_model_text(
-                    provider_response.data
-                )
+                model_text = _extract_model_text(provider_response.data)
 
             except AIServiceError as error:
                 _log_llm_call(
@@ -552,9 +504,7 @@ async def generate_trip_plan(
                     outcome="invalid_output",
                     metadata=metadata,
                     attempt=attempt,
-                    duration_ms=(
-                        provider_response.duration_ms
-                    ),
+                    duration_ms=(provider_response.duration_ms),
                     error_type=type(error).__name__,
                 )
 
@@ -563,9 +513,7 @@ async def generate_trip_plan(
             try:
                 trip_plan = _validate_trip_plan(
                     model_text,
-                    expected_duration_days=(
-                        preferences.duration_days
-                    ),
+                    expected_duration_days=(preferences.duration_days),
                 )
 
             except (ValidationError, ValueError) as error:
@@ -574,16 +522,11 @@ async def generate_trip_plan(
                     outcome="semantic_validation_failed",
                     metadata=metadata,
                     attempt=attempt,
-                    duration_ms=(
-                        provider_response.duration_ms
-                    ),
+                    duration_ms=(provider_response.duration_ms),
                     error_type=type(error).__name__,
                 )
 
-                if (
-                    attempt
-                    == MAX_SEMANTIC_ATTEMPTS
-                ):
+                if attempt == MAX_SEMANTIC_ATTEMPTS:
                     raise AIServiceError(
                         "Не удалось сформировать "
                         "логически корректный маршрут. "
@@ -598,9 +541,7 @@ async def generate_trip_plan(
                         },
                         {
                             "role": "user",
-                            "content": (
-                                SEMANTIC_RETRY_PROMPT
-                            ),
+                            "content": (SEMANTIC_RETRY_PROMPT),
                         },
                     ]
                 )
@@ -617,6 +558,4 @@ async def generate_trip_plan(
 
             return trip_plan
 
-    raise AIServiceError(
-        "Не удалось сформировать маршрут."
-    )
+    raise AIServiceError("Не удалось сформировать маршрут.")

@@ -19,7 +19,6 @@ from app.core.request_context import (
 )
 from app.schemas.trip import TripPreferences
 
-
 HttpMethod = Literal[
     "GET",
     "POST",
@@ -39,7 +38,7 @@ async def _request_backend(
     method: HttpMethod,
     path: str,
     payload: dict[str, Any],
-    timeout: float,
+    request_timeout: float,
     timeout_message: str,
     default_error_message: str,
 ) -> dict[str, Any]:
@@ -56,26 +55,18 @@ async def _request_backend(
     # Резервное создание нужно для прямых вызовов клиента и тестов.
     if correlation_id is None:
         correlation_id = create_correlation_id()
-        context_token = set_correlation_id(
-            correlation_id
-        )
+        context_token = set_correlation_id(correlation_id)
 
-    url = (
-        f"{settings.backend_url.rstrip('/')}"
-        f"{settings.api_prefix}"
-        f"{path}"
-    )
+    url = f"{settings.backend_url.rstrip('/')}{settings.api_prefix}{path}"
 
     headers = {
-        "X-Internal-API-Key": (
-            settings.internal_api_key.get_secret_value()
-        ),
+        "X-Internal-API-Key": (settings.internal_api_key.get_secret_value()),
         CORRELATION_ID_HEADER: correlation_id,
     }
 
     try:
         async with httpx.AsyncClient(
-            timeout=timeout,
+            timeout=request_timeout,
         ) as client:
             response = await client.request(
                 method=method,
@@ -89,16 +80,12 @@ async def _request_backend(
         response_data = response.json()
 
         if not isinstance(response_data, dict):
-            raise ValueError(
-                "Backend response must be a JSON object."
-            )
+            raise ValueError("Backend response must be a JSON object.")
 
         return response_data
 
     except httpx.TimeoutException as error:
-        raise BackendError(
-            timeout_message
-        ) from error
+        raise BackendError(timeout_message) from error
 
     except httpx.HTTPStatusError as error:
         error_message = default_error_message
@@ -115,19 +102,13 @@ async def _request_backend(
         except ValueError:
             pass
 
-        raise BackendError(
-            error_message
-        ) from error
+        raise BackendError(error_message) from error
 
     except httpx.RequestError as error:
-        raise BackendError(
-            "Не удалось подключиться к HankeGo API."
-        ) from error
+        raise BackendError("Не удалось подключиться к HankeGo API.") from error
 
     except ValueError as error:
-        raise BackendError(
-            "Backend вернул данные в неправильном формате."
-        ) from error
+        raise BackendError("Backend вернул данные в неправильном формате.") from error
 
     finally:
         if context_token is not None:
@@ -149,13 +130,9 @@ async def register_telegram_user(
             "telegram_id": telegram_id,
             "first_name": first_name,
         },
-        timeout=10.0,
-        timeout_message=(
-            "Backend не успел зарегистрировать пользователя."
-        ),
-        default_error_message=(
-            "Backend не смог зарегистрировать пользователя."
-        ),
+        request_timeout=10.0,
+        timeout_message=("Backend не успел зарегистрировать пользователя."),
+        default_error_message=("Backend не смог зарегистрировать пользователя."),
     )
 
 
@@ -175,17 +152,11 @@ async def create_trip_plan(
         payload={
             "telegram_id": telegram_id,
             "first_name": first_name,
-            "preferences": preferences.model_dump(
-                mode="json"
-            ),
+            "preferences": preferences.model_dump(mode="json"),
         },
-        timeout=150.0,
-        timeout_message=(
-            "Backend не успел подготовить маршрут."
-        ),
-        default_error_message=(
-            "Backend не смог создать маршрут."
-        ),
+        request_timeout=150.0,
+        timeout_message=("Backend не успел подготовить маршрут."),
+        default_error_message=("Backend не смог создать маршрут."),
     )
 
 
@@ -205,13 +176,9 @@ async def get_trip_history(
             "telegram_id": telegram_id,
             "limit": limit,
         },
-        timeout=10.0,
-        timeout_message=(
-            "Backend не успел загрузить маршруты."
-        ),
-        default_error_message=(
-            "Backend не смог загрузить маршруты."
-        ),
+        request_timeout=10.0,
+        timeout_message=("Backend не успел загрузить маршруты."),
+        default_error_message=("Backend не смог загрузить маршруты."),
     )
 
 
@@ -231,13 +198,9 @@ async def get_trip_details(
             "telegram_id": telegram_id,
             "trip_id": trip_id,
         },
-        timeout=10.0,
-        timeout_message=(
-            "Backend не успел загрузить маршрут."
-        ),
-        default_error_message=(
-            "Backend не смог загрузить маршрут."
-        ),
+        request_timeout=10.0,
+        timeout_message=("Backend не успел загрузить маршрут."),
+        default_error_message=("Backend не смог загрузить маршрут."),
     )
 
 
@@ -257,11 +220,7 @@ async def delete_trip(
             "telegram_id": telegram_id,
             "trip_id": trip_id,
         },
-        timeout=10.0,
-        timeout_message=(
-            "Backend не успел удалить маршрут."
-        ),
-        default_error_message=(
-            "Backend не смог удалить маршрут."
-        ),
+        request_timeout=10.0,
+        timeout_message=("Backend не успел удалить маршрут."),
+        default_error_message=("Backend не смог удалить маршрут."),
     )

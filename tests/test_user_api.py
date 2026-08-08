@@ -145,7 +145,4 @@ async def test_upsert_telegram_user_rejects_unknown_field(
 
     validation_errors = response.json()["detail"]
 
-    assert any(
-        error["type"] == "extra_forbidden"
-        for error in validation_errors
-    )
+    assert any(error["type"] == "extra_forbidden" for error in validation_errors)

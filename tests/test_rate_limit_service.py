@@ -80,17 +80,12 @@ async def test_rate_limiter_rejects_request() -> None:
         window_seconds=3600,
     )
 
-    with pytest.raises(
-        RateLimitExceededError
-    ) as error_info:
+    with pytest.raises(RateLimitExceededError) as error_info:
         await rate_limiter.check(
             telegram_id=9000000001,
         )
 
-    assert (
-        error_info.value.retry_after_seconds
-        == 725
-    )
+    assert error_info.value.retry_after_seconds == 725
 
 
 @pytest.mark.asyncio
@@ -100,9 +95,7 @@ async def test_rate_limiter_handles_redis_error() -> None:
     """
 
     redis_client = FakeRedisScriptClient(
-        error=RedisError(
-            "Redis connection failed."
-        ),
+        error=RedisError("Redis connection failed."),
     )
 
     rate_limiter = TripPlanRateLimiter(
@@ -111,9 +104,7 @@ async def test_rate_limiter_handles_redis_error() -> None:
         window_seconds=3600,
     )
 
-    with pytest.raises(
-        RateLimitUnavailableError
-    ):
+    with pytest.raises(RateLimitUnavailableError):
         await rate_limiter.check(
             telegram_id=9000000001,
         )

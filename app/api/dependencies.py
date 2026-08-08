@@ -14,7 +14,6 @@ from app.services.health import HealthService
 from app.services.rate_limit import TripPlanRateLimiter
 from app.services.trip_lock import TripGenerationLock
 
-
 RedisDependency = Annotated[
     Redis,
     Depends(get_redis_client),
@@ -46,9 +45,7 @@ def get_trip_plan_rate_limiter(
     return TripPlanRateLimiter(
         redis_client=redis_client,
         limit=settings.trip_plan_rate_limit,
-        window_seconds=(
-            settings.trip_plan_rate_window_seconds
-        ),
+        window_seconds=(settings.trip_plan_rate_window_seconds),
     )
 
 
@@ -63,7 +60,5 @@ def get_trip_generation_lock(
 
     return TripGenerationLock(
         redis_client=redis_client,
-        ttl_seconds=(
-            settings.trip_plan_lock_ttl_seconds
-        ),
+        ttl_seconds=(settings.trip_plan_lock_ttl_seconds),
     )

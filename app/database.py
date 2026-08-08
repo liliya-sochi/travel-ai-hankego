@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import (
 
 from app.config import get_settings
 
-
 settings = get_settings()
 
 
@@ -25,7 +24,6 @@ settings = get_settings()
 # Он управляет пулом подключений к PostgreSQL.
 engine = create_async_engine(
     settings.database_url,
-
     # Проверяет соединение перед использованием.
     # Это защищает от выдачи из пула уже разорванного соединения.
     pool_pre_ping=True,
@@ -37,7 +35,6 @@ engine = create_async_engine(
 session_factory = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
-
     # После commit() поля ORM-объекта остаются доступными.
     # Иначе SQLAlchemy может попытаться повторно загрузить их из БД.
     expire_on_commit=False,

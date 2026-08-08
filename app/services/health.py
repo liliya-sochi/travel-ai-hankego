@@ -16,7 +16,6 @@ from app.schemas.system import (
     ReadinessResponse,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -54,28 +53,13 @@ class HealthService:
             self._check_redis(),
         )
 
-        is_ready = (
-            postgresql_is_up
-            and redis_is_up
-        )
+        is_ready = postgresql_is_up and redis_is_up
 
         return ReadinessResponse(
-            status=(
-                "ready"
-                if is_ready
-                else "not_ready"
-            ),
+            status=("ready" if is_ready else "not_ready"),
             checks=DependencyChecks(
-                postgresql=(
-                    "up"
-                    if postgresql_is_up
-                    else "down"
-                ),
-                redis=(
-                    "up"
-                    if redis_is_up
-                    else "down"
-                ),
+                postgresql=("up" if postgresql_is_up else "down"),
+                redis=("up" if redis_is_up else "down"),
             ),
         )
 
@@ -87,21 +71,11 @@ class HealthService:
         """
 
         try:
-            async with timeout(
-                self._timeout_seconds
-            ):
-                async with (
-                    self._database_engine.connect()
-                    as connection
-                ):
-                    result = await connection.execute(
-                        text("SELECT 1")
-                    )
+            async with timeout(self._timeout_seconds):
+                async with self._database_engine.connect() as connection:
+                    result = await connection.execute(text("SELECT 1"))
 
-                    return (
-                        result.scalar_one()
-                        == 1
-                    )
+                    return result.scalar_one() == 1
 
         except (
             TimeoutError,
@@ -122,12 +96,8 @@ class HealthService:
         """
 
         try:
-            async with timeout(
-                self._timeout_seconds
-            ):
-                ping_result = (
-                    await self._redis_client.ping()
-                )
+            async with timeout(self._timeout_seconds):
+                ping_result = await self._redis_client.ping()
 
                 return ping_result is True
 
