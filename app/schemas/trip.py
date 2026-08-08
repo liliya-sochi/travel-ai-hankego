@@ -85,29 +85,6 @@ class TripPlanRequest(StrictSchema):
     )
 
 
-class TripPlanRequest(StrictSchema):
-    """
-    Запрос на создание и сохранение маршрута.
-    """
-
-    telegram_id: int = Field(
-        gt=0,
-        description="Уникальный идентификатор пользователя Telegram.",
-        examples=[9000000001],
-    )
-
-    first_name: str = Field(
-        min_length=1,
-        max_length=255,
-        description="Имя пользователя Telegram.",
-        examples=["Liliya"],
-    )
-
-    preferences: TripPreferences = Field(
-        description="Проверенные параметры будущей поездки.",
-    )
-
-
 class TripHistoryRequest(StrictSchema):
     """
     Запрос истории маршрутов пользователя.
