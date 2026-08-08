@@ -1,57 +1,106 @@
+name: hankego-dev
+
+x-app-service: &app-service
+  image: hankego-app:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://hankego:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/hankego
+    REDIS_URL: redis://redis:6379/0
+    BACKEND_URL: http://api:8000
+  networks:
+    - hankego
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
   postgres:
     image: postgres:17
-    container_name: hankego-postgres
-    restart: unless-stopped
-
     environment:
-      POSTGRES_USER: hankego
-      POSTGRES_PASSWORD: hankego_dev_password
       POSTGRES_DB: hankego
-
-    ports:
-      - "127.0.0.1:5433:5432"
-
+      POSTGRES_USER: hankego
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
-      - hankego_postgres_data:/var/lib/postgresql/data
-
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - hankego
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U hankego -d hankego",
-        ]
+      test: ["CMD-SHELL", "pg_isready -U hankego -d hankego"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:8.8.1-alpine
-    container_name: hankego-redis
-    restart: unless-stopped
-
-    command:
-      - redis-server
-      - --appendonly
-      - "yes"
-
-    ports:
-      - "127.0.0.1:6379:6379"
-
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - hankego_redis_data:/data
-
+      - redis_data:/data
+    networks:
+      - hankego
     healthcheck:
-      test:
-        [
-          "CMD",
-          "redis-cli",
-          "ping",
-        ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    <<: *app-service
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *app-service
+    init: true
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    stop_grace_period: 40s
+    restart: unless-stopped
+
+  bot:
+    <<: *app-service
+    profiles:
+      - bot
+    init: true
+    command: ["python", "-m", "app.bot.main"]
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+networks:
+  hankego:
 
 volumes:
-  hankego_postgres_data:
-  hankego_redis_data:
+  postgres_data:
+  redis_data:

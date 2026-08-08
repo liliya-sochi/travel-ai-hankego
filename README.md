@@ -67,6 +67,9 @@ Redis is used for:
 - SQLAlchemy 2 with asyncpg;
 - Alembic database migrations;
 - PostgreSQL storage for users and itineraries;
+- reproducible multi-stage Docker image for the FastAPI backend;
+- Gunicorn with Uvicorn workers for production process management;
+- automated Docker image build and runtime verification in CI.
 - Redis-based rate limiting;
 - Redis lock for concurrent generation protection;
 - internal API key authentication between the bot and backend;
@@ -102,6 +105,8 @@ Redis is used for:
 - uv
 - systemd
 - Groq OpenAI-compatible API
+- Docker and Docker Compose
+- Gunicorn with Uvicorn workers
 
 ## Project Structure
 
@@ -119,6 +124,9 @@ app/
 └── main.py         # FastAPI application
 alembic/            # Database migrations
 tests/              # Automated tests
+Dockerfile          # Multi-stage production image
+compose.yaml        # Application and infrastructure services
+compose.override.yaml  # Localhost ports for development
 ```
 
 ## Local Development
@@ -217,7 +225,7 @@ For safety, the test database name must end with `_test`.
 - linting and formatting checks in CI;
 - expanded test coverage;
 - improved monitoring;
-- containerization;
+- Docker-based deployment on VPS;
 - web interface;
 - integration with additional sources of up-to-date travel information.
 

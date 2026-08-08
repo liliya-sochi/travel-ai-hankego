@@ -1,0 +1,28 @@
+name: hankego-prod
+
+services:
+  postgres:
+    mem_limit: 512m
+
+  redis:
+    mem_limit: 128m
+
+  migrate:
+    image: hankego-app:prod
+    mem_limit: 512m
+
+  api:
+    image: hankego-app:prod
+    mem_limit: 768m
+
+  bot:
+    image: hankego-app:prod
+    mem_limit: 384m
+
+volumes:
+  postgres_data:
+    external: true
+    name: hankego_postgres_data
+
+  redis_data:
+    name: hankego_redis_data
