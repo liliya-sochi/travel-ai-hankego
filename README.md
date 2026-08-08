@@ -1,4 +1,5 @@
 # HankeGo
+[![Tests](https://github.com/liliya-sochi/travel-ai-hankego/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/liliya-sochi/travel-ai-hankego/actions/workflows/tests.yml)
 
 HankeGo is an AI-powered travel assistant for creating, saving, and managing personalized travel itineraries.
 
@@ -72,7 +73,9 @@ Redis is used for:
 - correlation IDs from Telegram updates to LLM requests;
 - liveness and readiness health checks;
 - external service error handling;
-- unit and integration tests with pytest.
+- unit and integration tests with pytest;
+- automated test pipeline for every push and pull request;
+- temporary PostgreSQL and Redis services in CI.
 
 ### Telegram Bot
 
@@ -211,7 +214,7 @@ For safety, the test database name must end with `_test`.
 
 ## Roadmap
 
-- automated CI;
+- linting and formatting checks in CI;
 - expanded test coverage;
 - improved monitoring;
 - containerization;
