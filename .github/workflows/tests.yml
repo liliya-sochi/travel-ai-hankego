@@ -38,6 +38,9 @@ jobs:
       - name: Check formatting with Ruff
         run: uv run ruff format --check .
 
+      - name: Check shell script syntax
+        run: bash -n scripts/backup_postgres.sh
+
   pytest:
     name: Run tests
     runs-on: ubuntu-latest

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run HankeGo PostgreSQL backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+AccuracySec=1min
+Unit=hankego-postgres-backup.service
+
+[Install]
+WantedBy=timers.target

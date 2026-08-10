@@ -1,0 +1,22 @@
+[Unit]
+Description=HankeGo PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=liliya
+Group=liliya
+WorkingDirectory=/home/liliya/travel-ai-hankego
+ExecStart=/home/liliya/travel-ai-hankego/scripts/backup_postgres.sh
+
+# Backup-файлы должны быть доступны только владельцу.
+UMask=0077
+
+# Резервное копирование не должно мешать работе API и бота.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Ограничиваем зависший процесс резервного копирования.
+TimeoutStartSec=30min
