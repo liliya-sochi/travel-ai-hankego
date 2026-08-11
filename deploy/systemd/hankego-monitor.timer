@@ -1,0 +1,11 @@
+[Unit]
+Description=Run HankeGo production monitoring every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=hankego-monitor.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=HankeGo production monitoring
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=liliya
+Group=liliya
+WorkingDirectory=/home/liliya/travel-ai-hankego
+EnvironmentFile=/home/liliya/travel-ai-hankego/.env
+ExecStart=/home/liliya/travel-ai-hankego/scripts/monitor_production.sh
+
+# Systemd создаёт закрытый каталог состояния в /var/lib/hankego-monitor.
+StateDirectory=hankego-monitor
+StateDirectoryMode=0700
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=1min
