@@ -1,23 +1,34 @@
 name: hankego-prod
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     mem_limit: 512m
+    logging: *default-logging
 
   redis:
     mem_limit: 128m
+    logging: *default-logging
 
   migrate:
     image: hankego-app:prod
     mem_limit: 512m
+    logging: *default-logging
 
   api:
     image: hankego-app:prod
     mem_limit: 768m
+    logging: *default-logging
 
   bot:
     image: hankego-app:prod
     mem_limit: 384m
+    logging: *default-logging
 
 volumes:
   postgres_data:
