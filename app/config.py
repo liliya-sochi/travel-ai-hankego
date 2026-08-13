@@ -62,6 +62,20 @@ class Settings(BaseSettings):
         le=86400,
     )
 
+    # Максимальное количество LLM-разборов сообщений за одно окно.
+    trip_intake_rate_limit: int = Field(
+        default=60,
+        ge=1,
+        le=500,
+    )
+
+    # Продолжительность окна conversational intake в секундах.
+    trip_intake_rate_window_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+    )
+
     # Максимальное время блокировки одной генерации.
     trip_plan_lock_ttl_seconds: int = Field(
         default=180,

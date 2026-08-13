@@ -137,3 +137,12 @@ class TripPlanRateLimiter:
         telegram_id_hash = sha256(str(telegram_id).encode("utf-8")).hexdigest()
 
         return f"{self._key_prefix}:{telegram_id_hash}"
+
+
+class TripIntakeRateLimiter(TripPlanRateLimiter):
+    """
+    Ограничивает количество LLM-разборов свободных сообщений.
+
+    Использует тот же атомарный Redis-механизм, но отдельный
+    префикс ключей, поэтому не расходует лимит генерации маршрутов.
+    """

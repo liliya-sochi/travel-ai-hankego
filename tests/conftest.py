@@ -22,6 +22,7 @@ from sqlalchemy.pool import NullPool
 
 from app.api.dependencies import (
     get_trip_generation_lock,
+    get_trip_intake_rate_limiter,
     get_trip_plan_rate_limiter,
 )
 from app.core.security import verify_internal_api_key
@@ -31,6 +32,20 @@ from app.main import app
 class NoOpTripPlanRateLimiter:
     """
     Rate limiter, который ничего не запрещает.
+    """
+
+    async def check(
+        self,
+        telegram_id: int,
+    ) -> None:
+        """
+        Разрешает тестовый запрос.
+        """
+
+
+class NoOpTripIntakeRateLimiter:
+    """
+    Intake rate limiter, который ничего не запрещает.
     """
 
     async def check(
@@ -89,6 +104,24 @@ def bypass_trip_plan_rate_limit() -> Iterator[None]:
 
     app.dependency_overrides.pop(
         get_trip_plan_rate_limiter,
+        None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def bypass_trip_intake_rate_limit() -> Iterator[None]:
+    """
+    Отключает настоящий Redis rate limiter intake в unit-тестах.
+    """
+
+    app.dependency_overrides[get_trip_intake_rate_limiter] = lambda: (
+        NoOpTripIntakeRateLimiter()
+    )
+
+    yield
+
+    app.dependency_overrides.pop(
+        get_trip_intake_rate_limiter,
         None,
     )
 

@@ -11,7 +11,10 @@ from app.config import get_settings
 from app.core.redis import get_redis_client
 from app.database import engine
 from app.services.health import HealthService
-from app.services.rate_limit import TripPlanRateLimiter
+from app.services.rate_limit import (
+    TripIntakeRateLimiter,
+    TripPlanRateLimiter,
+)
 from app.services.trip_lock import TripGenerationLock
 
 RedisDependency = Annotated[
@@ -46,6 +49,21 @@ def get_trip_plan_rate_limiter(
         redis_client=redis_client,
         limit=settings.trip_plan_rate_limit,
         window_seconds=(settings.trip_plan_rate_window_seconds),
+    )
+
+
+def get_trip_intake_rate_limiter(
+    redis_client: RedisDependency,
+) -> TripIntakeRateLimiter:
+    """Создаёт отдельный rate limiter диалогового разбора."""
+
+    settings = get_settings()
+
+    return TripIntakeRateLimiter(
+        redis_client=redis_client,
+        limit=settings.trip_intake_rate_limit,
+        window_seconds=settings.trip_intake_rate_window_seconds,
+        key_prefix="rate-limit:trip-intake",
     )
 
 

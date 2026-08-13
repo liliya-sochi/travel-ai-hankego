@@ -27,10 +27,11 @@ class StrictSchema(BaseModel):
 
 class TripPreferences(StrictSchema):
     """
-    Проверенные пользовательские параметры будущей поездки.
+    Проверенные параметры поездки, достаточные для генерации маршрута.
 
-    Схема не содержит Telegram- или HTTP-специфичных данных,
-    поэтому её смогут использовать разные интерфейсы HankeGo.
+    Направление и длительность обязательны.
+    Период, бюджет и интересы используются, только если пользователь
+    сам сообщил их в свободном тексте.
     """
 
     destination: str = Field(
@@ -47,19 +48,159 @@ class TripPreferences(StrictSchema):
         examples=[5],
     )
 
-    budget: str = Field(
+    travel_period: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=255,
+        description="Даты, месяц, сезон или другой период поездки.",
+        examples=["В октябре 2026 года"],
+    )
+
+    budget: str | None = Field(
+        default=None,
         min_length=1,
         max_length=255,
-        description="Бюджет поездки в свободной форме.",
+        description="Необязательный бюджет поездки в свободной форме.",
         examples=["150000 ₽"],
     )
 
-    interests: str = Field(
+    interests: str | None = Field(
+        default=None,
         min_length=2,
         max_length=1000,
-        description="Интересы и пожелания путешественника.",
+        description="Необязательные интересы и пожелания путешественника.",
         examples=["Архитектура, местная еда и прогулки"],
     )
+
+
+class TripDraft(StrictSchema):
+    """
+    Неполный черновик поездки между сообщениями пользователя.
+
+    Все поля необязательны, потому что пользователь может сообщать
+    параметры постепенно и в произвольном порядке.
+    """
+
+    destination: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=255,
+    )
+
+    duration_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=30,
+    )
+
+    travel_period: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=255,
+    )
+
+    budget: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+    )
+
+    interests: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=1000,
+    )
+
+
+TripIntent = Literal[
+    "plan_trip",
+    "show_trips",
+    "cancel",
+    "unknown",
+]
+
+RequiredTripField = Literal[
+    "destination",
+    "duration_days",
+]
+
+
+class TripIntakeExtraction(StrictSchema):
+    """
+    Строгий Structured Output распознавания сообщения пользователя.
+
+    Каждое поле обязательно должно присутствовать в JSON,
+    но может содержать null, если новое сообщение не содержит
+    соответствующей информации.
+    """
+
+    intent: TripIntent = Field(
+        description="Распознанное намерение пользователя.",
+    )
+
+    destination: str | None = Field(
+        min_length=2,
+        max_length=255,
+        description="Полное новое значение направления или null.",
+    )
+
+    duration_days: int | None = Field(
+        ge=1,
+        le=30,
+        description="Полное новое значение длительности или null.",
+    )
+
+    travel_period: str | None = Field(
+        min_length=2,
+        max_length=255,
+        description="Полное новое значение периода поездки или null.",
+    )
+
+    budget: str | None = Field(
+        min_length=1,
+        max_length=255,
+        description="Полное новое значение бюджета или null.",
+    )
+
+    interests: str | None = Field(
+        min_length=2,
+        max_length=1000,
+        description="Полное новое значение интересов или null.",
+    )
+
+
+class TripIntakeRequest(StrictSchema):
+    """
+    Запрос на разбор одного сообщения в диалоге о поездке.
+    """
+
+    telegram_id: int = Field(
+        gt=0,
+        description="Идентификатор пользователя для rate limiting.",
+    )
+
+    user_message: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="Одно недоверенное текстовое сообщение пользователя.",
+    )
+
+    draft: TripDraft = Field(
+        default_factory=TripDraft,
+        description="Уже собранные параметры текущего диалога.",
+    )
+
+
+class TripIntakeResponse(StrictSchema):
+    """
+    Детерминированный результат обработки сообщения.
+    """
+
+    intent: TripIntent
+    draft: TripDraft
+    missing_required_fields: list[RequiredTripField]
+    ready_to_generate: bool
+    next_question: str | None
 
 
 class TripPlanRequest(StrictSchema):

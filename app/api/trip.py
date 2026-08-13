@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
     get_trip_generation_lock,
+    get_trip_intake_rate_limiter,
     get_trip_plan_rate_limiter,
 )
 from app.database import get_session
@@ -26,12 +27,15 @@ from app.schemas.trip import (
     TripDetailsResponse,
     TripHistoryRequest,
     TripHistoryResponse,
+    TripIntakeRequest,
+    TripIntakeResponse,
     TripPlanRequest,
 )
 from app.services.ai import AIServiceError
 from app.services.rate_limit import (
     RateLimitExceededError,
     RateLimitUnavailableError,
+    TripIntakeRateLimiter,
     TripPlanRateLimiter,
 )
 from app.services.trip import (
@@ -39,6 +43,7 @@ from app.services.trip import (
     TripService,
     TripServiceError,
 )
+from app.services.trip_intake import process_trip_message
 from app.services.trip_lock import (
     TripGenerationInProgressError,
     TripGenerationLock,
@@ -61,6 +66,67 @@ GenerationLockDependency = Annotated[
     TripGenerationLock,
     Depends(get_trip_generation_lock),
 ]
+
+
+IntakeRateLimiterDependency = Annotated[
+    TripIntakeRateLimiter,
+    Depends(get_trip_intake_rate_limiter),
+]
+
+
+@router.post(
+    "/trip-intake",
+    response_model=TripIntakeResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Разобрать сообщение о поездке",
+)
+async def analyze_trip_intake(
+    request: TripIntakeRequest,
+    rate_limiter: IntakeRateLimiterDependency,
+) -> TripIntakeResponse:
+    """
+    Извлекает параметры и определяет следующий шаг диалога.
+    """
+
+    try:
+        await rate_limiter.check(
+            telegram_id=request.telegram_id,
+        )
+
+        return await process_trip_message(
+            user_message=request.user_message,
+            draft=request.draft,
+        )
+
+    except RateLimitExceededError as error:
+        retry_minutes = max(
+            1,
+            ceil(error.retry_after_seconds / 60),
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Слишком много сообщений для планирования. "
+                f"Попробуйте снова примерно через "
+                f"{retry_minutes} мин."
+            ),
+            headers={
+                "Retry-After": str(error.retry_after_seconds),
+            },
+        ) from error
+
+    except RateLimitUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Планирование поездки временно недоступно.",
+        ) from error
+
+    except AIServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
 
 
 @router.post(
