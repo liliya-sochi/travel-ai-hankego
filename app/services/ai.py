@@ -709,10 +709,8 @@ async def analyze_trip_message(
                     provider_response.data,
                 )
 
-                extraction = (
-                    TripIntakeExtraction.model_validate_json(
-                        model_text,
-                    )
+                extraction = TripIntakeExtraction.model_validate_json(
+                    model_text,
                 )
 
             except (AIServiceError, ValidationError) as error:
@@ -727,8 +725,7 @@ async def analyze_trip_message(
 
                 if attempt == MAX_SEMANTIC_ATTEMPTS:
                     raise AIServiceError(
-                        "Не удалось понять сообщение. "
-                        "Попробуйте сформулировать иначе."
+                        "Не удалось понять сообщение. Попробуйте сформулировать иначе."
                     ) from error
 
                 messages.append(

@@ -198,9 +198,7 @@ async def test_process_trip_message_propagates_ai_error(
         user_message: str,
         draft: TripDraft,
     ) -> TripIntakeExtraction:
-        raise AIServiceError(
-            "Не удалось понять сообщение."
-        )
+        raise AIServiceError("Не удалось понять сообщение.")
 
     monkeypatch.setattr(
         trip_intake_service,

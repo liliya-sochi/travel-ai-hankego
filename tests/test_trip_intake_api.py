@@ -94,9 +94,7 @@ async def test_trip_intake_converts_ai_error_to_502(
     async def fake_process_trip_message(
         **_: object,
     ) -> TripIntakeResponse:
-        raise AIServiceError(
-            "Не удалось понять сообщение."
-        )
+        raise AIServiceError("Не удалось понять сообщение.")
 
     monkeypatch.setattr(
         trip_api,
@@ -120,9 +118,7 @@ async def test_trip_intake_converts_ai_error_to_502(
         )
 
     assert response.status_code == 502
-    assert response.json() == {
-        "detail": "Не удалось понять сообщение."
-    }
+    assert response.json() == {"detail": "Не удалось понять сообщение."}
 
 
 @pytest.mark.asyncio

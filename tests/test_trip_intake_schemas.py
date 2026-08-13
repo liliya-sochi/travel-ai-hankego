@@ -29,9 +29,7 @@ def build_extraction_data() -> dict[str, object]:
 def test_intake_extraction_accepts_nullable_fields() -> None:
     """Проверяет полный Structured Output со значениями null."""
 
-    extraction = TripIntakeExtraction.model_validate(
-        build_extraction_data()
-    )
+    extraction = TripIntakeExtraction.model_validate(build_extraction_data())
 
     assert extraction.intent == "plan_trip"
     assert extraction.destination == "Япония"
@@ -54,9 +52,7 @@ def test_intake_json_schema_is_strict() -> None:
 
     json_schema = TripIntakeExtraction.model_json_schema()
 
-    assert set(json_schema["required"]) == set(
-        json_schema["properties"]
-    )
+    assert set(json_schema["required"]) == set(json_schema["properties"])
     assert json_schema["additionalProperties"] is False
 
 

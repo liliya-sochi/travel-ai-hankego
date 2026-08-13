@@ -97,11 +97,7 @@ def build_trip_intake_response(
 
     missing_fields = get_missing_required_fields(merged_draft)
 
-    next_question = (
-        NEXT_QUESTIONS[missing_fields[0]]
-        if missing_fields
-        else None
-    )
+    next_question = NEXT_QUESTIONS[missing_fields[0]] if missing_fields else None
 
     return TripIntakeResponse(
         intent="plan_trip",

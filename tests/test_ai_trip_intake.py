@@ -130,10 +130,7 @@ async def test_analyze_trip_message_returns_extraction(
     assert response_format["json_schema"]["name"] == "trip_intake"
     assert response_format["json_schema"]["strict"] is True
 
-    service_logs = "\n".join(
-        record.getMessage()
-        for record in caplog.records
-    )
+    service_logs = "\n".join(record.getMessage() for record in caplog.records)
 
     assert PRIVATE_MESSAGE not in service_logs
     assert PRIVATE_API_KEY not in service_logs
@@ -153,9 +150,7 @@ async def test_analyze_trip_message_retries_invalid_output(
         nonlocal request_count
         request_count += 1
 
-        return build_provider_response(
-            '{"intent":"plan_trip"}'
-        )
+        return build_provider_response('{"intent":"plan_trip"}')
 
     settings = SimpleNamespace(
         llm_base_url="https://example.com/v1",
