@@ -1,5 +1,5 @@
 """
-Состояния диалога Telegram-бота при планировании поездки.
+Состояния разговорного планирования поездки.
 """
 
 from aiogram.fsm.state import State, StatesGroup
@@ -7,17 +7,10 @@ from aiogram.fsm.state import State, StatesGroup
 
 class TripPlanning(StatesGroup):
     """
-    Этапы сбора информации для создания маршрута.
+    Состояние активного диалога о поездке.
+
+    Параметры поездки не разделены на отдельные состояния.
+    Единый TripDraft хранится в Redis и обновляется после каждого сообщения.
     """
 
-    # Бот ожидает направление поездки.
-    destination = State()
-
-    # Бот ожидает продолжительность поездки.
-    duration = State()
-
-    # Бот ожидает бюджет.
-    budget = State()
-
-    # Бот ожидает интересы пользователя.
-    interests = State()
+    collecting = State()

@@ -27,16 +27,95 @@ from app.bot.services.trip_formatter import (
 
 router = Router()
 
+OPEN_TRIP_PREFIX = "trip_open:"
+DELETE_REQUEST_PREFIX = "trip_delete_request:"
 DELETE_CONFIRM_PREFIX = "trip_delete_confirm:"
 DELETE_CANCEL_PREFIX = "trip_delete_cancel:"
 
 
-@router.message(Command("trips"))
-async def trips_handler(
+def build_trip_history_keyboard(
+    trips: list[dict[str, Any]],
+) -> InlineKeyboardMarkup:
+    """
+    Создаёт кнопки открытия и удаления для списка маршрутов.
+    """
+
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+
+    for index, trip in enumerate(
+        trips,
+        start=1,
+    ):
+        trip_id = trip["trip_id"]
+
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"📍 Открыть {index}",
+                    callback_data=f"{OPEN_TRIP_PREFIX}{trip_id}",
+                ),
+                InlineKeyboardButton(
+                    text=f"🗑 Удалить {index}",
+                    callback_data=f"{DELETE_REQUEST_PREFIX}{trip_id}",
+                ),
+            ]
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=keyboard_rows,
+    )
+
+
+def build_trip_actions_keyboard(
+    trip_id: int,
+) -> InlineKeyboardMarkup:
+    """
+    Создаёт действия для открытого маршрута.
+    """
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить маршрут",
+                    callback_data=f"{DELETE_REQUEST_PREFIX}{trip_id}",
+                ),
+            ]
+        ]
+    )
+
+
+def build_delete_confirmation_keyboard(
+    trip_id: int,
+) -> InlineKeyboardMarkup:
+    """
+    Создаёт безопасное подтверждение удаления маршрута.
+    """
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"{DELETE_CONFIRM_PREFIX}{trip_id}",
+                ),
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data=f"{DELETE_CANCEL_PREFIX}{trip_id}",
+                ),
+            ]
+        ]
+    )
+
+
+async def send_trip_history(
     message: Message,
 ) -> None:
     """
-    Показывает последние маршруты пользователя.
+    Загружает и показывает последние маршруты пользователя.
+
+    Функцию можно вызвать как из команды /trips,
+    так и после распознавания намерения show_trips.
     """
 
     telegram_user = message.from_user
@@ -59,38 +138,41 @@ async def trips_handler(
 
     if not trips:
         await message.answer(
-            "У вас пока нет сохранённых маршрутов.\n\nСоздать первый маршрут: /plan"
+            "У вас пока нет сохранённых маршрутов.\n\n"
+            "Просто опишите поездку, которую хотите запланировать."
         )
         return
 
-    await message.answer(format_trip_history(trips))
+    await message.answer(
+        format_trip_history(trips),
+        reply_markup=build_trip_history_keyboard(trips),
+    )
 
 
-@router.message(Command("trip"))
-async def trip_handler(
+@router.message(Command("trips"))
+async def trips_handler(
     message: Message,
 ) -> None:
     """
-    Показывает полный сохранённый маршрут по ID.
+    Показывает последние маршруты по команде /trips.
     """
 
-    telegram_user = message.from_user
+    await send_trip_history(message)
 
-    if telegram_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
-        return
 
-    trip_id = extract_trip_id(message.text)
-
-    if trip_id is None:
-        await message.answer(
-            "Укажите ID маршрута.\n\nНапример: /trip 7\n\nСписок маршрутов: /trips"
-        )
-        return
+async def send_trip_details(
+    *,
+    message: Message,
+    telegram_id: int,
+    trip_id: int,
+) -> None:
+    """
+    Загружает и отправляет один сохранённый маршрут.
+    """
 
     try:
         trip = await get_trip_details(
-            telegram_id=telegram_user.id,
+            telegram_id=telegram_id,
             trip_id=trip_id,
         )
 
@@ -99,19 +181,27 @@ async def trip_handler(
         return
 
     formatted_trip = format_trip_plan(trip)
+    text_parts = split_text(formatted_trip)
 
-    for text_part in split_text(formatted_trip):
-        await message.answer(text_part)
+    for index, text_part in enumerate(text_parts):
+        is_last_part = index == len(text_parts) - 1
 
-    await message.answer(f"Удалить этот маршрут: /delete_trip {trip_id}")
+        reply_markup = build_trip_actions_keyboard(trip_id) if is_last_part else None
+
+        await message.answer(
+            text_part,
+            reply_markup=reply_markup,
+        )
 
 
-@router.message(Command("delete_trip"))
-async def delete_trip_handler(
+@router.message(Command("trip"))
+async def trip_handler(
     message: Message,
 ) -> None:
     """
-    Запрашивает подтверждение удаления маршрута.
+    Показывает маршрут по старой команде.
+
+    Команда сохраняется для обратной совместимости.
     """
 
     telegram_user = message.from_user
@@ -124,15 +214,68 @@ async def delete_trip_handler(
 
     if trip_id is None:
         await message.answer(
-            "Укажите ID маршрута.\n\n"
-            "Например: /delete_trip 7\n\n"
-            "Список маршрутов: /trips"
+            "Не удалось определить ID маршрута.\n\n"
+            "Откройте «🧳 Мои маршруты» и выберите нужный кнопкой."
         )
         return
 
+    await send_trip_details(
+        message=message,
+        telegram_id=telegram_user.id,
+        trip_id=trip_id,
+    )
+
+
+@router.callback_query(F.data.startswith(OPEN_TRIP_PREFIX))
+async def open_trip_callback_handler(
+    callback: CallbackQuery,
+) -> None:
+    """
+    Открывает маршрут по inline-кнопке.
+    """
+
+    trip_id = extract_callback_trip_id(
+        callback.data,
+        OPEN_TRIP_PREFIX,
+    )
+
+    if trip_id is None:
+        await callback.answer(
+            "Некорректный ID маршрута.",
+            show_alert=True,
+        )
+        return
+
+    # Убираем индикатор ожидания на нажатой Telegram-кнопке.
+    await callback.answer()
+
+    if not isinstance(callback.message, Message):
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
+            text="Не удалось открыть сообщение со списком маршрутов.",
+        )
+        return
+
+    await send_trip_details(
+        message=callback.message,
+        telegram_id=callback.from_user.id,
+        trip_id=trip_id,
+    )
+
+
+async def send_delete_confirmation(
+    *,
+    message: Message,
+    telegram_id: int,
+    trip_id: int,
+) -> None:
+    """
+    Загружает маршрут и запрашивает подтверждение удаления.
+    """
+
     try:
         trip = await get_trip_details(
-            telegram_id=telegram_user.id,
+            telegram_id=telegram_id,
             trip_id=trip_id,
         )
 
@@ -140,24 +283,75 @@ async def delete_trip_handler(
         await message.answer(f"Не удалось загрузить маршрут:\n{error}")
         return
 
-    confirmation_keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🗑 Удалить",
-                    callback_data=(f"{DELETE_CONFIRM_PREFIX}{trip_id}"),
-                ),
-                InlineKeyboardButton(
-                    text="Отмена",
-                    callback_data=(f"{DELETE_CANCEL_PREFIX}{trip_id}"),
-                ),
-            ]
-        ]
+    await message.answer(
+        f"Удалить маршрут «{trip['destination']}»?\n\nЭто действие нельзя отменить.",
+        reply_markup=build_delete_confirmation_keyboard(trip_id),
     )
 
-    await message.answer(
-        (f"Удалить маршрут «{trip['destination']}»?\n\nЭто действие нельзя отменить."),
-        reply_markup=confirmation_keyboard,
+
+@router.message(Command("delete_trip"))
+async def delete_trip_handler(
+    message: Message,
+) -> None:
+    """
+    Запрашивает удаление по старой команде.
+    """
+
+    telegram_user = message.from_user
+
+    if telegram_user is None:
+        await message.answer("Не удалось определить пользователя Telegram.")
+        return
+
+    trip_id = extract_trip_id(message.text)
+
+    if trip_id is None:
+        await message.answer(
+            "Не удалось определить ID маршрута.\n\n"
+            "Откройте «🧳 Мои маршруты» и выберите удаление кнопкой."
+        )
+        return
+
+    await send_delete_confirmation(
+        message=message,
+        telegram_id=telegram_user.id,
+        trip_id=trip_id,
+    )
+
+
+@router.callback_query(F.data.startswith(DELETE_REQUEST_PREFIX))
+async def request_trip_delete_callback_handler(
+    callback: CallbackQuery,
+) -> None:
+    """
+    Запрашивает подтверждение удаления по inline-кнопке.
+    """
+
+    trip_id = extract_callback_trip_id(
+        callback.data,
+        DELETE_REQUEST_PREFIX,
+    )
+
+    if trip_id is None:
+        await callback.answer(
+            "Некорректный ID маршрута.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer()
+
+    if not isinstance(callback.message, Message):
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
+            text="Не удалось открыть сообщение со списком маршрутов.",
+        )
+        return
+
+    await send_delete_confirmation(
+        message=callback.message,
+        telegram_id=callback.from_user.id,
+        trip_id=trip_id,
     )
 
 
@@ -199,7 +393,11 @@ async def confirm_trip_delete_handler(
 
     await replace_callback_message(
         callback,
-        (f"Маршрут удалён.\n\nID: {result['trip_id']}\nОставшиеся маршруты: /trips"),
+        (
+            f"Маршрут удалён.\n\n"
+            f"ID: {result['trip_id']}\n"
+            f"Оставшиеся маршруты можно открыть кнопкой «🧳 Мои маршруты»."
+        ),
     )
 
 
@@ -227,13 +425,15 @@ async def cancel_trip_delete_handler(
 
     await replace_callback_message(
         callback,
-        (f"Удаление маршрута отменено.\n\nОткрыть маршрут: /trip {trip_id}"),
+        "Удаление маршрута отменено.",
+        reply_markup=build_trip_actions_keyboard(trip_id),
     )
 
 
 async def replace_callback_message(
     callback: CallbackQuery,
     text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
     """
     Заменяет сообщение с inline-кнопками.
@@ -245,13 +445,14 @@ async def replace_callback_message(
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             text=text,
-            reply_markup=None,
+            reply_markup=reply_markup,
         )
         return
 
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
         text=text,
+        reply_markup=reply_markup,
     )
 
 
@@ -325,19 +526,15 @@ def format_trip_history(
     ):
         created_at = format_created_at(str(trip["created_at"]))
 
-        trip_id = trip["trip_id"]
-
         lines.extend(
             [
                 (f"{index}. {trip['destination']} — {trip['duration_days']} дн."),
-                (f"Сохранён: {created_at} · ID: {trip_id}"),
-                f"Открыть: /trip {trip_id}",
-                f"Удалить: /delete_trip {trip_id}",
+                f"Сохранён: {created_at}",
                 "",
             ]
         )
 
-    lines.append("Создать новый маршрут: /plan")
+    lines.append("Выберите действие кнопкой под сообщением.")
 
     return "\n".join(lines)
 

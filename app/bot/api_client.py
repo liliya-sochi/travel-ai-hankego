@@ -8,6 +8,7 @@ Telegram-бот не обращается к LLM или PostgreSQL напрям�
 from typing import Any, Literal
 
 import httpx
+from pydantic import ValidationError
 
 from app.config import get_settings
 from app.core.request_context import (
@@ -17,7 +18,11 @@ from app.core.request_context import (
     reset_correlation_id,
     set_correlation_id,
 )
-from app.schemas.trip import TripPreferences
+from app.schemas.trip import (
+    TripDraft,
+    TripIntakeResponse,
+    TripPreferences,
+)
 
 HttpMethod = Literal[
     "GET",
@@ -134,6 +139,41 @@ async def register_telegram_user(
         timeout_message=("Backend не успел зарегистрировать пользователя."),
         default_error_message=("Backend не смог зарегистрировать пользователя."),
     )
+
+
+async def process_trip_intake(
+    *,
+    telegram_id: int,
+    user_message: str,
+    draft: TripDraft,
+) -> TripIntakeResponse:
+    """
+    Передаёт одно сообщение текущего диалога в conversational intake.
+
+    Backend распознаёт намерение пользователя, извлекает новые параметры
+    поездки и возвращает обновлённый черновик.
+    """
+
+    response_data = await _request_backend(
+        method="POST",
+        path="/trip-intake",
+        payload={
+            "telegram_id": telegram_id,
+            "user_message": user_message,
+            "draft": draft.model_dump(mode="json"),
+        },
+        request_timeout=150.0,
+        timeout_message="Backend не успел разобрать сообщение о поездке.",
+        default_error_message="Backend не смог разобрать сообщение о поездке.",
+    )
+
+    try:
+        return TripIntakeResponse.model_validate(response_data)
+
+    except ValidationError as error:
+        raise BackendError(
+            "Backend вернул результат разбора поездки в неправильном формате."
+        ) from error
 
 
 async def create_trip_plan(

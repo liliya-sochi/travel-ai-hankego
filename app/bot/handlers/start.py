@@ -6,21 +6,32 @@ import logging
 
 from aiogram import Router
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from app.bot.api_client import BackendError, register_telegram_user
+from app.bot.api_client import (
+    BackendError,
+    register_telegram_user,
+)
+from app.bot.keyboards import build_main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
-# Router хранит обработчики стартовых сообщений.
 router = Router()
 
 
 @router.message(CommandStart())
-async def start_handler(message: Message) -> None:
+async def start_handler(
+    message: Message,
+    state: FSMContext,
+) -> None:
     """
-    Регистрирует пользователя и показывает приветствие.
+    Регистрирует пользователя и показывает главное меню.
     """
+
+    # /start начинает взаимодействие заново,
+    # поэтому старый незавершённый черновик удаляется.
+    await state.clear()
 
     telegram_user = message.from_user
 
@@ -38,8 +49,9 @@ async def start_handler(message: Message) -> None:
 
     await message.answer(
         "Привет! Я HankeGo — AI-помощник по путешествиям.\n\n"
-        "Опиши желаемую поездку после команды /plan.\n\n"
+        "Просто опишите желаемую поездку обычным сообщением.\n\n"
         "Например:\n"
-        "/plan Хочу на 5 дней в Стамбул. "
-        "Люблю архитектуру, прогулки и местную еду."
+        "Хочу осенью на неделю в Японию. "
+        "Люблю современную архитектуру и местную еду.",
+        reply_markup=build_main_menu_keyboard(),
     )
