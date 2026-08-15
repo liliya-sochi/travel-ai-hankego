@@ -11,12 +11,13 @@ The working application is deployed on a VPS.
 
 Users can:
 
-- create an itinerary through the Telegram bot;
-- specify a destination, trip duration, budget, and interests;
-- receive a structured day-by-day travel plan;
-- view previously saved trips;
-- open a specific itinerary;
-- delete an itinerary after confirmation.
+- describe a desired trip in natural language without starting with a command;
+- provide trip details gradually across multiple messages;
+- receive automatic follow-up questions when required information is missing;
+- generate and save a structured day-by-day itinerary;
+- view previously saved trips through Telegram buttons;
+- open an itinerary through an inline button;
+- delete an itinerary only after explicit confirmation.
 
 ## Architecture
 
@@ -29,21 +30,24 @@ flowchart TD
     API --> Redis
 ```
 
-The Telegram bot is responsible only for the user interface and FSM-based dialogue flow.
+The Telegram bot provides the conversational user interface. It stores the current dialogue state and unfinished trip draft in Redis, but it does not communicate with PostgreSQL or the LLM provider directly.
 
 The FastAPI backend:
 
 - validates incoming data;
+- authenticates internal requests from the Telegram bot;
+- extracts user intent and trip parameters through strict LLM Structured Output;
+- merges newly extracted values with the current trip draft;
+- determines which required fields are still missing;
+- generates complete itineraries when enough information has been collected;
 - enforces access rules and request limits;
-- communicates with the LLM provider;
-- validates structured LLM responses;
-- executes business logic;
 - stores users and itineraries in PostgreSQL.
 
 Redis is used for:
 
 - Telegram FSM state storage;
-- rate limiting;
+- unfinished `TripDraft` storage between user messages;
+- separate rate limiting for conversational intake and itinerary generation;
 - preventing concurrent itinerary generation for the same user.
 
 ## Implemented Features
@@ -52,6 +56,9 @@ Redis is used for:
 
 - OpenAI-compatible LLM API integration;
 - Structured Output based on JSON Schema;
+- conversational intent classification for trip planning, history, and cancellation;
+- structured extraction of destination, duration, travel period, budget, and interests;
+- deterministic merging of extracted values with an existing trip draft;
 - strict response validation with Pydantic;
 - validation of the number and sequence of itinerary days;
 - retry when the model returns a logically inconsistent response;
@@ -82,13 +89,17 @@ Redis is used for:
 
 ### Telegram Bot
 
-- `/plan` — create a new itinerary;
-- `/trips` — view saved itineraries;
-- `/trip <id>` — open a specific itinerary;
-- `/delete_trip <id>` — delete an itinerary;
-- Redis-backed FSM;
+- natural-language trip planning without a mandatory command;
+- multi-message collection of trip preferences;
+- automatic follow-up questions for missing required fields;
+- Redis-backed storage of unfinished trip drafts;
+- automatic itinerary generation when destination and duration are known;
+- persistent reply keyboard for creating, viewing, and cancelling trips;
+- inline buttons for opening and deleting saved itineraries;
+- explicit confirmation before destructive deletion;
 - automatic splitting of long itineraries into multiple messages;
-- safe backend error handling without exposing internal details.
+- safe backend error handling without exposing internal details;
+- legacy `/plan`, `/trips`, `/trip`, and `/delete_trip` commands for backward compatibility.
 
 ## Technology Stack
 
@@ -222,12 +233,12 @@ For safety, the test database name must end with `_test`.
 
 ## Roadmap
 
-- linting and formatting checks in CI;
-- expanded test coverage;
-- improved monitoring;
-- Docker-based deployment on VPS;
-- web interface;
-- integration with additional sources of up-to-date travel information.
+- integration with sources of up-to-date prices, schedules, and opening hours;
+- itinerary editing without regenerating the entire trip;
+- production metrics and automated alerting;
+- expanded end-to-end testing of Telegram dialogue scenarios;
+- web interface using the existing FastAPI backend;
+- support for additional LLM providers.
 
 ## License
 
