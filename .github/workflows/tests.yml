@@ -79,6 +79,11 @@ jobs:
       LLM_BASE_URL: https://example.invalid
       LLM_API_KEY: test-api-key
       LLM_MODEL: test-model
+
+      GEOAPIFY_BASE_URL: https://example.invalid
+      GEOAPIFY_API_KEY: test-geoapify-api-key
+      GEOAPIFY_TIMEOUT_SECONDS: 10
+      
       TELEGRAM_BOT_TOKEN: test-telegram-token
 
       INTERNAL_API_KEY: test-internal-api-key-at-least-32-characters

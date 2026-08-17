@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     # Точное название модели у AI-провайдера.
     llm_model: str
 
+    # Базовый адрес Geoapify API.
+    geoapify_base_url: str = "https://api.geoapify.com"
+
+    # Секретный ключ доступа к Geoapify.
+    geoapify_api_key: SecretStr
+
+    # Максимальная длительность одного запроса к Geoapify.
+    geoapify_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=30.0,
+    )
+
     # Токен Telegram-бота, полученный у BotFather.
     telegram_bot_token: str
 
