@@ -19,6 +19,7 @@ from app.schemas.trip import (
     TripSummaryResponse,
 )
 from app.services.ai import generate_trip_plan
+from app.services.trip_enrichment import TripEnrichmentService
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +55,20 @@ class TripService:
         telegram_id: int,
         first_name: str,
         preferences: TripPreferences,
+        enrichment_service: TripEnrichmentService,
     ) -> TripCreateResponse:
         """
-        Генерирует маршрут и сохраняет его пользователю.
+        Обогащает параметры, генерирует и сохраняет маршрут.
         """
 
-        # LLM вызывается до начала операций с PostgreSQL,
-        # чтобы не держать транзакцию открытой десятки секунд.
-        trip_plan = await generate_trip_plan(preferences)
+        # Внешние API вызываются до операций с PostgreSQL,
+        # чтобы не держать транзакцию открытой во время сети.
+        travel_context = await enrichment_service.enrich(preferences)
+
+        trip_plan = await generate_trip_plan(
+            preferences=preferences,
+            travel_context=travel_context,
+        )
 
         try:
             user = await self._user_repository.upsert_telegram_user(

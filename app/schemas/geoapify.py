@@ -6,6 +6,7 @@ Pydantic-схемы интеграции с Geoapify.
 для использования остальными компонентами HankeGo.
 """
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -141,3 +142,25 @@ class PlaceCandidate(HankeGoGeoSchema):
         max_length=500,
     )
     source: Literal["geoapify"] = "geoapify"
+
+
+class TravelContext(HankeGoGeoSchema):
+    """
+    Проверенный набор актуальных данных для генерации маршрута.
+
+    Содержит только нормализованные поля HankeGo,
+    а не сырой ответ внешнего провайдера.
+    """
+
+    location: DestinationLocation
+    requested_categories: list[str] = Field(
+        min_length=1,
+        max_length=10,
+    )
+    places: list[PlaceCandidate] = Field(
+        min_length=1,
+        max_length=20,
+    )
+    fetched_at: datetime
+    source: Literal["geoapify"] = "geoapify"
+    attribution: str = "Powered by Geoapify; data © OpenStreetMap contributors"

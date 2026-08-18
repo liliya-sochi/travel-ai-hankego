@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,6 +10,11 @@ import httpx
 import pytest
 
 import app.services.ai as ai_service
+from app.schemas.geoapify import (
+    DestinationLocation,
+    PlaceCandidate,
+    TravelContext,
+)
 from app.schemas.trip import TripPreferences
 from app.services.ai import (
     AIServiceError,
@@ -48,6 +54,33 @@ def build_private_preferences() -> TripPreferences:
     )
 
 
+def build_private_travel_context() -> TravelContext:
+    """Создаёт приватный grounded-контекст для тестов логов."""
+
+    return TravelContext(
+        location=DestinationLocation(
+            formatted_name=PRIVATE_ROUTE,
+            latitude=41.0082,
+            longitude=28.9784,
+            source_place_id="private-destination-id",
+        ),
+        requested_categories=[
+            "tourism.sights",
+        ],
+        places=[
+            PlaceCandidate(
+                name="PRIVATE_PLACE_DO_NOT_LOG",
+                formatted_address=("PRIVATE_ADDRESS_DO_NOT_LOG"),
+                latitude=41.0086,
+                longitude=28.9802,
+                categories=["tourism.sights"],
+                source_place_id="private-place-id",
+            )
+        ],
+        fetched_at=datetime.now(UTC),
+    )
+
+
 def build_response_data(
     *,
     day_number: int,
@@ -64,12 +97,29 @@ def build_response_data(
             {
                 "day": day_number,
                 "title": "Первый день",
-                "morning": ["Прогулка."],
-                "afternoon": ["Музей."],
-                "evening": ["Ужин."],
+                "morning": [
+                    {
+                        "source_place_id": None,
+                        "place_name": None,
+                        "description": "Прогулка.",
+                    }
+                ],
+                "afternoon": [
+                    {
+                        "source_place_id": ("private-place-id"),
+                        "place_name": ("PRIVATE_PLACE_DO_NOT_LOG"),
+                        "description": "Осмотреть место.",
+                    }
+                ],
+                "evening": [
+                    {
+                        "source_place_id": None,
+                        "place_name": None,
+                        "description": "Ужин.",
+                    }
+                ],
             }
         ],
-        "practical_tips": ["Проверить часы работы."],
     }
     return {
         "model": "openai/gpt-oss-120b",
@@ -175,7 +225,10 @@ async def test_logs_attempts_and_success_without_private_data(
     monkeypatch.setattr(ai_service.httpx, "AsyncClient", DummyAsyncClient)
 
     with caplog.at_level(logging.INFO, logger=ai_service.__name__):
-        trip_plan = await generate_trip_plan(build_private_preferences())
+        trip_plan = await generate_trip_plan(
+            preferences=build_private_preferences(),
+            travel_context=build_private_travel_context(),
+        )
 
     events = read_llm_events(caplog)
     assert trip_plan.destination == PRIVATE_ROUTE
@@ -201,6 +254,8 @@ async def test_logs_attempts_and_success_without_private_data(
     assert PRIVATE_ROUTE not in service_logs
     assert PRIVATE_API_KEY not in service_logs
     assert PRIVATE_BUDGET not in service_logs
+    assert "PRIVATE_PLACE_DO_NOT_LOG" not in service_logs
+    assert "PRIVATE_ADDRESS_DO_NOT_LOG" not in service_logs
 
 
 @pytest.mark.asyncio

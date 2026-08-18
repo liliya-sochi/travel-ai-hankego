@@ -39,9 +39,9 @@ class Settings(BaseSettings):
 
     # Максимальная длительность одного запроса к Geoapify.
     geoapify_timeout_seconds: float = Field(
-        default=10.0,
+        default=30.0,
         ge=1.0,
-        le=30.0,
+        le=60.0,
     )
 
     # Токен Telegram-бота, полученный у BotFather.

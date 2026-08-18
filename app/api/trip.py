@@ -14,6 +14,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
+    get_trip_enrichment_service,
     get_trip_generation_lock,
     get_trip_intake_rate_limiter,
     get_trip_plan_rate_limiter,
@@ -43,6 +44,10 @@ from app.services.trip import (
     TripService,
     TripServiceError,
 )
+from app.services.trip_enrichment import (
+    TripEnrichmentError,
+    TripEnrichmentService,
+)
 from app.services.trip_intake import process_trip_message
 from app.services.trip_lock import (
     TripGenerationInProgressError,
@@ -67,6 +72,10 @@ GenerationLockDependency = Annotated[
     Depends(get_trip_generation_lock),
 ]
 
+EnrichmentServiceDependency = Annotated[
+    TripEnrichmentService,
+    Depends(get_trip_enrichment_service),
+]
 
 IntakeRateLimiterDependency = Annotated[
     TripIntakeRateLimiter,
@@ -140,6 +149,7 @@ async def create_trip_plan(
     session: SessionDependency,
     rate_limiter: RateLimiterDependency,
     generation_lock: GenerationLockDependency,
+    enrichment_service: EnrichmentServiceDependency,
 ) -> TripCreateResponse:
     """
     Генерирует маршрут и сохраняет его пользователю.
@@ -159,6 +169,7 @@ async def create_trip_plan(
                 telegram_id=request.telegram_id,
                 first_name=request.first_name,
                 preferences=request.preferences,
+                enrichment_service=enrichment_service,
             )
 
     except TripGenerationInProgressError as error:
@@ -197,6 +208,12 @@ async def create_trip_plan(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=("Генерация маршрутов временно недоступна."),
+        ) from error
+
+    except TripEnrichmentError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
         ) from error
 
     except AIServiceError as error:

@@ -40,10 +40,13 @@ class FakeTripService:
         telegram_id: int,
         first_name: str,
         preferences: TripPreferences,
+        enrichment_service: object,
     ) -> TripCreateResponse:
         """
         Возвращает готовый тестовый маршрут.
         """
+
+        assert enrichment_service is not None
 
         type(self).received_telegram_id = telegram_id
         type(self).received_first_name = first_name

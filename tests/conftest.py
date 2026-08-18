@@ -8,6 +8,7 @@ from collections.abc import (
     Iterator,
 )
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -21,12 +22,19 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from app.api.dependencies import (
+    get_trip_enrichment_service,
     get_trip_generation_lock,
     get_trip_intake_rate_limiter,
     get_trip_plan_rate_limiter,
 )
 from app.core.security import verify_internal_api_key
 from app.main import app
+from app.schemas.geoapify import (
+    DestinationLocation,
+    PlaceCandidate,
+    TravelContext,
+)
+from app.schemas.trip import TripPreferences
 
 
 class NoOpTripPlanRateLimiter:
@@ -72,6 +80,39 @@ class NoOpTripGenerationLock:
         """
 
         yield
+
+
+class NoOpTripEnrichmentService:
+    """Возвращает фиксированный туристический контекст."""
+
+    async def enrich(
+        self,
+        preferences: TripPreferences,
+    ) -> TravelContext:
+        """Не выполняет настоящих запросов к Geoapify."""
+
+        return TravelContext(
+            location=DestinationLocation(
+                formatted_name=preferences.destination,
+                latitude=41.0082,
+                longitude=28.9784,
+                source_place_id="test-destination-id",
+            ),
+            requested_categories=[
+                "tourism.sights",
+            ],
+            places=[
+                PlaceCandidate(
+                    name="Тестовое место",
+                    formatted_address=("Тестовый адрес"),
+                    latitude=41.0086,
+                    longitude=28.9802,
+                    categories=["tourism.sights"],
+                    source_place_id="test-place-id",
+                )
+            ],
+            fetched_at=datetime.now(UTC),
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -140,6 +181,22 @@ def bypass_trip_generation_lock() -> Iterator[None]:
 
     app.dependency_overrides.pop(
         get_trip_generation_lock,
+        None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def bypass_trip_enrichment() -> Iterator[None]:
+    """Отключает настоящий Geoapify в unit-тестах."""
+
+    app.dependency_overrides[get_trip_enrichment_service] = lambda: (
+        NoOpTripEnrichmentService()
+    )
+
+    yield
+
+    app.dependency_overrides.pop(
+        get_trip_enrichment_service,
         None,
     )
 
