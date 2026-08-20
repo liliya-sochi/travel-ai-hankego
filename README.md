@@ -41,6 +41,7 @@ The FastAPI backend:
 - merges newly extracted values with the current trip draft;
 - determines which required fields are still missing;
 - resolves the destination and retrieves candidate places from Geoapify;
+- caches validated travel contexts in Redis to avoid repeated Geoapify requests;
 - provides the LLM with a trusted travel context containing real place identifiers;
 - rejects itinerary places whose identifiers or names are absent from that context;
 - generates complete itineraries when enough information has been collected;
@@ -51,6 +52,7 @@ Redis is used for:
 
 - Telegram FSM state storage;
 - unfinished `TripDraft` storage between user messages;
+- cache-aside storage of validated `TravelContext` objects;
 - separate rate limiting for conversational intake and itinerary generation;
 - preventing concurrent itinerary generation for the same user.
 
@@ -81,6 +83,10 @@ Redis is used for:
 - Geoapify Places API for nearby sights, museums, restaurants, parks, and entertainment;
 - deterministic mapping of user interests to place categories;
 - normalized internal travel context isolated from the provider response format;
+- Redis cache-aside for validated travel contexts with a configurable TTL;
+- versioned SHA-256 cache keys that do not expose destinations in plaintext;
+- fail-open cache handling that falls back to Geoapify when Redis caching fails;
+- Pydantic validation of cached JSON before it can be passed to the LLM;
 - timeouts and safe handling of provider, network, rate-limit, and invalid-response errors;
 - mandatory Geoapify and OpenStreetMap attribution in generated itineraries.
 
@@ -200,6 +206,8 @@ The application requires:
 - a Geoapify API key for destination geocoding and place retrieval;
 - a randomly generated `INTERNAL_API_KEY` containing at least 32 characters.
 
+`TRAVEL_CONTEXT_CACHE_TTL_SECONDS` controls how long validated Geoapify travel contexts remain in Redis. The default value is `21600` seconds, or six hours.
+
 ### 4. Apply Database Migrations
 
 ```bash
@@ -253,7 +261,7 @@ For safety, the test database name must end with `_test`.
 ## Roadmap
 
 - enrichment of verified places with opening hours, official references, prices, and schedules where reliable sources provide them;
-- caching and ranking of external place candidates;
+- ranking and geographic diversification of external place candidates;
 - itinerary editing without regenerating the entire trip;
 - production metrics and automated alerting;
 - expanded end-to-end testing of Telegram dialogue scenarios;
