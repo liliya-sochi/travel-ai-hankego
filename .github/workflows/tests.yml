@@ -83,6 +83,8 @@ jobs:
       GEOAPIFY_BASE_URL: https://example.invalid
       GEOAPIFY_API_KEY: test-geoapify-api-key
       GEOAPIFY_TIMEOUT_SECONDS: 30
+
+      TRAVEL_CONTEXT_CACHE_TTL_SECONDS: 21600
       
       TELEGRAM_BOT_TOKEN: test-telegram-token
 

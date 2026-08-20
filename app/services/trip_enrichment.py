@@ -88,6 +88,31 @@ class PlacesDataProvider(Protocol):
         ...
 
 
+class TravelContextCache(Protocol):
+    """Контракт кеша проверенного туристического контекста."""
+
+    async def get(
+        self,
+        *,
+        destination: str,
+        categories: list[str],
+    ) -> TravelContext | None:
+        """Возвращает контекст или сообщает о промахе кеша."""
+
+        ...
+
+    async def set(
+        self,
+        *,
+        destination: str,
+        categories: list[str],
+        context: TravelContext,
+    ) -> None:
+        """Сохраняет проверенный контекст."""
+
+        ...
+
+
 class TripEnrichmentError(Exception):
     """Безопасная ошибка обогащения маршрута."""
 
@@ -123,8 +148,10 @@ class TripEnrichmentService:
     def __init__(
         self,
         places_provider: PlacesDataProvider,
+        travel_context_cache: TravelContextCache | None = None,
     ) -> None:
         self._places_provider = places_provider
+        self._travel_context_cache = travel_context_cache
 
     async def enrich(
         self,
@@ -133,6 +160,15 @@ class TripEnrichmentService:
         """Обогащает параметры поездки актуальными местами."""
 
         categories = select_place_categories(preferences.interests)
+
+        if self._travel_context_cache is not None:
+            cached_context = await self._travel_context_cache.get(
+                destination=preferences.destination,
+                categories=categories,
+            )
+
+            if cached_context is not None:
+                return cached_context
 
         try:
             location = await self._places_provider.geocode_destination(
@@ -153,9 +189,18 @@ class TripEnrichmentService:
                 "Не удалось найти актуальные места для указанного направления."
             )
 
-        return TravelContext(
+        context = TravelContext(
             location=location,
             requested_categories=categories,
             places=places,
             fetched_at=datetime.now(UTC),
         )
+
+        if self._travel_context_cache is not None:
+            await self._travel_context_cache.set(
+                destination=preferences.destination,
+                categories=categories,
+                context=context,
+            )
+
+        return context

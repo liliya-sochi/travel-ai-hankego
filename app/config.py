@@ -44,6 +44,13 @@ class Settings(BaseSettings):
         le=60.0,
     )
 
+    # Время хранения туристического контекста в Redis.
+    travel_context_cache_ttl_seconds: int = Field(
+        default=21_600,
+        ge=300,
+        le=86_400,
+    )
+
     # Токен Telegram-бота, полученный у BotFather.
     telegram_bot_token: str
 

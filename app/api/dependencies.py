@@ -18,6 +18,7 @@ from app.services.rate_limit import (
     TripIntakeRateLimiter,
     TripPlanRateLimiter,
 )
+from app.services.travel_context_cache import RedisTravelContextCache
 from app.services.trip_enrichment import TripEnrichmentService
 from app.services.trip_lock import TripGenerationLock
 
@@ -86,7 +87,9 @@ def get_trip_generation_lock(
     )
 
 
-async def get_trip_enrichment_service() -> AsyncIterator[TripEnrichmentService]:
+async def get_trip_enrichment_service(
+    redis_client: RedisDependency,
+) -> AsyncIterator[TripEnrichmentService]:
     """
     Создаёт сервис актуальных туристических данных.
 
@@ -95,6 +98,11 @@ async def get_trip_enrichment_service() -> AsyncIterator[TripEnrichmentService]:
     """
 
     settings = get_settings()
+
+    travel_context_cache = RedisTravelContextCache(
+        redis_client=redis_client,
+        ttl_seconds=settings.travel_context_cache_ttl_seconds,
+    )
 
     timeout = httpx.Timeout(
         timeout=settings.geoapify_timeout_seconds,
@@ -115,4 +123,5 @@ async def get_trip_enrichment_service() -> AsyncIterator[TripEnrichmentService]:
 
         yield TripEnrichmentService(
             places_provider=geoapify_client,
+            travel_context_cache=travel_context_cache,
         )
