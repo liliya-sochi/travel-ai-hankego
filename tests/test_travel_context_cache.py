@@ -1,30 +1,42 @@
-"""Кеширование проверенного туристического контекста в Redis."""
+"""Unit-тесты Redis-кеша туристического контекста."""
 
-import json
-import logging
-from hashlib import sha256
-from typing import Any, Protocol
+from datetime import UTC, datetime
 
-from pydantic import ValidationError
+import pytest
 from redis.exceptions import RedisError
 
-from app.schemas.geoapify import TravelContext
+from app.schemas.geoapify import (
+    DestinationLocation,
+    PlaceCandidate,
+    TravelContext,
+)
+from app.services.travel_context_cache import (
+    CACHE_KEY_PREFIX,
+    RedisTravelContextCache,
+    build_travel_context_cache_key,
+)
 
-logger = logging.getLogger(__name__)
 
-CACHE_KEY_PREFIX = "cache:travel-context:v1"
+class FakeRedisCacheClient:
+    """Управляемая имитация Redis для unit-тестов."""
 
-
-class RedisCacheClient(Protocol):
-    """Минимальный Redis-интерфейс для кеша TravelContext."""
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.expirations: dict[str, int] = {}
+        self.deleted_keys: list[str] = []
+        self.get_error: RedisError | None = None
+        self.set_error: RedisError | None = None
 
     async def get(
         self,
         name: str,
     ) -> str | None:
-        """Получает значение по ключу."""
+        """Возвращает сохранённое значение."""
 
-        ...
+        if self.get_error is not None:
+            raise self.get_error
+
+        return self.values.get(name)
 
     async def set(
         self,
@@ -32,133 +44,203 @@ class RedisCacheClient(Protocol):
         value: str,
         *,
         ex: int,
-    ) -> Any:
-        """Сохраняет значение с ограниченным временем жизни."""
+    ) -> bool:
+        """Сохраняет значение вместе с TTL."""
 
-        ...
+        if self.set_error is not None:
+            raise self.set_error
+
+        self.values[name] = value
+        self.expirations[name] = ex
+
+        return True
 
     async def delete(
         self,
         *names: str,
-    ) -> Any:
-        """Удаляет значения по ключам."""
+    ) -> int:
+        """Удаляет указанные ключи."""
 
-        ...
+        deleted_count = 0
+
+        for name in names:
+            if name in self.values:
+                del self.values[name]
+                deleted_count += 1
+
+            self.expirations.pop(name, None)
+            self.deleted_keys.append(name)
+
+        return deleted_count
 
 
-def build_travel_context_cache_key(
-    *,
-    destination: str,
-    categories: list[str],
-) -> str:
-    """Создаёт стабильный ключ без открытых пользовательских данных."""
+def build_context() -> TravelContext:
+    """Создаёт тестовый туристический контекст."""
 
-    key_payload = {
-        "destination": " ".join(destination.casefold().split()),
-        "categories": sorted(categories),
-    }
-
-    serialized_payload = json.dumps(
-        key_payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
+    return TravelContext(
+        location=DestinationLocation(
+            formatted_name="Стамбул, Турция",
+            latitude=41.0082,
+            longitude=28.9784,
+            source_place_id="istanbul-place-id",
+        ),
+        requested_categories=[
+            "tourism.sights",
+            "entertainment.museum",
+        ],
+        places=[
+            PlaceCandidate(
+                name="Айя-София",
+                formatted_address="Султанахмет, Стамбул",
+                latitude=41.0086,
+                longitude=28.9802,
+                categories=["tourism.sights"],
+                source_place_id="hagia-sophia-id",
+            )
+        ],
+        fetched_at=datetime(
+            2026,
+            8,
+            20,
+            12,
+            0,
+            tzinfo=UTC,
+        ),
     )
 
-    payload_hash = sha256(serialized_payload.encode("utf-8")).hexdigest()
 
-    return f"{CACHE_KEY_PREFIX}:{payload_hash}"
+def test_cache_key_is_normalized_and_private() -> None:
+    """Проверяет стабильность и приватность Redis-ключа."""
+
+    first_key = build_travel_context_cache_key(
+        destination="  СтАМБУЛ  ",
+        categories=[
+            "tourism.sights",
+            "entertainment.museum",
+        ],
+    )
+    second_key = build_travel_context_cache_key(
+        destination="стамбул",
+        categories=[
+            "entertainment.museum",
+            "tourism.sights",
+        ],
+    )
+
+    assert first_key == second_key
+    assert first_key.startswith(f"{CACHE_KEY_PREFIX}:")
+    assert "стамбул" not in first_key.casefold()
 
 
-class RedisTravelContextCache:
-    """Хранит сериализованный TravelContext в Redis."""
+@pytest.mark.asyncio
+async def test_saves_and_restores_context_with_ttl() -> None:
+    """Проверяет сериализацию, чтение и TTL."""
 
-    def __init__(
-        self,
-        redis_client: RedisCacheClient,
-        ttl_seconds: int,
-    ) -> None:
-        """Получает Redis-клиент и срок хранения кеша."""
+    redis_client = FakeRedisCacheClient()
+    cache = RedisTravelContextCache(
+        redis_client=redis_client,
+        ttl_seconds=21_600,
+    )
+    expected_context = build_context()
 
-        if ttl_seconds <= 0:
-            raise ValueError("Travel context cache TTL must be positive.")
+    await cache.set(
+        destination="Стамбул",
+        categories=expected_context.requested_categories,
+        context=expected_context,
+    )
 
-        self._redis_client = redis_client
-        self._ttl_seconds = ttl_seconds
+    restored_context = await cache.get(
+        destination="Стамбул",
+        categories=expected_context.requested_categories,
+    )
 
-    async def get(
-        self,
-        *,
-        destination: str,
-        categories: list[str],
-    ) -> TravelContext | None:
-        """Возвращает валидный контекст или сообщает о промахе кеша."""
+    cache_key = build_travel_context_cache_key(
+        destination="Стамбул",
+        categories=expected_context.requested_categories,
+    )
 
-        cache_key = build_travel_context_cache_key(
-            destination=destination,
-            categories=categories,
-        )
+    assert restored_context == expected_context
+    assert redis_client.expirations[cache_key] == 21_600
 
-        try:
-            cached_json = await self._redis_client.get(cache_key)
 
-        except RedisError:
-            # Кеш является оптимизацией и не должен
-            # останавливать создание маршрута.
-            logger.warning("Failed to read travel context cache")
-            return None
+@pytest.mark.asyncio
+async def test_returns_none_on_cache_miss() -> None:
+    """Проверяет обычный cache miss."""
 
-        if cached_json is None:
-            return None
+    cache = RedisTravelContextCache(
+        redis_client=FakeRedisCacheClient(),
+        ttl_seconds=21_600,
+    )
 
-        try:
-            return TravelContext.model_validate_json(cached_json)
+    context = await cache.get(
+        destination="Стамбул",
+        categories=["tourism.sights"],
+    )
 
-        except ValidationError:
-            # Повреждённые или устаревшие данные нельзя передавать LLM.
-            logger.warning("Ignored invalid travel context cache entry")
+    assert context is None
 
-            await self._delete_invalid_entry(
-                cache_key=cache_key,
-            )
 
-            return None
+@pytest.mark.asyncio
+async def test_deletes_invalid_cached_context() -> None:
+    """Проверяет удаление повреждённой записи."""
 
-    async def set(
-        self,
-        *,
-        destination: str,
-        categories: list[str],
-        context: TravelContext,
-    ) -> None:
-        """Сохраняет проверенный туристический контекст."""
+    redis_client = FakeRedisCacheClient()
+    cache = RedisTravelContextCache(
+        redis_client=redis_client,
+        ttl_seconds=21_600,
+    )
+    cache_key = build_travel_context_cache_key(
+        destination="Стамбул",
+        categories=["tourism.sights"],
+    )
+    redis_client.values[cache_key] = "{invalid-json"
 
-        cache_key = build_travel_context_cache_key(
-            destination=destination,
-            categories=categories,
-        )
+    context = await cache.get(
+        destination="Стамбул",
+        categories=["tourism.sights"],
+    )
 
-        try:
-            await self._redis_client.set(
-                cache_key,
-                context.model_dump_json(),
-                ex=self._ttl_seconds,
-            )
+    assert context is None
+    assert cache_key not in redis_client.values
+    assert redis_client.deleted_keys == [cache_key]
 
-        except RedisError:
-            # Ошибка записи не должна отменять уже полученные
-            # актуальные данные Geoapify.
-            logger.warning("Failed to write travel context cache")
 
-    async def _delete_invalid_entry(
-        self,
-        *,
-        cache_key: str,
-    ) -> None:
-        """Удаляет повреждённую запись, если Redis доступен."""
+@pytest.mark.asyncio
+async def test_read_error_behaves_as_cache_miss() -> None:
+    """Проверяет fail-open при ошибке чтения Redis."""
 
-        try:
-            await self._redis_client.delete(cache_key)
+    redis_client = FakeRedisCacheClient()
+    redis_client.get_error = RedisError("Redis read failed.")
 
-        except RedisError:
-            logger.warning("Failed to delete invalid travel context cache entry")
+    cache = RedisTravelContextCache(
+        redis_client=redis_client,
+        ttl_seconds=21_600,
+    )
+
+    context = await cache.get(
+        destination="Стамбул",
+        categories=["tourism.sights"],
+    )
+
+    assert context is None
+
+
+@pytest.mark.asyncio
+async def test_write_error_does_not_interrupt_request() -> None:
+    """Проверяет fail-open при ошибке записи Redis."""
+
+    redis_client = FakeRedisCacheClient()
+    redis_client.set_error = RedisError("Redis write failed.")
+
+    cache = RedisTravelContextCache(
+        redis_client=redis_client,
+        ttl_seconds=21_600,
+    )
+
+    await cache.set(
+        destination="Стамбул",
+        categories=["tourism.sights"],
+        context=build_context(),
+    )
+
+    assert redis_client.values == {}
