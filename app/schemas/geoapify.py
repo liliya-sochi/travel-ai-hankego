@@ -44,6 +44,27 @@ class GeoapifyLocationProperties(GeoapifyResponseSchema):
     )
 
 
+class GeoapifyWikiAndMedia(GeoapifyResponseSchema):
+    """Доступные ссылки на внешние справочные источники."""
+
+    wikidata: str | None = Field(
+        default=None,
+        max_length=2000,
+    )
+    wikipedia: str | None = Field(
+        default=None,
+        max_length=2000,
+    )
+    wikimedia_commons: str | None = Field(
+        default=None,
+        max_length=2000,
+    )
+    image: str | None = Field(
+        default=None,
+        max_length=2000,
+    )
+
+
 class GeoapifyPlaceProperties(GeoapifyLocationProperties):
     """Свойства конкретного места из Places API."""
 
@@ -54,6 +75,14 @@ class GeoapifyPlaceProperties(GeoapifyLocationProperties):
     categories: list[str] = Field(
         default_factory=list,
     )
+    distance: float | None = Field(
+        default=None,
+        ge=0.0,
+    )
+    details: list[str] = Field(
+        default_factory=list,
+    )
+    wiki_and_media: GeoapifyWikiAndMedia | None = None
 
 
 class GeoapifyLocationFeature(GeoapifyResponseSchema):
@@ -136,6 +165,18 @@ class PlaceCandidate(HankeGoGeoSchema):
     )
     categories: list[str] = Field(
         default_factory=list,
+    )
+    distance_meters: float | None = Field(
+        default=None,
+        ge=0.0,
+    )
+    available_details: list[str] = Field(
+        default_factory=list,
+    )
+    wiki_reference_count: int = Field(
+        default=0,
+        ge=0,
+        le=4,
     )
     source_place_id: str = Field(
         min_length=1,
