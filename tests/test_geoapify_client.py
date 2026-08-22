@@ -100,7 +100,7 @@ async def test_geocode_rejects_empty_result() -> None:
 
 @pytest.mark.asyncio
 async def test_search_places_skips_unnamed_objects() -> None:
-    """Проверяет поиск мест и фильтрацию объектов без имени."""
+    """Проверяет поиск мест и новые ranking-метаданные."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v2/places"
@@ -108,7 +108,7 @@ async def test_search_places_skips_unnamed_objects() -> None:
             "tourism.sights,entertainment.museum"
         )
         assert request.url.params["filter"] == ("circle:28.9784,41.0082,15000")
-        assert request.url.params["limit"] == "20"
+        assert request.url.params["limit"] == "60"
 
         return httpx.Response(
             status_code=200,
@@ -119,14 +119,25 @@ async def test_search_places_skips_unnamed_objects() -> None:
                         "type": "Feature",
                         "properties": {
                             "name": "Айя-София",
-                            "formatted": "Султанахмет, Стамбул",
+                            "formatted": ("Султанахмет, Стамбул"),
                             "lat": 41.0086,
                             "lon": 28.9802,
                             "categories": [
                                 "tourism.sights",
-                                "religion.place_of_worship",
+                                ("religion.place_of_worship"),
                             ],
-                            "place_id": "hagia-sophia-id",
+                            "distance": 43,
+                            "details": [
+                                "details",
+                                "details.contact",
+                                "details.wiki_and_media",
+                            ],
+                            "wiki_and_media": {
+                                "wikidata": "Q12506",
+                                "wikipedia": ("tr:Ayasofya"),
+                                "wikimedia_commons": ("Category:Hagia Sophia"),
+                            },
+                            "place_id": ("hagia-sophia-id"),
                         },
                     },
                     {
@@ -136,7 +147,8 @@ async def test_search_places_skips_unnamed_objects() -> None:
                             "lat": 41.01,
                             "lon": 28.98,
                             "categories": ["tourism.sights"],
-                            "place_id": "unnamed-place-id",
+                            "distance": 100,
+                            "place_id": ("unnamed-place-id"),
                         },
                     },
                 ],
@@ -158,12 +170,23 @@ async def test_search_places_skips_unnamed_objects() -> None:
                 "tourism.sights",
                 "entertainment.museum",
             ],
+            limit=60,
         )
 
     assert len(places) == 1
-    assert places[0].name == "Айя-София"
-    assert places[0].source_place_id == "hagia-sophia-id"
-    assert places[0].source == "geoapify"
+
+    place = places[0]
+
+    assert place.name == "Айя-София"
+    assert place.source_place_id == "hagia-sophia-id"
+    assert place.distance_meters == 43.0
+    assert place.available_details == [
+        "details",
+        "details.contact",
+        "details.wiki_and_media",
+    ]
+    assert place.wiki_reference_count == 3
+    assert place.source == "geoapify"
 
 
 @pytest.mark.asyncio
@@ -186,7 +209,7 @@ async def test_rejects_invalid_places_limit() -> None:
             await client.search_places(
                 location=location,
                 categories=["tourism.sights"],
-                limit=21,
+                limit=61,
             )
 
 

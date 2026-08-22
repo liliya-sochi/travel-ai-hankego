@@ -41,6 +41,7 @@ The FastAPI backend:
 - merges newly extracted values with the current trip draft;
 - determines which required fields are still missing;
 - resolves the destination and retrieves candidate places from Geoapify;
+- deterministically ranks external place candidates before they reach the LLM;
 - caches validated travel contexts in Redis to avoid repeated Geoapify requests;
 - provides the LLM with a trusted travel context containing real place identifiers;
 - rejects itinerary places whose identifiers or names are absent from that context;
@@ -82,6 +83,9 @@ Redis is used for:
 - Geoapify geocoding for destination resolution;
 - Geoapify Places API for nearby sights, museums, restaurants, parks, and entertainment;
 - deterministic mapping of user interests to place categories;
+- retrieval of an extended pool of up to 60 candidates per travel context;
+- hybrid selection of no more than 20 places based on category coverage, proximity, and data completeness;
+- ranking based on verified provider metadata rather than invented popularity scores;
 - normalized internal travel context isolated from the provider response format;
 - Redis cache-aside for validated travel contexts with a configurable TTL;
 - versioned SHA-256 cache keys that do not expose destinations in plaintext;
@@ -261,7 +265,7 @@ For safety, the test database name must end with `_test`.
 ## Roadmap
 
 - enrichment of verified places with opening hours, official references, prices, and schedules where reliable sources provide them;
-- ranking and geographic diversification of external place candidates;
+- geographic diversification of place candidates across multiple city districts;
 - itinerary editing without regenerating the entire trip;
 - production metrics and automated alerting;
 - expanded end-to-end testing of Telegram dialogue scenarios;

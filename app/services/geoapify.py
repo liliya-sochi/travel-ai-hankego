@@ -168,8 +168,8 @@ class GeoapifyClient:
         if not categories:
             raise ValueError("Для поиска нужна хотя бы одна категория.")
 
-        if not 1 <= limit <= 20:
-            raise ValueError("Количество мест должно быть от 1 до 20.")
+        if not 1 <= limit <= 60:
+            raise ValueError("Количество мест должно быть от 1 до 60.")
 
         if not 1_000 <= radius_meters <= 50_000:
             raise ValueError("Радиус поиска должен быть от 1000 до 50000 метров.")
@@ -205,6 +205,22 @@ class GeoapifyClient:
             if properties.name is None:
                 continue
 
+            wiki_and_media = properties.wiki_and_media
+
+            if wiki_and_media is None:
+                wiki_reference_count = 0
+            else:
+                wiki_reference_count = sum(
+                    1
+                    for value in (
+                        wiki_and_media.wikidata,
+                        wiki_and_media.wikipedia,
+                        wiki_and_media.wikimedia_commons,
+                        wiki_and_media.image,
+                    )
+                    if value is not None and value.strip()
+                )
+
             places.append(
                 PlaceCandidate(
                     name=properties.name,
@@ -212,6 +228,9 @@ class GeoapifyClient:
                     latitude=properties.lat,
                     longitude=properties.lon,
                     categories=properties.categories,
+                    distance_meters=properties.distance,
+                    available_details=properties.details,
+                    wiki_reference_count=(wiki_reference_count),
                     source_place_id=properties.place_id,
                 )
             )
