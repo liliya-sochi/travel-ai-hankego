@@ -7,6 +7,8 @@ from typing import Any
 from unittest.mock import AsyncMock, call
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import DeleteMessage
 
 import app.bot.handlers.plan as plan_handler
 from app.bot.api_client import BackendError
@@ -25,13 +27,20 @@ def build_message(
     Создаёт минимальный объект Telegram Message для unit-тестов.
     """
 
+    progress_message = SimpleNamespace(
+        delete=AsyncMock(),
+    )
+
     return SimpleNamespace(
         text=text,
         from_user=SimpleNamespace(
             id=9000000001,
             first_name="Liliya",
         ),
-        answer=AsyncMock(),
+        answer=AsyncMock(
+            return_value=progress_message,
+        ),
+        progress_message=progress_message,
     )
 
 
@@ -232,6 +241,7 @@ async def test_complete_draft_generates_and_sends_trip(
     )
 
     state.clear.assert_awaited_once_with()
+    message.progress_message.delete.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
@@ -333,6 +343,32 @@ async def test_generation_error_keeps_trip_draft(
     )
 
     state.clear.assert_not_awaited()
+    message.progress_message.delete.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_progress_message_deletion_error_is_non_fatal() -> None:
+    """
+    Ошибка удаления служебного сообщения не ломает основной сценарий.
+    """
+
+    progress_message = SimpleNamespace(
+        delete=AsyncMock(
+            side_effect=TelegramBadRequest(
+                method=DeleteMessage(
+                    chat_id=9000000001,
+                    message_id=1,
+                ),
+                message="Message to delete not found",
+            )
+        ),
+    )
+
+    await plan_handler.delete_progress_message(
+        progress_message,
+    )
+
+    progress_message.delete.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

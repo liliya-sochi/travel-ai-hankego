@@ -2,9 +2,11 @@
 Разговорный обработчик планирования поездки.
 """
 
+import logging
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -31,6 +33,8 @@ from app.schemas.trip import (
     TripIntakeResponse,
     TripPreferences,
 )
+
+logger = logging.getLogger(__name__)
 
 router = Router()
 
@@ -174,6 +178,26 @@ async def handle_intake_response(
     )
 
 
+async def delete_progress_message(
+    progress_message: Message,
+) -> None:
+    """
+    Удаляет служебное сообщение о генерации маршрута.
+
+    Ошибка Telegram не должна превращать успешно созданный маршрут
+    в ошибку для пользователя.
+    """
+
+    try:
+        await progress_message.delete()
+
+    except TelegramAPIError as error:
+        logger.warning(
+            "Failed to delete trip generation progress message | error_type=%s",
+            type(error).__name__,
+        )
+
+
 async def generate_and_send_trip(
     *,
     message: Message,
@@ -191,29 +215,33 @@ async def generate_and_send_trip(
         await message.answer("Не удалось определить пользователя Telegram.")
         return
 
-    await message.answer("✈️ Генерирую и сохраняю маршрут...")
+    progress_message = await message.answer("✈️ Генерирую и сохраняю маршрут...")
 
     try:
-        trip_plan = await create_trip_plan(
-            telegram_id=telegram_user.id,
-            first_name=telegram_user.first_name,
-            preferences=preferences,
-        )
+        try:
+            trip_plan = await create_trip_plan(
+                telegram_id=telegram_user.id,
+                first_name=telegram_user.first_name,
+                preferences=preferences,
+            )
 
-    except BackendError as error:
-        # Черновик сохраняем, чтобы пользователь не вводил всё заново.
-        await message.answer(
-            f"Не удалось создать маршрут:\n{error}\n\n"
-            "Черновик сохранён — сообщение можно отправить ещё раз."
-        )
-        return
+        except BackendError as error:
+            # Черновик сохраняем, чтобы пользователь не вводил всё заново.
+            await message.answer(
+                f"Не удалось создать маршрут:\n{error}\n\n"
+                "Черновик сохранён — сообщение можно отправить ещё раз."
+            )
+            return
 
-    formatted_plan = format_trip_plan(trip_plan)
+        formatted_plan = format_trip_plan(trip_plan)
 
-    for text_part in split_text(formatted_plan):
-        await message.answer(text_part)
+        for text_part in split_text(formatted_plan):
+            await message.answer(text_part)
 
-    await state.clear()
+        await state.clear()
+
+    finally:
+        await delete_progress_message(progress_message)
 
 
 @router.message(Command("plan"))
