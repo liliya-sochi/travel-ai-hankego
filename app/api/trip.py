@@ -32,7 +32,10 @@ from app.schemas.trip import (
     TripIntakeResponse,
     TripPlanRequest,
 )
-from app.services.ai import AIServiceError
+from app.services.ai import (
+    AIProviderRateLimitError,
+    AIServiceError,
+)
 from app.services.rate_limit import (
     RateLimitExceededError,
     RateLimitUnavailableError,
@@ -83,6 +86,29 @@ IntakeRateLimiterDependency = Annotated[
 ]
 
 
+def _build_provider_rate_limit_http_error(
+    error: AIProviderRateLimitError,
+) -> HTTPException:
+    """Преобразует provider rate limit в безопасный HTTP-ответ."""
+
+    headers: dict[str, str] | None = None
+
+    if error.retry_after_seconds is not None:
+        retry_after_seconds = max(
+            1,
+            ceil(error.retry_after_seconds),
+        )
+        headers = {
+            "Retry-After": str(retry_after_seconds),
+        }
+
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=str(error),
+        headers=headers,
+    )
+
+
 @router.post(
     "/trip-intake",
     response_model=TripIntakeResponse,
@@ -129,6 +155,11 @@ async def analyze_trip_intake(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Планирование поездки временно недоступно.",
+        ) from error
+
+    except AIProviderRateLimitError as error:
+        raise _build_provider_rate_limit_http_error(
+            error,
         ) from error
 
     except AIServiceError as error:
@@ -214,6 +245,11 @@ async def create_trip_plan(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(error),
+        ) from error
+
+    except AIProviderRateLimitError as error:
+        raise _build_provider_rate_limit_http_error(
+            error,
         ) from error
 
     except AIServiceError as error:

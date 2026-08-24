@@ -17,10 +17,11 @@ from app.schemas.geoapify import (
 )
 from app.schemas.trip import TripPreferences
 from app.services.ai import (
-    AIServiceError,
+    AIProviderRateLimitError,
     LLMProviderResponse,
     _extract_llm_response_metadata,
     _request_model,
+    _request_model_with_retry,
     generate_trip_plan,
 )
 
@@ -259,44 +260,178 @@ async def test_logs_attempts_and_success_without_private_data(
 
 
 @pytest.mark.asyncio
-async def test_logs_http_error_without_sensitive_payload(
+async def test_logs_rate_limit_without_sensitive_payload(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Проверяет безопасный лог HTTP-ошибки Groq."""
+    """Проверяет безопасный лог provider rate limit."""
 
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             status_code=429,
-            headers={"x-request-id": "req_http_error"},
-            json={"error": {"message": "PRIVATE_ERROR_BODY_DO_NOT_LOG"}},
+            headers={
+                "x-request-id": "req_rate_limit",
+                "retry-after": "7.5",
+            },
+            json={
+                "error": {
+                    "message": "PRIVATE_ERROR_BODY_DO_NOT_LOG",
+                }
+            },
         )
 
-    with caplog.at_level(logging.ERROR, logger=ai_service.__name__):
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(AIServiceError):
+    with caplog.at_level(
+        logging.WARNING,
+        logger=ai_service.__name__,
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            with pytest.raises(
+                AIProviderRateLimitError,
+            ) as error_info:
                 await _request_model(
                     client=client,
-                    url="https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {PRIVATE_API_KEY}"},
+                    url=("https://api.groq.com/openai/v1/chat/completions"),
+                    headers={"Authorization": (f"Bearer {PRIVATE_API_KEY}")},
                     payload={
-                        "messages": [{"role": "user", "content": PRIVATE_INTERESTS}]
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": PRIVATE_INTERESTS,
+                            }
+                        ]
                     },
                     model="openai/gpt-oss-120b",
                     attempt=1,
                 )
 
+    assert error_info.value.retry_after_seconds == 7.5
+
     events = read_llm_events(caplog)
+
     assert len(events) == 1
-    assert events[0]["outcome"] == "http_error"
+    assert events[0]["outcome"] == "rate_limited"
     assert events[0]["http_status"] == 429
-    assert events[0]["request_id"] == "req_http_error"
+    assert events[0]["request_id"] == "req_rate_limit"
     assert events[0]["attempt"] == 1
+    assert events[0]["provider_attempt"] == 1
+    assert events[0]["max_provider_attempts"] == 2
 
     service_logs = "\n".join(
         record.getMessage()
         for record in caplog.records
         if record.name == ai_service.__name__
     )
+
     assert PRIVATE_INTERESTS not in service_logs
     assert PRIVATE_API_KEY not in service_logs
     assert "PRIVATE_ERROR_BODY_DO_NOT_LOG" not in service_logs
+
+
+@pytest.mark.asyncio
+async def test_retries_provider_request_after_short_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Повторяет provider-запрос после короткого Retry-After."""
+
+    provider_attempts: list[int] = []
+    sleep_delays: list[float] = []
+
+    async def fake_request_model(
+        **kwargs: Any,
+    ) -> LLMProviderResponse:
+        provider_attempt = int(kwargs["provider_attempt"])
+        provider_attempts.append(provider_attempt)
+
+        if provider_attempt == 1:
+            raise AIProviderRateLimitError(
+                retry_after_seconds=0.25,
+            )
+
+        return LLMProviderResponse(
+            data={"result": "success"},
+            duration_ms=10,
+            header_request_id="req_retry_success",
+            provider_attempt=provider_attempt,
+        )
+
+    async def fake_sleep(
+        delay_seconds: float,
+    ) -> None:
+        sleep_delays.append(delay_seconds)
+
+    monkeypatch.setattr(
+        ai_service,
+        "_request_model",
+        fake_request_model,
+    )
+    monkeypatch.setattr(
+        ai_service.asyncio,
+        "sleep",
+        fake_sleep,
+    )
+
+    async with httpx.AsyncClient() as client:
+        response = await _request_model_with_retry(
+            client=client,
+            url="https://example.test/chat/completions",
+            headers={},
+            payload={},
+            model="test-model",
+            attempt=1,
+        )
+
+    assert provider_attempts == [1, 2]
+    assert sleep_delays == [0.25]
+    assert response.data == {"result": "success"}
+    assert response.provider_attempt == 2
+
+
+@pytest.mark.asyncio
+async def test_does_not_retry_after_long_provider_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Не удерживает запрос при слишком большом Retry-After."""
+
+    provider_attempts: list[int] = []
+
+    async def fake_request_model(
+        **kwargs: Any,
+    ) -> LLMProviderResponse:
+        provider_attempts.append(
+            int(kwargs["provider_attempt"]),
+        )
+        raise AIProviderRateLimitError(
+            retry_after_seconds=30.0,
+        )
+
+    async def unexpected_sleep(
+        _: float,
+    ) -> None:
+        pytest.fail("asyncio.sleep не должен вызываться для длинного Retry-After.")
+
+    monkeypatch.setattr(
+        ai_service,
+        "_request_model",
+        fake_request_model,
+    )
+    monkeypatch.setattr(
+        ai_service.asyncio,
+        "sleep",
+        unexpected_sleep,
+    )
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(
+            AIProviderRateLimitError,
+        ):
+            await _request_model_with_retry(
+                client=client,
+                url="https://example.test/chat/completions",
+                headers={},
+                payload={},
+                model="test-model",
+                attempt=1,
+            )
+
+    assert provider_attempts == [1]
