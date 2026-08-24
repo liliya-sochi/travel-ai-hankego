@@ -10,9 +10,11 @@
 - безопасно логирует технические метрики каждого вызова.
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
+from math import isfinite
 from time import perf_counter
 from typing import Any
 
@@ -37,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 60.0
 MAX_SEMANTIC_ATTEMPTS = 2
+MAX_PROVIDER_ATTEMPTS = 2
+DEFAULT_PROVIDER_RETRY_DELAY_SECONDS = 2.0
+MAX_PROVIDER_RETRY_DELAY_SECONDS = 20.0
 STRUCTURED_OUTPUT_NAME = "trip_plan"
 INTAKE_STRUCTURED_OUTPUT_NAME = "trip_intake"
 UNKNOWN_OBSERVABILITY_VALUE = "unknown"
@@ -165,6 +170,18 @@ class AIServiceError(Exception):
     """
 
 
+class AIProviderRateLimitError(AIServiceError):
+    """AI-провайдер временно отклонил запрос из-за своего лимита."""
+
+    def __init__(
+        self,
+        *,
+        retry_after_seconds: float | None,
+    ) -> None:
+        super().__init__("AI-сервис временно перегружен. Попробуйте немного позже.")
+        self.retry_after_seconds = retry_after_seconds
+
+
 @dataclass(frozen=True, slots=True)
 class LLMProviderResponse:
     """Внутренний результат одного HTTP-вызова LLM."""
@@ -173,6 +190,7 @@ class LLMProviderResponse:
     data: dict[str, Any]
     duration_ms: int
     header_request_id: str | None
+    provider_attempt: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,12 +278,11 @@ def _log_llm_call(
     metadata: LLMResponseMetadata,
     attempt: int,
     duration_ms: int,
+    provider_attempt: int = 1,
     error_type: str | None = None,
     http_status: int | None = None,
 ) -> None:
-    """
-    Записывает одно событие вызова LLM по белому списку полей.
-    """
+    """Записывает одно событие вызова LLM по белому списку полей."""
 
     event: dict[str, str | int | None] = {
         "event": "llm_call",
@@ -273,6 +290,8 @@ def _log_llm_call(
         "model": metadata.model,
         "attempt": attempt,
         "max_attempts": MAX_SEMANTIC_ATTEMPTS,
+        "provider_attempt": provider_attempt,
+        "max_provider_attempts": MAX_PROVIDER_ATTEMPTS,
         "duration_ms": duration_ms,
         "request_id": metadata.request_id,
         "prompt_tokens": metadata.prompt_tokens,
@@ -291,7 +310,12 @@ def _log_llm_call(
     logger.log(
         level,
         "LLM call | %s",
-        json.dumps(event, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
+        json.dumps(
+            event,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
     )
 
 
@@ -309,6 +333,7 @@ def _log_llm_error(
     attempt: int,
     started_at: float,
     error: Exception,
+    provider_attempt: int = 1,
     request_id: str | None = None,
     http_status: int | None = None,
 ) -> None:
@@ -324,9 +349,60 @@ def _log_llm_error(
         outcome=outcome,
         metadata=metadata,
         attempt=attempt,
+        provider_attempt=provider_attempt,
         duration_ms=_elapsed_milliseconds(started_at),
         error_type=type(error).__name__,
         http_status=http_status,
+    )
+
+
+def _parse_retry_after_seconds(
+    response: httpx.Response,
+) -> float | None:
+    """Извлекает безопасное число секунд из Retry-After."""
+
+    raw_value = response.headers.get("retry-after")
+
+    if raw_value is None:
+        return None
+
+    try:
+        retry_after_seconds = float(raw_value)
+
+    except ValueError:
+        return None
+
+    if not isfinite(retry_after_seconds) or retry_after_seconds < 0:
+        return None
+
+    return retry_after_seconds
+
+
+def _log_llm_retry(
+    *,
+    semantic_attempt: int,
+    provider_attempt: int,
+    delay_seconds: float,
+) -> None:
+    """Логирует запланированный retry без пользовательских данных."""
+
+    event = {
+        "event": "llm_retry",
+        "reason": "rate_limit",
+        "semantic_attempt": semantic_attempt,
+        "provider_attempt": provider_attempt,
+        "max_provider_attempts": MAX_PROVIDER_ATTEMPTS,
+        "delay_ms": round(delay_seconds * 1000),
+    }
+
+    logger.warning(
+        "LLM retry | %s",
+        json.dumps(
+            event,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
     )
 
 
@@ -565,10 +641,9 @@ async def _request_model(
     payload: dict[str, Any],
     model: str,
     attempt: int,
+    provider_attempt: int = 1,
 ) -> LLMProviderResponse:
-    """
-    Выполняет один HTTP-запрос к AI-провайдеру.
-    """
+    """Выполняет одну HTTP-попытку обращения к AI-провайдеру."""
 
     started_at = perf_counter()
     response: httpx.Response | None = None
@@ -579,7 +654,6 @@ async def _request_model(
             headers=headers,
             json=payload,
         )
-
         response.raise_for_status()
 
         response_data = response.json()
@@ -591,6 +665,7 @@ async def _request_model(
             data=response_data,
             duration_ms=_elapsed_milliseconds(started_at),
             header_request_id=response.headers.get("x-request-id"),
+            provider_attempt=provider_attempt,
         )
 
     except httpx.TimeoutException as error:
@@ -599,6 +674,7 @@ async def _request_model(
             outcome="timeout",
             model=model,
             attempt=attempt,
+            provider_attempt=provider_attempt,
             started_at=started_at,
             error=error,
         )
@@ -607,15 +683,38 @@ async def _request_model(
         ) from error
 
     except httpx.HTTPStatusError as error:
+        status_code = error.response.status_code
+        request_id = error.response.headers.get("x-request-id")
+
+        if status_code == 429:
+            retry_after_seconds = _parse_retry_after_seconds(
+                error.response,
+            )
+            _log_llm_error(
+                level=logging.WARNING,
+                outcome="rate_limited",
+                model=model,
+                attempt=attempt,
+                provider_attempt=provider_attempt,
+                started_at=started_at,
+                error=error,
+                request_id=request_id,
+                http_status=status_code,
+            )
+            raise AIProviderRateLimitError(
+                retry_after_seconds=retry_after_seconds,
+            ) from error
+
         _log_llm_error(
             level=logging.ERROR,
             outcome="http_error",
             model=model,
             attempt=attempt,
+            provider_attempt=provider_attempt,
             started_at=started_at,
             error=error,
-            request_id=error.response.headers.get("x-request-id"),
-            http_status=error.response.status_code,
+            request_id=request_id,
+            http_status=status_code,
         )
         raise AIServiceError(
             "AI-сервис временно недоступен. Попробуйте позже."
@@ -627,6 +726,7 @@ async def _request_model(
             outcome="connection_error",
             model=model,
             attempt=attempt,
+            provider_attempt=provider_attempt,
             started_at=started_at,
             error=error,
         )
@@ -641,11 +741,60 @@ async def _request_model(
             outcome="invalid_response",
             model=model,
             attempt=attempt,
+            provider_attempt=provider_attempt,
             started_at=started_at,
             error=error,
             request_id=request_id,
         )
         raise AIServiceError("AI-сервис вернул некорректный ответ.") from error
+
+
+async def _request_model_with_retry(
+    *,
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    model: str,
+    attempt: int,
+) -> LLMProviderResponse:
+    """Повторяет запрос один раз после кратковременного provider 429."""
+
+    for provider_attempt in range(
+        1,
+        MAX_PROVIDER_ATTEMPTS + 1,
+    ):
+        try:
+            return await _request_model(
+                client=client,
+                url=url,
+                headers=headers,
+                payload=payload,
+                model=model,
+                attempt=attempt,
+                provider_attempt=provider_attempt,
+            )
+
+        except AIProviderRateLimitError as error:
+            if provider_attempt == MAX_PROVIDER_ATTEMPTS:
+                raise
+
+            delay_seconds = error.retry_after_seconds
+
+            if delay_seconds is None:
+                delay_seconds = DEFAULT_PROVIDER_RETRY_DELAY_SECONDS
+
+            if delay_seconds > MAX_PROVIDER_RETRY_DELAY_SECONDS:
+                raise
+
+            _log_llm_retry(
+                semantic_attempt=attempt,
+                provider_attempt=provider_attempt,
+                delay_seconds=delay_seconds,
+            )
+            await asyncio.sleep(delay_seconds)
+
+    raise AIServiceError("AI-сервис временно недоступен. Попробуйте позже.")
 
 
 async def generate_trip_plan(
@@ -702,7 +851,7 @@ async def generate_trip_plan(
                 response_schema=GroundedTripPlanResponse,
             )
 
-            provider_response = await _request_model(
+            provider_response = await _request_model_with_retry(
                 client=client,
                 url=url,
                 headers=headers,
@@ -726,6 +875,7 @@ async def generate_trip_plan(
                     outcome="invalid_output",
                     metadata=metadata,
                     attempt=attempt,
+                    provider_attempt=provider_response.provider_attempt,
                     duration_ms=(provider_response.duration_ms),
                     error_type=type(error).__name__,
                 )
@@ -745,6 +895,7 @@ async def generate_trip_plan(
                     outcome=("semantic_validation_failed"),
                     metadata=metadata,
                     attempt=attempt,
+                    provider_attempt=provider_response.provider_attempt,
                     duration_ms=(provider_response.duration_ms),
                     error_type=type(error).__name__,
                 )
@@ -776,6 +927,7 @@ async def generate_trip_plan(
                 outcome="success",
                 metadata=metadata,
                 attempt=attempt,
+                provider_attempt=provider_response.provider_attempt,
                 duration_ms=(provider_response.duration_ms),
             )
 
@@ -838,7 +990,7 @@ async def analyze_trip_message(
                 structured_output_name=INTAKE_STRUCTURED_OUTPUT_NAME,
             )
 
-            provider_response = await _request_model(
+            provider_response = await _request_model_with_retry(
                 client=client,
                 url=url,
                 headers=headers,
@@ -868,6 +1020,7 @@ async def analyze_trip_message(
                     outcome="invalid_output",
                     metadata=metadata,
                     attempt=attempt,
+                    provider_attempt=provider_response.provider_attempt,
                     duration_ms=provider_response.duration_ms,
                     error_type=type(error).__name__,
                 )
@@ -891,6 +1044,7 @@ async def analyze_trip_message(
                 outcome="success",
                 metadata=metadata,
                 attempt=attempt,
+                provider_attempt=provider_response.provider_attempt,
                 duration_ms=provider_response.duration_ms,
             )
 

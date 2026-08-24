@@ -16,6 +16,7 @@ from app.schemas.trip import (
     TripHistoryResponse,
     TripPreferences,
 )
+from app.services.ai import AIProviderRateLimitError
 
 
 class FakeTripService:
@@ -122,6 +123,23 @@ class FakeTripService:
         )
 
 
+class RateLimitedTripService(FakeTripService):
+    """Имитирует исчерпанный лимит внешнего LLM-провайдера."""
+
+    async def create_trip_plan(
+        self,
+        telegram_id: int,
+        first_name: str,
+        preferences: TripPreferences,
+        enrichment_service: object,
+    ) -> TripCreateResponse:
+        """Прерывает создание маршрута ошибкой provider rate limit."""
+
+        raise AIProviderRateLimitError(
+            retry_after_seconds=7.5,
+        )
+
+
 @pytest.fixture
 def override_database_session() -> Iterator[None]:
     """
@@ -192,6 +210,87 @@ async def test_create_trip_returns_persisted_trip(
         budget="150000 ₽",
         interests="Архитектура и еда",
     )
+
+
+@pytest.mark.asyncio
+async def test_create_trip_maps_provider_rate_limit_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+    override_database_session: None,
+) -> None:
+    """Преобразует исчерпанный provider limit в HTTP 503."""
+
+    monkeypatch.setattr(
+        trip_api,
+        "TripService",
+        RateLimitedTripService,
+    )
+
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/v1/trip-plan",
+            json={
+                "telegram_id": 9000000001,
+                "first_name": "Liliya",
+                "preferences": {
+                    "destination": "Стамбул",
+                    "duration_days": 1,
+                    "budget": None,
+                    "interests": "Музеи",
+                },
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "8"
+    assert response.json() == {
+        "detail": ("AI-сервис временно перегружен. Попробуйте немного позже.")
+    }
+
+
+@pytest.mark.asyncio
+async def test_trip_intake_maps_provider_rate_limit_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Возвращает HTTP 503 при provider limit во время intake."""
+
+    async def fake_process_trip_message(
+        **_: object,
+    ) -> None:
+        raise AIProviderRateLimitError(
+            retry_after_seconds=12.1,
+        )
+
+    monkeypatch.setattr(
+        trip_api,
+        "process_trip_message",
+        fake_process_trip_message,
+    )
+
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/v1/trip-intake",
+            json={
+                "telegram_id": 9000000001,
+                "user_message": ("Хочу на один день в Стамбул"),
+                "draft": {},
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "13"
+    assert response.json() == {
+        "detail": ("AI-сервис временно перегружен. Попробуйте немного позже.")
+    }
 
 
 @pytest.mark.asyncio
