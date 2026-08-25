@@ -10,6 +10,7 @@ from typing import Self
 
 from pydantic import Field, model_validator
 
+from app.schemas.geoapify import PlaceCandidate
 from app.schemas.trip import (
     DayPlan,
     StrictSchema,
@@ -117,10 +118,14 @@ class GroundedTripPlanResponse(StrictSchema):
         self,
         *,
         practical_tips: list[str],
+        places_by_id: dict[str, PlaceCandidate],
     ) -> TripPlanResponse:
         """
         Преобразует проверенный grounded-план
         в существующий публичный контракт.
+
+        Дополнительные сведения берутся только из
+        проверенных PlaceCandidate, а не из ответа LLM.
         """
 
         return TripPlanResponse(
@@ -131,11 +136,27 @@ class GroundedTripPlanResponse(StrictSchema):
                 DayPlan(
                     day=day.day,
                     title=day.title,
-                    morning=[_format_activity(activity) for activity in day.morning],
-                    afternoon=[
-                        _format_activity(activity) for activity in day.afternoon
+                    morning=[
+                        _format_activity(
+                            activity,
+                            places_by_id=places_by_id,
+                        )
+                        for activity in day.morning
                     ],
-                    evening=[_format_activity(activity) for activity in day.evening],
+                    afternoon=[
+                        _format_activity(
+                            activity,
+                            places_by_id=places_by_id,
+                        )
+                        for activity in day.afternoon
+                    ],
+                    evening=[
+                        _format_activity(
+                            activity,
+                            places_by_id=places_by_id,
+                        )
+                        for activity in day.evening
+                    ],
                 )
                 for day in self.days
             ],
@@ -145,10 +166,30 @@ class GroundedTripPlanResponse(StrictSchema):
 
 def _format_activity(
     activity: GroundedActivity,
+    *,
+    places_by_id: dict[str, PlaceCandidate],
 ) -> str:
-    """Преобразует структурированную активность в текст."""
+    """Добавляет к активности только проверенные сведения о месте."""
 
-    if activity.place_name is None:
+    if activity.source_place_id is None:
         return activity.description
 
-    return f"{activity.place_name}: {activity.description}"
+    place = places_by_id.get(activity.source_place_id)
+
+    if place is None:
+        raise ValueError("Grounded activity refers to an unknown place ID.")
+
+    formatted_description = activity.description
+
+    if not formatted_description.endswith((".", "!", "?")):
+        formatted_description = f"{formatted_description}."
+
+    activity_parts = [f"{place.name}: {formatted_description}"]
+
+    if place.opening_hours is not None:
+        activity_parts.append(f"Часы по данным Geoapify: {place.opening_hours}.")
+
+    if place.website is not None:
+        activity_parts.append(f"Сайт из данных Geoapify: {place.website}")
+
+    return " ".join(activity_parts)

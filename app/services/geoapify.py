@@ -11,6 +11,7 @@
 
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import SecretStr, ValidationError
@@ -18,9 +19,42 @@ from pydantic import SecretStr, ValidationError
 from app.schemas.geoapify import (
     DestinationLocation,
     GeoapifyGeocodingResponse,
+    GeoapifyPlaceDetailsResponse,
     GeoapifyPlacesResponse,
     PlaceCandidate,
+    PlaceDetails,
 )
+
+
+def _normalize_optional_text(
+    value: str | None,
+) -> str | None:
+    """Удаляет пробелы и преобразует пустую строку в None."""
+
+    if value is None:
+        return None
+
+    normalized_value = value.strip()
+
+    return normalized_value or None
+
+
+def _normalize_website(
+    value: str | None,
+) -> str | None:
+    """Оставляет только абсолютные HTTP- и HTTPS-ссылки."""
+
+    normalized_value = _normalize_optional_text(value)
+
+    if normalized_value is None:
+        return None
+
+    parsed_url = urlparse(normalized_value)
+
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        return None
+
+    return normalized_value
 
 
 class GeoapifyServiceError(Exception):
@@ -236,3 +270,56 @@ class GeoapifyClient:
             )
 
         return places
+
+    async def get_place_details(
+        self,
+        source_place_id: str,
+    ) -> PlaceDetails:
+        """Получает дополнительные сведения об одном месте."""
+
+        normalized_place_id = source_place_id.strip()
+
+        if not normalized_place_id:
+            raise ValueError("Для получения деталей нужен place_id.")
+
+        response_data = await self._get_json(
+            path="/v2/place-details",
+            params={
+                "id": normalized_place_id,
+                "features": "details",
+                "lang": "ru",
+            },
+        )
+
+        try:
+            response = GeoapifyPlaceDetailsResponse.model_validate(response_data)
+
+        except ValidationError as error:
+            raise GeoapifyServiceError(
+                "Сервис туристических данных вернул некорректный ответ."
+            ) from error
+
+        details_feature = next(
+            (
+                feature
+                for feature in response.features
+                if feature.properties.feature_type == "details"
+            ),
+            None,
+        )
+
+        if details_feature is None:
+            raise GeoapifyServiceError(
+                "Сервис туристических данных не вернул сведения о месте."
+            )
+
+        properties = details_feature.properties
+
+        return PlaceDetails(
+            # Сохраняем ID исходного поискового кандидата.
+            # Вложенный details-объект Geoapify может иметь
+            # другой place_id для того же физического места.
+            source_place_id=normalized_place_id,
+            website=_normalize_website(properties.website),
+            opening_hours=_normalize_optional_text(properties.opening_hours),
+        )
