@@ -49,6 +49,8 @@ def build_travel_context() -> TravelContext:
                 longitude=28.9802,
                 categories=["tourism.sights"],
                 source_place_id="hagia-sophia-id",
+                website="https://museum.example/",
+                opening_hours="Mo-Su 09:00-18:00",
             )
         ],
         fetched_at=datetime.now(UTC),
@@ -87,7 +89,7 @@ def build_grounded_plan() -> dict[str, object]:
 
 
 def test_builds_grounded_user_message() -> None:
-    """Проверяет разделение предпочтений и фактов."""
+    """Не передаёт LLM сайты и часы работы."""
 
     preferences = build_preferences()
     context = build_travel_context()
@@ -100,7 +102,13 @@ def test_builds_grounded_user_message() -> None:
     )
 
     assert message["trip_preferences"] == (preferences.model_dump(mode="json"))
-    assert message["travel_context"] == (context.model_dump(mode="json"))
+
+    llm_places = message["travel_context"]["places"]
+
+    assert len(llm_places) == 1
+    assert llm_places[0]["source_place_id"] == ("hagia-sophia-id")
+    assert "website" not in llm_places[0]
+    assert "opening_hours" not in llm_places[0]
 
 
 def test_validates_and_converts_grounded_plan() -> None:
@@ -117,10 +125,20 @@ def test_validates_and_converts_grounded_plan() -> None:
 
     assert result.destination == "Стамбул"
     assert result.duration_days == 1
-    assert result.days[0].morning == [("Айя-София: Осмотреть здание и его интерьеры.")]
+    assert result.days[0].morning == [
+        (
+            "Айя-София: Осмотреть здание и его интерьеры. "
+            "Часы по данным Geoapify: Mo-Su 09:00-18:00. "
+            "Сайт из данных Geoapify: https://museum.example/"
+        )
+    ]
     assert result.days[0].afternoon == ["Прогуляться по историческому центру."]
     assert result.practical_tips == [
-        ("Перед посещением проверяйте актуальные часы работы на официальных сайтах."),
+        (
+            "Часы работы и ссылки на сайты получены "
+            "из данных Geoapify/OSM и могут быть устаревшими; "
+            "проверяйте их перед посещением."
+        ),
         (
             "Точные цены и расписания могут измениться; "
             "проверяйте их непосредственно перед поездкой."
@@ -195,3 +213,52 @@ def test_rejects_llm_generated_practical_tips() -> None:
             preferences=build_preferences(),
             travel_context=build_travel_context(),
         )
+
+
+def test_does_not_add_details_to_general_activity() -> None:
+    """Не связывает общую активность с данными конкретного места."""
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(
+            build_grounded_plan(),
+            ensure_ascii=False,
+        ),
+        preferences=build_preferences(),
+        travel_context=build_travel_context(),
+    )
+
+    assert result.days[0].afternoon == ["Прогуляться по историческому центру."]
+
+
+def test_adds_separator_before_place_details() -> None:
+    """Отделяет описание LLM от проверенных сведений Python."""
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    morning = days[0]["morning"]
+
+    assert isinstance(morning, list)
+    assert isinstance(morning[0], dict)
+
+    morning[0]["description"] = "Посетить музей"
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(
+            plan,
+            ensure_ascii=False,
+        ),
+        preferences=build_preferences(),
+        travel_context=build_travel_context(),
+    )
+
+    assert result.days[0].morning == [
+        (
+            "Айя-София: Посетить музей. "
+            "Часы по данным Geoapify: Mo-Su 09:00-18:00. "
+            "Сайт из данных Geoapify: https://museum.example/"
+        )
+    ]

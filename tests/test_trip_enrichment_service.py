@@ -7,6 +7,7 @@ import pytest
 from app.schemas.geoapify import (
     DestinationLocation,
     PlaceCandidate,
+    PlaceDetails,
     TravelContext,
 )
 from app.schemas.trip import TripPreferences
@@ -26,12 +27,17 @@ class FakePlacesProvider:
         self,
         *,
         places: list[PlaceCandidate] | None = None,
+        details: dict[str, PlaceDetails] | None = None,
         error: Exception | None = None,
+        details_error: Exception | None = None,
     ) -> None:
         self.places = places or []
+        self.details = details or {}
         self.error = error
+        self.details_error = details_error
         self.received_destination: str | None = None
         self.received_categories: list[str] | None = None
+        self.received_detail_place_ids: list[str] = []
 
     async def geocode_destination(
         self,
@@ -68,6 +74,19 @@ class FakePlacesProvider:
         assert radius_meters == 15_000
 
         return self.places
+
+    async def get_place_details(
+        self,
+        source_place_id: str,
+    ) -> PlaceDetails:
+        """Возвращает подготовленные дополнительные сведения."""
+
+        self.received_detail_place_ids.append(source_place_id)
+
+        if self.details_error is not None:
+            raise self.details_error
+
+        return self.details[source_place_id]
 
 
 class FakeTravelContextCache:
@@ -428,3 +447,91 @@ async def test_saves_provider_result_after_cache_miss() -> None:
         "entertainment.museum",
     ]
     assert cache.saved_context == context
+
+
+@pytest.mark.asyncio
+async def test_enriches_best_candidates_with_place_details() -> None:
+    """Проверяет лимит и сохранение дополнительных сведений."""
+
+    places = [
+        build_place(
+            name=f"Музей {index}",
+            source_place_id=f"museum-{index}",
+            categories=["entertainment.museum"],
+            distance_meters=float(index * 100),
+            available_details=[
+                "details",
+                "details.contact",
+            ],
+            wiki_reference_count=3,
+        )
+        for index in range(1, 7)
+    ]
+
+    details = {
+        f"museum-{index}": PlaceDetails(
+            source_place_id=f"museum-{index}",
+            website=f"https://museum-{index}.example/",
+            opening_hours="Mo-Su 09:00-18:00",
+        )
+        for index in range(1, 6)
+    }
+
+    provider = FakePlacesProvider(
+        places=places,
+        details=details,
+    )
+    service = TripEnrichmentService(provider)
+
+    context = await service.enrich(
+        TripPreferences(
+            destination="Стамбул",
+            duration_days=2,
+            interests="Музеи",
+        )
+    )
+
+    assert provider.received_detail_place_ids == [
+        "museum-1",
+        "museum-2",
+        "museum-3",
+        "museum-4",
+        "museum-5",
+    ]
+
+    places_by_id = {place.source_place_id: place for place in context.places}
+
+    assert places_by_id["museum-1"].website == ("https://museum-1.example/")
+    assert places_by_id["museum-1"].opening_hours == ("Mo-Su 09:00-18:00")
+    assert places_by_id["museum-6"].website is None
+    assert places_by_id["museum-6"].opening_hours is None
+
+
+@pytest.mark.asyncio
+async def test_place_details_error_does_not_cancel_enrichment() -> None:
+    """Проверяет fail-open поведение Place Details."""
+
+    place = build_place(
+        available_details=[
+            "details",
+            "details.contact",
+        ],
+    )
+    provider = FakePlacesProvider(
+        places=[place],
+        details_error=GeoapifyServiceError("Place Details недоступен."),
+    )
+    service = TripEnrichmentService(provider)
+
+    context = await service.enrich(
+        TripPreferences(
+            destination="Стамбул",
+            duration_days=1,
+        )
+    )
+
+    assert provider.received_detail_place_ids == [
+        "hagia-sophia-id",
+    ]
+    assert context.places[0].website is None
+    assert context.places[0].opening_hours is None

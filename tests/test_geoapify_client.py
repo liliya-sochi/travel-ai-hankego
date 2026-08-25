@@ -190,6 +190,71 @@ async def test_search_places_skips_unnamed_objects() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_place_details() -> None:
+    """Проверяет получение сайта и часов работы места."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/place-details"
+        assert request.url.params["id"] == "museum-place-id"
+        assert request.url.params["features"] == "details"
+        assert request.url.params["lang"] == "ru"
+        assert request.url.params["apiKey"] == TEST_API_KEY
+
+        return httpx.Response(
+            status_code=200,
+            json={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "feature_type": "details",
+                            "name": "Тестовый музей",
+                            "formatted": "Стамбул, Турция",
+                            "lat": 41.0082,
+                            "lon": 28.9784,
+                            "place_id": ("details-feature-place-id"),
+                            "website": " https://museum.example/ ",
+                            "opening_hours": " Mo-Su 09:00-18:30 ",
+                        },
+                    }
+                ],
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        details = await client.get_place_details("museum-place-id")
+
+    """Проверяет детали и сохранение ID исходного кандидата."""
+    assert details.source_place_id == "museum-place-id"
+    assert details.website == "https://museum.example/"
+    assert details.opening_hours == "Mo-Su 09:00-18:30"
+    assert details.source == "geoapify"
+
+
+@pytest.mark.asyncio
+async def test_get_place_details_rejects_missing_details() -> None:
+    """Проверяет ответ без объекта feature_type=details."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "type": "FeatureCollection",
+                "features": [],
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        with pytest.raises(GeoapifyServiceError):
+            await client.get_place_details("museum-place-id")
+
+
+@pytest.mark.asyncio
 async def test_rejects_invalid_places_limit() -> None:
     """Проверяет защиту от лишнего расходования credits."""
 

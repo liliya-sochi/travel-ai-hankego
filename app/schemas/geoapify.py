@@ -85,6 +85,23 @@ class GeoapifyPlaceProperties(GeoapifyLocationProperties):
     wiki_and_media: GeoapifyWikiAndMedia | None = None
 
 
+class GeoapifyPlaceDetailsProperties(GeoapifyPlaceProperties):
+    """Свойства объекта из Place Details API."""
+
+    feature_type: str = Field(
+        min_length=1,
+        max_length=100,
+    )
+    website: str | None = Field(
+        default=None,
+        max_length=2000,
+    )
+    opening_hours: str | None = Field(
+        default=None,
+        max_length=1000,
+    )
+
+
 class GeoapifyLocationFeature(GeoapifyResponseSchema):
     """Один результат Forward Geocoding API."""
 
@@ -99,6 +116,13 @@ class GeoapifyPlaceFeature(GeoapifyResponseSchema):
     properties: GeoapifyPlaceProperties
 
 
+class GeoapifyPlaceDetailsFeature(GeoapifyResponseSchema):
+    """Один объект из ответа Place Details API."""
+
+    type: Literal["Feature"]
+    properties: GeoapifyPlaceDetailsProperties
+
+
 class GeoapifyGeocodingResponse(GeoapifyResponseSchema):
     """GeoJSON FeatureCollection от Forward Geocoding API."""
 
@@ -111,6 +135,13 @@ class GeoapifyPlacesResponse(GeoapifyResponseSchema):
 
     type: Literal["FeatureCollection"]
     features: list[GeoapifyPlaceFeature]
+
+
+class GeoapifyPlaceDetailsResponse(GeoapifyResponseSchema):
+    """GeoJSON FeatureCollection от Place Details API."""
+
+    type: Literal["FeatureCollection"]
+    features: list[GeoapifyPlaceDetailsFeature]
 
 
 class HankeGoGeoSchema(BaseModel):
@@ -178,9 +209,35 @@ class PlaceCandidate(HankeGoGeoSchema):
         ge=0,
         le=4,
     )
+    website: str | None = Field(
+        default=None,
+        max_length=2000,
+    )
+    opening_hours: str | None = Field(
+        default=None,
+        max_length=1000,
+    )
     source_place_id: str = Field(
         min_length=1,
         max_length=500,
+    )
+    source: Literal["geoapify"] = "geoapify"
+
+
+class PlaceDetails(HankeGoGeoSchema):
+    """Проверенные дополнительные сведения о месте."""
+
+    source_place_id: str = Field(
+        min_length=1,
+        max_length=500,
+    )
+    website: str | None = Field(
+        default=None,
+        max_length=2000,
+    )
+    opening_hours: str | None = Field(
+        default=None,
+        max_length=1000,
     )
     source: Literal["geoapify"] = "geoapify"
 

@@ -5,16 +5,21 @@
 TripPreferences -> Geoapify -> TravelContext -> LLM.
 """
 
+import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Protocol
 
 from app.schemas.geoapify import (
     DestinationLocation,
     PlaceCandidate,
+    PlaceDetails,
     TravelContext,
 )
 from app.schemas.trip import TripPreferences
 from app.services.geoapify import GeoapifyServiceError
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PLACE_CATEGORIES = [
     "tourism.sights",
@@ -23,6 +28,7 @@ DEFAULT_PLACE_CATEGORIES = [
 
 PROVIDER_PLACE_LIMIT = 60
 TRAVEL_CONTEXT_PLACE_LIMIT = 20
+PLACE_DETAILS_LIMIT = 5
 
 INTEREST_CATEGORY_RULES: tuple[
     tuple[tuple[str, ...], str],
@@ -87,6 +93,14 @@ class PlacesDataProvider(Protocol):
         radius_meters: int = 15_000,
     ) -> list[PlaceCandidate]:
         """Ищет места по категориям."""
+
+        ...
+
+    async def get_place_details(
+        self,
+        source_place_id: str,
+    ) -> PlaceDetails:
+        """Получает дополнительные сведения о месте."""
 
         ...
 
@@ -301,6 +315,46 @@ def select_place_candidates(
     return selected
 
 
+def _place_details_sort_key(
+    place: PlaceCandidate,
+) -> tuple[bool, int, int, bool, float, str, str]:
+    """Ставит выше места с контактными и справочными данными."""
+
+    distance_key = _distance_sort_key(place)
+
+    return (
+        "details.contact" not in place.available_details,
+        -place.wiki_reference_count,
+        -len(place.available_details),
+        *distance_key,
+    )
+
+
+def select_place_details_candidates(
+    *,
+    places: list[PlaceCandidate],
+    limit: int = PLACE_DETAILS_LIMIT,
+) -> list[PlaceCandidate]:
+    """Выбирает места, для которых вероятнее получить полезные детали."""
+
+    if not 1 <= limit <= PLACE_DETAILS_LIMIT:
+        raise ValueError("Количество запросов Place Details должно быть от 1 до 5.")
+
+    documented_places = [
+        place
+        for place in places
+        if any(
+            detail == "details" or detail.startswith("details.")
+            for detail in place.available_details
+        )
+    ]
+
+    return sorted(
+        documented_places,
+        key=_place_details_sort_key,
+    )[:limit]
+
+
 class TripEnrichmentService:
     """Собирает проверенный контекст для генерации маршрута."""
 
@@ -311,6 +365,70 @@ class TripEnrichmentService:
     ) -> None:
         self._places_provider = places_provider
         self._travel_context_cache = travel_context_cache
+
+    async def _get_place_details_or_none(
+        self,
+        place: PlaceCandidate,
+    ) -> PlaceDetails | None:
+        """Получает детали одного места без остановки всего маршрута."""
+
+        try:
+            return await self._places_provider.get_place_details(place.source_place_id)
+
+        except GeoapifyServiceError:
+            # Дополнительные сведения являются улучшением.
+            # Ошибка одного details-запроса не должна отменять маршрут.
+            logger.warning(
+                "Failed to load Geoapify place details",
+                extra={
+                    "source_place_id": place.source_place_id,
+                },
+            )
+            return None
+
+    async def _enrich_place_details(
+        self,
+        places: list[PlaceCandidate],
+    ) -> list[PlaceCandidate]:
+        """Параллельно добавляет доступные сайты и часы работы."""
+
+        detail_candidates = select_place_details_candidates(
+            places=places,
+        )
+
+        if not detail_candidates:
+            return places
+
+        detail_results = await asyncio.gather(
+            *(self._get_place_details_or_none(place) for place in detail_candidates)
+        )
+
+        details_by_place_id = {
+            details.source_place_id: details
+            for details in detail_results
+            if details is not None
+        }
+
+        enriched_places: list[PlaceCandidate] = []
+
+        for place in places:
+            details = details_by_place_id.get(place.source_place_id)
+
+            if details is None:
+                enriched_places.append(place)
+                continue
+
+            enriched_places.append(
+                PlaceCandidate.model_validate(
+                    {
+                        **place.model_dump(),
+                        "website": details.website,
+                        "opening_hours": details.opening_hours,
+                    }
+                )
+            )
+
+        return enriched_places
 
     async def enrich(
         self,
@@ -352,6 +470,8 @@ class TripEnrichmentService:
             places=place_candidates,
             requested_categories=categories,
         )
+
+        places = await self._enrich_place_details(places)
 
         context = TravelContext(
             location=location,

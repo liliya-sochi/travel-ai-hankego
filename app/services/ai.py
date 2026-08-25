@@ -67,6 +67,9 @@ SYSTEM_PROMPT = """
   а не длину маршрута или время в пути;
 - available_details перечисляет только доступные группы данных
   и не содержит самих часов работы, цен или контактов;
+- не указывай сайты и часы работы в summary, title или description;
+- проверенные часы и ссылки при наличии добавит приложение
+  после проверки ответа;
 - wiki_reference_count отражает полноту справочных ссылок,
   но не является рейтингом, оценкой или популярностью места.
 
@@ -467,16 +470,29 @@ def _build_grounded_user_message(
     travel_context: TravelContext,
 ) -> str:
     """
-    Передаёт LLM предпочтения и проверенный список мест.
+    Передаёт LLM предпочтения и разрешённый список мест.
 
-    Оба объекта сериализуются как данные. Инструкции остаются
-    только в system message и не смешиваются с внешним контентом.
+    Сайты и часы работы намеренно исключаются:
+    модель выбирает места, а точные справочные данные
+    позднее добавляет Python.
     """
+
+    llm_travel_context = travel_context.model_dump(
+        mode="json",
+        exclude={
+            "places": {
+                "__all__": {
+                    "website",
+                    "opening_hours",
+                }
+            }
+        },
+    )
 
     return json.dumps(
         {
             "trip_preferences": preferences.model_dump(mode="json"),
-            "travel_context": travel_context.model_dump(mode="json"),
+            "travel_context": llm_travel_context,
         },
         ensure_ascii=False,
     )
@@ -556,12 +572,17 @@ def _build_grounded_practical_tips(
     """
     Формирует безопасные советы без участия LLM.
 
-    Здесь нет сведений о конкретных местах, которых
-    не было в проверенных данных внешнего провайдера.
+    Часы и ссылки Geoapify являются справочными:
+    поставщик не гарантирует, что сайт принадлежит
+    самому объекту или его управляющей организации.
     """
 
     return [
-        ("Перед посещением проверяйте актуальные часы работы на официальных сайтах."),
+        (
+            "Часы работы и ссылки на сайты получены "
+            "из данных Geoapify/OSM и могут быть устаревшими; "
+            "проверяйте их перед посещением."
+        ),
         (
             "Точные цены и расписания могут измениться; "
             "проверяйте их непосредственно перед поездкой."
@@ -592,8 +613,10 @@ def _validate_grounded_trip_plan(
     if grounded_plan.destination.casefold() != preferences.destination.casefold():
         raise ValueError("LLM destination does not match trip preferences.")
 
+    places_by_id = {place.source_place_id: place for place in travel_context.places}
+
     allowed_places = {
-        place.source_place_id: place.name for place in travel_context.places
+        source_place_id: place.name for source_place_id, place in places_by_id.items()
     }
 
     for day in grounded_plan.days:
@@ -610,7 +633,8 @@ def _validate_grounded_trip_plan(
             )
 
     return grounded_plan.to_trip_plan_response(
-        practical_tips=_build_grounded_practical_tips(travel_context)
+        practical_tips=_build_grounded_practical_tips(travel_context),
+        places_by_id=places_by_id,
     )
 
 
