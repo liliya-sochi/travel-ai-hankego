@@ -16,6 +16,7 @@ from app.schemas.trip import (
     StrictSchema,
     TripPlanResponse,
 )
+from app.services.opening_hours import format_opening_hours
 
 
 class GroundedActivity(StrictSchema):
@@ -187,7 +188,8 @@ def _format_activity(
     activity_parts = [f"{place.name}: {formatted_description}"]
 
     if place.opening_hours is not None:
-        activity_parts.append(f"Часы по данным Geoapify: {place.opening_hours}.")
+        formatted_opening_hours = format_opening_hours(place.opening_hours)
+        activity_parts.append(f"Часы по данным Geoapify: {formatted_opening_hours}.")
 
     if place.website is not None:
         activity_parts.append(f"Сайт из данных Geoapify: {place.website}")
