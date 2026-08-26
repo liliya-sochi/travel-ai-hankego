@@ -2,7 +2,44 @@
 Форматирование маршрутов для Telegram.
 """
 
+import re
 from typing import Any
+
+
+def _format_duration(duration_days: int) -> str:
+    remainder_100 = duration_days % 100
+    remainder_10 = duration_days % 10
+
+    if remainder_10 == 1 and remainder_100 != 11:
+        unit = "день"
+    elif remainder_10 in {2, 3, 4} and remainder_100 not in {12, 13, 14}:
+        unit = "дня"
+    else:
+        unit = "дней"
+
+    return f"{duration_days} {unit}"
+
+
+def _format_day_heading(
+    *,
+    day_number: int,
+    title: str,
+) -> str:
+    duplicate_prefix_pattern = re.compile(
+        rf"^день\s+{day_number}\b\s*(?:[-–—:]\s*)?",
+        flags=re.IGNORECASE,
+    )
+
+    normalized_title = duplicate_prefix_pattern.sub(
+        "",
+        title,
+        count=1,
+    ).strip()
+
+    if not normalized_title:
+        return f"📍 День {day_number}"
+
+    return f"📍 День {day_number}: {normalized_title}"
 
 
 def format_trip_plan(
@@ -23,7 +60,7 @@ def format_trip_plan(
 
     lines = [
         f"✈️ {destination}",
-        f"📅 Продолжительность: {duration_days} дней",
+        f"📅 Продолжительность: {_format_duration(duration_days)}",
         "",
         "📝 Кратко",
         summary,
@@ -31,7 +68,12 @@ def format_trip_plan(
     ]
 
     for day in days:
-        lines.append(f"📍 День {day['day']}: {day['title']}")
+        lines.append(
+            _format_day_heading(
+                day_number=day["day"],
+                title=day["title"],
+            )
+        )
         lines.append("")
 
         if day["morning"]:

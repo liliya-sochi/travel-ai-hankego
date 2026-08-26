@@ -128,7 +128,7 @@ def test_validates_and_converts_grounded_plan() -> None:
     assert result.days[0].morning == [
         (
             "Айя-София: Осмотреть здание и его интерьеры. "
-            "Часы по данным Geoapify: Mo-Su 09:00-18:00. "
+            "Часы по данным Geoapify: пн–вс: 09:00–18:00. "
             "Сайт из данных Geoapify: https://museum.example/"
         )
     ]
@@ -258,7 +258,7 @@ def test_adds_separator_before_place_details() -> None:
     assert result.days[0].morning == [
         (
             "Айя-София: Посетить музей. "
-            "Часы по данным Geoapify: Mo-Su 09:00-18:00. "
+            "Часы по данным Geoapify: пн–вс: 09:00–18:00. "
             "Сайт из данных Geoapify: https://museum.example/"
         )
     ]
