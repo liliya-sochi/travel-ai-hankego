@@ -9,7 +9,10 @@
 - преобразует внешний формат во внутренние модели HankeGo.
 """
 
+import asyncio
 import json
+import logging
+import math
 from typing import Any
 from urllib.parse import urlparse
 
@@ -24,6 +27,100 @@ from app.schemas.geoapify import (
     PlaceCandidate,
     PlaceDetails,
 )
+
+logger = logging.getLogger(__name__)
+
+EARTH_RADIUS_METERS = 6_371_000
+MAX_SEARCH_ANCHOR_DISTANCE_METERS = 5_000
+SEARCH_ANCHOR_BEARINGS = (0.0, 90.0, 180.0, 270.0)
+
+
+def _calculate_distance_meters(
+    *,
+    start_latitude: float,
+    start_longitude: float,
+    end_latitude: float,
+    end_longitude: float,
+) -> float:
+    """Вычисляет расстояние между двумя координатами."""
+
+    start_latitude_radians = math.radians(start_latitude)
+    end_latitude_radians = math.radians(end_latitude)
+    latitude_difference = math.radians(end_latitude - start_latitude)
+    longitude_difference = math.radians(end_longitude - start_longitude)
+
+    haversine_value = (
+        math.sin(latitude_difference / 2) ** 2
+        + math.cos(start_latitude_radians)
+        * math.cos(end_latitude_radians)
+        * math.sin(longitude_difference / 2) ** 2
+    )
+
+    return (
+        EARTH_RADIUS_METERS
+        * 2
+        * math.atan2(
+            math.sqrt(haversine_value),
+            math.sqrt(1 - haversine_value),
+        )
+    )
+
+
+def _move_coordinate(
+    *,
+    latitude: float,
+    longitude: float,
+    distance_meters: float,
+    bearing_degrees: float,
+) -> tuple[float, float]:
+    """Смещает координату на заданное расстояние и направление."""
+
+    angular_distance = distance_meters / EARTH_RADIUS_METERS
+    bearing = math.radians(bearing_degrees)
+    latitude_radians = math.radians(latitude)
+    longitude_radians = math.radians(longitude)
+
+    moved_latitude = math.asin(
+        math.sin(latitude_radians) * math.cos(angular_distance)
+        + math.cos(latitude_radians) * math.sin(angular_distance) * math.cos(bearing)
+    )
+    moved_longitude = longitude_radians + math.atan2(
+        math.sin(bearing) * math.sin(angular_distance) * math.cos(latitude_radians),
+        math.cos(angular_distance)
+        - math.sin(latitude_radians) * math.sin(moved_latitude),
+    )
+
+    normalized_longitude = (math.degrees(moved_longitude) + 540) % 360 - 180
+
+    return math.degrees(moved_latitude), normalized_longitude
+
+
+def _build_search_anchors(
+    *,
+    location: DestinationLocation,
+    radius_meters: int,
+) -> list[tuple[float, float]]:
+    """Создаёт центр и четыре точки для поиска в разных частях города."""
+
+    anchor_distance = min(
+        MAX_SEARCH_ANCHOR_DISTANCE_METERS,
+        radius_meters / 3,
+    )
+    anchors = [
+        (location.latitude, location.longitude),
+    ]
+
+    for bearing in SEARCH_ANCHOR_BEARINGS:
+        anchors.append(
+            _move_coordinate(
+                latitude=location.latitude,
+                longitude=location.longitude,
+                distance_meters=anchor_distance,
+                bearing_degrees=bearing,
+            )
+        )
+
+    return anchors
 
 
 def _normalize_optional_text(
@@ -197,27 +294,119 @@ class GeoapifyClient:
         limit: int = 20,
         radius_meters: int = 15_000,
     ) -> list[PlaceCandidate]:
-        """Ищет именованные места рядом с центром направления."""
+        """Ищет именованные места в нескольких частях направления."""
 
         if not categories:
             raise ValueError("Для поиска нужна хотя бы одна категория.")
 
-        if not 1 <= limit <= 60:
-            raise ValueError("Количество мест должно быть от 1 до 60.")
+        if not 1 <= limit <= 120:
+            raise ValueError("Количество мест должно быть от 1 до 120.")
 
         if not 1_000 <= radius_meters <= 50_000:
             raise ValueError("Радиус поиска должен быть от 1000 до 50000 метров.")
 
-        spatial_filter = (
-            f"circle:{location.longitude},{location.latitude},{radius_meters}"
+        anchors = _build_search_anchors(
+            location=location,
+            radius_meters=radius_meters,
+        )[: min(limit, 5)]
+        if len(anchors) == 1:
+            anchor_limits = [limit]
+        else:
+            satellite_count = len(anchors) - 1
+            center_limit = min(
+                max(1, int(limit * 0.5)),
+                limit - satellite_count,
+            )
+            satellite_limit, remainder = divmod(
+                limit - center_limit,
+                satellite_count,
+            )
+            anchor_limits = [
+                center_limit,
+                *(
+                    satellite_limit + (index < remainder)
+                    for index in range(satellite_count)
+                ),
+            ]
+
+        results = await asyncio.gather(
+            *(
+                self._search_places_near_anchor(
+                    location=location,
+                    categories=categories,
+                    radius_meters=radius_meters,
+                    anchor_latitude=anchor_latitude,
+                    anchor_longitude=anchor_longitude,
+                    limit=anchor_limit,
+                )
+                for (
+                    anchor_latitude,
+                    anchor_longitude,
+                ), anchor_limit in zip(
+                    anchors,
+                    anchor_limits,
+                    strict=True,
+                )
+            ),
+            return_exceptions=True,
         )
+
+        successful_results: list[list[PlaceCandidate]] = []
+        provider_errors: list[GeoapifyServiceError] = []
+
+        for result in results:
+            if isinstance(result, GeoapifyServiceError):
+                provider_errors.append(result)
+                continue
+
+            if isinstance(result, BaseException):
+                raise result
+
+            successful_results.append(result)
+
+        if not successful_results:
+            raise provider_errors[0]
+
+        if provider_errors:
+            logger.warning(
+                "Some Geoapify search anchors failed",
+                extra={
+                    "failed_anchor_count": len(provider_errors),
+                    "total_anchor_count": len(anchors),
+                },
+            )
+
+        unique_places: dict[str, PlaceCandidate] = {}
+
+        for places in successful_results:
+            for place in places:
+                unique_places.setdefault(
+                    place.source_place_id,
+                    place,
+                )
+
+        return list(unique_places.values())
+
+    async def _search_places_near_anchor(
+        self,
+        *,
+        location: DestinationLocation,
+        categories: list[str],
+        radius_meters: int,
+        anchor_latitude: float,
+        anchor_longitude: float,
+        limit: int,
+    ) -> list[PlaceCandidate]:
+        """Загружает и нормализует места около одной точки поиска."""
 
         response_data = await self._get_json(
             path="/v2/places",
             params={
                 "categories": ",".join(categories),
-                "filter": spatial_filter,
-                "bias": (f"proximity:{location.longitude},{location.latitude}"),
+                "filter": (
+                    f"circle:{location.longitude},{location.latitude},{radius_meters}"
+                ),
+                "bias": f"proximity:{anchor_longitude},{anchor_latitude}",
                 "lang": "ru",
                 "limit": limit,
             },
@@ -262,9 +451,14 @@ class GeoapifyClient:
                     latitude=properties.lat,
                     longitude=properties.lon,
                     categories=properties.categories,
-                    distance_meters=properties.distance,
+                    distance_meters=_calculate_distance_meters(
+                        start_latitude=location.latitude,
+                        start_longitude=location.longitude,
+                        end_latitude=properties.lat,
+                        end_longitude=properties.lon,
+                    ),
                     available_details=properties.details,
-                    wiki_reference_count=(wiki_reference_count),
+                    wiki_reference_count=wiki_reference_count,
                     source_place_id=properties.place_id,
                 )
             )

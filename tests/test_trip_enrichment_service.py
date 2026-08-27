@@ -70,7 +70,7 @@ class FakePlacesProvider:
         self.received_categories = categories
 
         assert location.source_place_id == "istanbul-place-id"
-        assert limit == 60
+        assert limit == 120
         assert radius_meters == 15_000
 
         return self.places
@@ -135,6 +135,8 @@ def build_place(
     name: str = "Айя-София",
     source_place_id: str = "hagia-sophia-id",
     categories: list[str] | None = None,
+    latitude: float = 41.0086,
+    longitude: float = 28.9802,
     distance_meters: float | None = None,
     available_details: list[str] | None = None,
     wiki_reference_count: int = 0,
@@ -144,8 +146,8 @@ def build_place(
     return PlaceCandidate(
         name=name,
         formatted_address="Султанахмет, Стамбул",
-        latitude=41.0086,
-        longitude=28.9802,
+        latitude=latitude,
+        longitude=longitude,
         categories=(categories if categories is not None else ["tourism.sights"]),
         distance_meters=distance_meters,
         available_details=(available_details if available_details is not None else []),
@@ -154,16 +156,22 @@ def build_place(
     )
 
 
+def build_location() -> DestinationLocation:
+    """Создаёт тестовый центр направления."""
+
+    return DestinationLocation(
+        formatted_name="Стамбул, Турция",
+        latitude=41.0082,
+        longitude=28.9784,
+        source_place_id="istanbul-place-id",
+    )
+
+
 def build_context() -> TravelContext:
     """Создаёт готовый кешированный TravelContext."""
 
     return TravelContext(
-        location=DestinationLocation(
-            formatted_name="Стамбул, Турция",
-            latitude=41.0082,
-            longitude=28.9784,
-            source_place_id="istanbul-place-id",
-        ),
+        location=build_location(),
         requested_categories=[
             "tourism.sights",
             "entertainment.museum",
@@ -261,6 +269,7 @@ def test_selects_nearby_categories_and_documented_places() -> None:
 
     selected = select_place_candidates(
         places=places,
+        location=build_location(),
         requested_categories=[
             "tourism.sights",
             "entertainment.museum",
@@ -274,7 +283,7 @@ def test_selects_nearby_categories_and_documented_places() -> None:
     assert selected_ids[:3] == [
         "nearby-sight",
         "nearby-museum",
-        "nearby-restaurant",
+        "documented-place",
     ]
     assert "documented-place" in selected_ids
     assert len(selected) == 6
@@ -304,6 +313,7 @@ def test_deduplicates_places_by_source_place_id() -> None:
 
     selected = select_place_candidates(
         places=places,
+        location=build_location(),
         requested_categories=["tourism.sights"],
     )
 
@@ -312,6 +322,71 @@ def test_deduplicates_places_by_source_place_id() -> None:
         "unique-id",
     ]
     assert selected[0].name == "Первый объект"
+
+
+def test_balances_quality_and_geographic_cells() -> None:
+    """Проверяет баланс качества и географического разнообразия."""
+
+    places = [
+        build_place(
+            name=f"Центральное место {index}",
+            source_place_id=f"central-{index}",
+            distance_meters=float(index * 10),
+        )
+        for index in range(1, 4)
+    ]
+    places.extend(
+        [
+            build_place(
+                name="Документированное место в центре",
+                source_place_id="documented-center",
+                distance_meters=100.0,
+                wiki_reference_count=4,
+            ),
+            build_place(
+                name="Северный район",
+                source_place_id="north",
+                latitude=41.0382,
+                longitude=28.9784,
+                distance_meters=3_300.0,
+                wiki_reference_count=1,
+            ),
+            build_place(
+                name="Восточный район",
+                source_place_id="east",
+                latitude=41.0082,
+                longitude=29.0184,
+                distance_meters=3_350.0,
+                wiki_reference_count=1,
+            ),
+            build_place(
+                name="Западный район",
+                source_place_id="west",
+                latitude=41.0082,
+                longitude=28.9384,
+                distance_meters=3_350.0,
+                wiki_reference_count=1,
+            ),
+        ]
+    )
+
+    selected = select_place_candidates(
+        places=places,
+        location=build_location(),
+        requested_categories=["tourism.sights"],
+        limit=6,
+    )
+
+    selected_ids = {place.source_place_id for place in selected}
+
+    assert selected_ids == {
+        "central-1",
+        "central-2",
+        "documented-center",
+        "north",
+        "east",
+        "west",
+    }
 
 
 @pytest.mark.asyncio

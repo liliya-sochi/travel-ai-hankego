@@ -102,13 +102,17 @@ async def test_geocode_rejects_empty_result() -> None:
 async def test_search_places_skips_unnamed_objects() -> None:
     """Проверяет поиск мест и новые ranking-метаданные."""
 
+    requested_biases: list[str] = []
+    requested_limits: list[int] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v2/places"
         assert request.url.params["categories"] == (
             "tourism.sights,entertainment.museum"
         )
         assert request.url.params["filter"] == ("circle:28.9784,41.0082,15000")
-        assert request.url.params["limit"] == "60"
+        requested_biases.append(request.url.params["bias"])
+        requested_limits.append(int(request.url.params["limit"]))
 
         return httpx.Response(
             status_code=200,
@@ -119,12 +123,12 @@ async def test_search_places_skips_unnamed_objects() -> None:
                         "type": "Feature",
                         "properties": {
                             "name": "Айя-София",
-                            "formatted": ("Султанахмет, Стамбул"),
+                            "formatted": "Султанахмет, Стамбул",
                             "lat": 41.0086,
                             "lon": 28.9802,
                             "categories": [
                                 "tourism.sights",
-                                ("religion.place_of_worship"),
+                                "religion.place_of_worship",
                             ],
                             "distance": 43,
                             "details": [
@@ -134,10 +138,10 @@ async def test_search_places_skips_unnamed_objects() -> None:
                             ],
                             "wiki_and_media": {
                                 "wikidata": "Q12506",
-                                "wikipedia": ("tr:Ayasofya"),
-                                "wikimedia_commons": ("Category:Hagia Sophia"),
+                                "wikipedia": "tr:Ayasofya",
+                                "wikimedia_commons": "Category:Hagia Sophia",
                             },
-                            "place_id": ("hagia-sophia-id"),
+                            "place_id": "hagia-sophia-id",
                         },
                     },
                     {
@@ -148,7 +152,7 @@ async def test_search_places_skips_unnamed_objects() -> None:
                             "lon": 28.98,
                             "categories": ["tourism.sights"],
                             "distance": 100,
-                            "place_id": ("unnamed-place-id"),
+                            "place_id": "unnamed-place-id",
                         },
                     },
                 ],
@@ -170,16 +174,22 @@ async def test_search_places_skips_unnamed_objects() -> None:
                 "tourism.sights",
                 "entertainment.museum",
             ],
-            limit=60,
+            limit=120,
         )
 
+    assert len(requested_biases) == 5
+    assert len(set(requested_biases)) == 5
+    assert sorted(requested_limits) == [15, 15, 15, 15, 60]
     assert len(places) == 1
 
     place = places[0]
 
     assert place.name == "Айя-София"
     assert place.source_place_id == "hagia-sophia-id"
-    assert place.distance_meters == 43.0
+    assert place.distance_meters == pytest.approx(
+        157.0,
+        abs=2.0,
+    )
     assert place.available_details == [
         "details",
         "details.contact",
@@ -187,6 +197,84 @@ async def test_search_places_skips_unnamed_objects() -> None:
     ]
     assert place.wiki_reference_count == 3
     assert place.source == "geoapify"
+
+
+@pytest.mark.asyncio
+async def test_search_places_uses_successful_anchors_after_partial_error() -> None:
+    """Проверяет fail-open при ошибке одной точки поиска."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params["bias"] == "proximity:28.9784,41.0082":
+            return httpx.Response(
+                status_code=503,
+                json={"message": "temporarily unavailable"},
+            )
+
+        return httpx.Response(
+            status_code=200,
+            json={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "name": "Удалённый музей",
+                            "formatted": "Стамбул, Турция",
+                            "lat": 41.04,
+                            "lon": 29.01,
+                            "categories": ["entertainment.museum"],
+                            "place_id": "remote-museum-id",
+                        },
+                    }
+                ],
+            },
+        )
+
+    location = DestinationLocation(
+        formatted_name="Стамбул, Турция",
+        latitude=41.0082,
+        longitude=28.9784,
+        source_place_id="istanbul-place-id",
+    )
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        places = await client.search_places(
+            location=location,
+            categories=["entertainment.museum"],
+            limit=20,
+        )
+
+    assert [place.source_place_id for place in places] == [
+        "remote-museum-id",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_places_raises_if_all_anchors_fail() -> None:
+    """Проверяет ошибку, если не сработала ни одна точка поиска."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=503,
+            json={"message": "temporarily unavailable"},
+        )
+
+    location = DestinationLocation(
+        formatted_name="Стамбул, Турция",
+        latitude=41.0082,
+        longitude=28.9784,
+        source_place_id="istanbul-place-id",
+    )
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        with pytest.raises(GeoapifyServiceError):
+            await client.search_places(
+                location=location,
+                categories=["entertainment.museum"],
+                limit=20,
+            )
 
 
 @pytest.mark.asyncio
@@ -274,7 +362,7 @@ async def test_rejects_invalid_places_limit() -> None:
             await client.search_places(
                 location=location,
                 categories=["tourism.sights"],
-                limit=61,
+                limit=121,
             )
 
 
