@@ -40,7 +40,7 @@ The FastAPI backend:
 - extracts user intent and trip parameters through strict LLM Structured Output;
 - merges newly extracted values with the current trip draft;
 - determines which required fields are still missing;
-- resolves the destination and retrieves candidate places from Geoapify;
+- resolves the destination and retrieves candidate places from multiple geographic anchors through Geoapify;
 - deterministically ranks external place candidates before they reach the LLM;
 - retrieves detailed data for no more than five well-documented place candidates;
 - deterministically adds validated opening hours and provider websites after LLM generation;
@@ -88,8 +88,10 @@ Redis is used for:
 - Geoapify geocoding for destination resolution;
 - Geoapify Places API for nearby sights, museums, restaurants, parks, and entertainment;
 - deterministic mapping of user interests to place categories;
-- retrieval of an extended pool of up to 60 candidates per travel context;
-- hybrid selection of no more than 20 places based on category coverage, proximity, and data completeness;
+- parallel retrieval of up to 120 candidates from the destination center and four shifted geographic anchors;
+- deduplication of candidates returned by overlapping geographic searches;
+- partial fail-open handling when only some geographic searches are unavailable;
+- hybrid selection of no more than 20 places based on category coverage, proximity, data completeness, and geographic diversity;
 - Geoapify Place Details API integration for opening hours and provider websites;
 - concurrent retrieval of details for no more than five selected candidates;
 - fail-open handling when optional place details are unavailable;
@@ -274,7 +276,6 @@ For safety, the test database name must end with `_test`.
 ## Roadmap
 
 - enrichment of verified places with official references, prices, and schedules where reliable sources provide them;
-- geographic diversification of place candidates across multiple city districts;
 - itinerary editing without regenerating the entire trip;
 - production metrics and automated alerting;
 - expanded end-to-end testing of Telegram dialogue scenarios;

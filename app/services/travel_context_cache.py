@@ -12,7 +12,7 @@ from app.schemas.geoapify import TravelContext
 
 logger = logging.getLogger(__name__)
 
-CACHE_KEY_PREFIX = "cache:travel-context:v3"
+CACHE_KEY_PREFIX = "cache:travel-context:v4"
 
 
 class RedisCacheClient(Protocol):
