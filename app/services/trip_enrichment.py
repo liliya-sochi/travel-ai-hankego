@@ -7,6 +7,7 @@ TripPreferences -> Geoapify -> TravelContext -> LLM.
 
 import asyncio
 import logging
+import math
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -26,9 +27,11 @@ DEFAULT_PLACE_CATEGORIES = [
     "entertainment.museum",
 ]
 
-PROVIDER_PLACE_LIMIT = 60
+PROVIDER_PLACE_LIMIT = 120
 TRAVEL_CONTEXT_PLACE_LIMIT = 20
 PLACE_DETAILS_LIMIT = 5
+GEOGRAPHIC_CELL_SIZE_METERS = 2_000
+METERS_PER_LATITUDE_DEGREE = 111_320
 
 INTEREST_CATEGORY_RULES: tuple[
     tuple[tuple[str, ...], str],
@@ -203,6 +206,26 @@ def _quality_sort_key(
     )
 
 
+def _place_grid_cell(
+    *,
+    place: PlaceCandidate,
+    location: DestinationLocation,
+) -> tuple[int, int]:
+    """Определяет двухкилометровую ячейку относительно центра направления."""
+
+    latitude_meters = (place.latitude - location.latitude) * METERS_PER_LATITUDE_DEGREE
+    longitude_meters = (
+        (place.longitude - location.longitude)
+        * METERS_PER_LATITUDE_DEGREE
+        * math.cos(math.radians(location.latitude))
+    )
+
+    return (
+        math.floor(longitude_meters / GEOGRAPHIC_CELL_SIZE_METERS),
+        math.floor(latitude_meters / GEOGRAPHIC_CELL_SIZE_METERS),
+    )
+
+
 def _select_nearby_by_category(
     *,
     places: list[PlaceCandidate],
@@ -264,6 +287,7 @@ def _select_nearby_by_category(
 def select_place_candidates(
     *,
     places: list[PlaceCandidate],
+    location: DestinationLocation,
     requested_categories: list[str],
     limit: int = TRAVEL_CONTEXT_PLACE_LIMIT,
 ) -> list[PlaceCandidate]:
@@ -286,7 +310,7 @@ def select_place_candidates(
         unique_places.append(place)
 
     nearby_limit = min(
-        (limit + 1) // 2,
+        max(1, (limit + 3) // 4),
         len(unique_places),
     )
 
@@ -301,6 +325,48 @@ def select_place_candidates(
         unique_places,
         key=_quality_sort_key,
     )
+
+    quality_limit = min(
+        limit,
+        nearby_limit + max(1, limit // 2),
+    )
+
+    for place in quality_ordered_places:
+        if len(selected) == quality_limit:
+            break
+
+        if place.source_place_id in selected_ids:
+            continue
+
+        selected.append(place)
+        selected_ids.add(place.source_place_id)
+
+    selected_cells = {
+        _place_grid_cell(
+            place=place,
+            location=location,
+        )
+        for place in selected
+    }
+
+    for place in quality_ordered_places:
+        if len(selected) == limit:
+            break
+
+        if place.source_place_id in selected_ids:
+            continue
+
+        place_cell = _place_grid_cell(
+            place=place,
+            location=location,
+        )
+
+        if place_cell in selected_cells:
+            continue
+
+        selected.append(place)
+        selected_ids.add(place.source_place_id)
+        selected_cells.add(place_cell)
 
     for place in quality_ordered_places:
         if len(selected) == limit:
@@ -468,6 +534,7 @@ class TripEnrichmentService:
 
         places = select_place_candidates(
             places=place_candidates,
+            location=location,
             requested_categories=categories,
         )
 
