@@ -33,6 +33,10 @@ from app.schemas.trip import (
     TripPlanResponse,
     TripPreferences,
 )
+from app.services.place_geography import (
+    GEOGRAPHIC_CELL_SIZE_METERS,
+    format_place_area_group,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,7 @@ STRUCTURED_OUTPUT_NAME = "trip_plan"
 INTAKE_STRUCTURED_OUTPUT_NAME = "trip_intake"
 UNKNOWN_OBSERVABILITY_VALUE = "unknown"
 MAX_LOG_TEXT_LENGTH = 200
+MAX_LLM_AREA_GROUPS = 3
 
 
 SYSTEM_PROMPT = """
@@ -72,6 +77,10 @@ SYSTEM_PROMPT = """
   после проверки ответа;
 - wiki_reference_count отражает полноту справочных ссылок,
   но не является рейтингом, оценкой или популярностью места.
+- area_group — техническая двухкилометровая зона относительно
+  центра направления; одинаковая метка означает близкие места;
+- area_group не является названием реального района,
+  поэтому не показывай эту метку пользователю.
 
 Правила использования мест:
 - конкретные места можно выбирать только из travel_context.places;
@@ -88,6 +97,18 @@ SYSTEM_PROMPT = """
 - если source_place_id задан, place_name тоже должен быть задан;
 - если place_name задан, source_place_id тоже должен быть задан;
 - не называй конкретное место в description общей активности.
+
+Правила географии маршрута:
+- geographic_planning.target_area_count задаёт целевое количество
+  разных area_group для всего многодневного маршрута;
+- если target_area_count больше 1, выбирай конкретные места
+  как минимум из указанного количества разных area_group;
+- общая прогулка без source_place_id не считается посещением area_group;
+- конкретные места одного дня преимущественно группируй
+  в одной area_group, чтобы не создавать лишних переездов;
+- распределяй разные area_group по разным дням;
+- если пользователь явно ограничил поездку одним районом,
+  следуй этому ограничению вместо geographic_planning.
 
 Содержательные правила:
 - отвечай на русском языке;
@@ -118,6 +139,10 @@ SEMANTIC_RETRY_PROMPT = """
 - place_name точно соответствует выбранному source_place_id;
 - для общей активности source_place_id и place_name равны null;
 - не используй места вне travel_context.places.
+- выполни geographic_planning.target_area_count,
+  если пользователь явно не ограничил поездку одним районом;
+- не засчитывай общую активность без source_place_id
+  как посещение отдельной area_group.
 """.strip()
 
 
@@ -488,6 +513,32 @@ def _build_grounded_user_message(
             }
         },
     )
+
+    llm_places = llm_travel_context["places"]
+    area_groups: set[str] = set()
+
+    for place_data, place in zip(
+        llm_places,
+        travel_context.places,
+        strict=True,
+    ):
+        area_group = format_place_area_group(
+            place=place,
+            location=travel_context.location,
+        )
+        place_data["area_group"] = area_group
+        area_groups.add(area_group)
+
+    target_area_count = min(
+        preferences.duration_days,
+        len(area_groups),
+        MAX_LLM_AREA_GROUPS,
+    )
+
+    llm_travel_context["geographic_planning"] = {
+        "area_group_size_meters": GEOGRAPHIC_CELL_SIZE_METERS,
+        "target_area_count": target_area_count,
+    }
 
     return json.dumps(
         {
