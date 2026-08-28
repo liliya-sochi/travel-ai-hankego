@@ -17,12 +17,15 @@ from app.services.ai import (
 )
 
 
-def build_preferences() -> TripPreferences:
+def build_preferences(
+    *,
+    duration_days: int = 1,
+) -> TripPreferences:
     """Создаёт тестовые параметры поездки."""
 
     return TripPreferences(
         destination="Стамбул",
-        duration_days=1,
+        duration_days=duration_days,
         interests="История",
     )
 
@@ -107,8 +110,57 @@ def test_builds_grounded_user_message() -> None:
 
     assert len(llm_places) == 1
     assert llm_places[0]["source_place_id"] == ("hagia-sophia-id")
+    assert llm_places[0]["area_group"] == "area:0:0"
     assert "website" not in llm_places[0]
     assert "opening_hours" not in llm_places[0]
+    assert message["travel_context"]["geographic_planning"] == {
+        "area_group_size_meters": 2000,
+        "target_area_count": 1,
+    }
+
+
+def test_builds_multiday_geographic_planning_target() -> None:
+    """Передаёт LLM достижимое число географических зон."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Северный музей",
+                formatted_address="Шишли, Стамбул",
+                latitude=41.0442,
+                longitude=28.9784,
+                categories=["entertainment.museum"],
+                source_place_id="north-museum-id",
+            ),
+            PlaceCandidate(
+                name="Восточный музей",
+                formatted_address="Кадыкёй, Стамбул",
+                latitude=41.0082,
+                longitude=29.0260,
+                categories=["entertainment.museum"],
+                source_place_id="east-museum-id",
+            ),
+        ]
+    )
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(
+                duration_days=5,
+            ),
+            travel_context=context,
+        )
+    )
+
+    area_groups = {place["area_group"] for place in message["travel_context"]["places"]}
+
+    assert area_groups == {
+        "area:0:0",
+        "area:0:2",
+        "area:2:0",
+    }
+    assert message["travel_context"]["geographic_planning"]["target_area_count"] == 3
 
 
 def test_validates_and_converts_grounded_plan() -> None:

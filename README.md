@@ -42,6 +42,8 @@ The FastAPI backend:
 - determines which required fields are still missing;
 - resolves the destination and retrieves candidate places from multiple geographic anchors through Geoapify;
 - deterministically ranks external place candidates before they reach the LLM;
+- groups nearby candidates into centered two-kilometre planning areas;
+- gives the LLM an explicit geographic target for multi-day itineraries;
 - retrieves detailed data for no more than five well-documented place candidates;
 - deterministically adds validated opening hours and provider websites after LLM generation;
 - caches validated travel contexts in Redis to avoid repeated Geoapify requests;
@@ -92,6 +94,8 @@ Redis is used for:
 - deduplication of candidates returned by overlapping geographic searches;
 - partial fail-open handling when only some geographic searches are unavailable;
 - hybrid selection of no more than 20 places based on category coverage, proximity, data completeness, and geographic diversity;
+- centered two-kilometre area groups that keep nearby places together across coordinate quadrants;
+- an explicit multi-day area target passed to the LLM without exposing technical group labels to users;
 - Geoapify Place Details API integration for opening hours and provider websites;
 - concurrent retrieval of details for no more than five selected candidates;
 - fail-open handling when optional place details are unavailable;

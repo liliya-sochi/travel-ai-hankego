@@ -7,7 +7,6 @@ TripPreferences -> Geoapify -> TravelContext -> LLM.
 
 import asyncio
 import logging
-import math
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -19,6 +18,7 @@ from app.schemas.geoapify import (
 )
 from app.schemas.trip import TripPreferences
 from app.services.geoapify import GeoapifyServiceError
+from app.services.place_geography import calculate_place_grid_cell
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,6 @@ DEFAULT_PLACE_CATEGORIES = [
 PROVIDER_PLACE_LIMIT = 120
 TRAVEL_CONTEXT_PLACE_LIMIT = 20
 PLACE_DETAILS_LIMIT = 5
-GEOGRAPHIC_CELL_SIZE_METERS = 2_000
-METERS_PER_LATITUDE_DEGREE = 111_320
 
 INTEREST_CATEGORY_RULES: tuple[
     tuple[tuple[str, ...], str],
@@ -206,26 +204,6 @@ def _quality_sort_key(
     )
 
 
-def _place_grid_cell(
-    *,
-    place: PlaceCandidate,
-    location: DestinationLocation,
-) -> tuple[int, int]:
-    """Определяет двухкилометровую ячейку относительно центра направления."""
-
-    latitude_meters = (place.latitude - location.latitude) * METERS_PER_LATITUDE_DEGREE
-    longitude_meters = (
-        (place.longitude - location.longitude)
-        * METERS_PER_LATITUDE_DEGREE
-        * math.cos(math.radians(location.latitude))
-    )
-
-    return (
-        math.floor(longitude_meters / GEOGRAPHIC_CELL_SIZE_METERS),
-        math.floor(latitude_meters / GEOGRAPHIC_CELL_SIZE_METERS),
-    )
-
-
 def _select_nearby_by_category(
     *,
     places: list[PlaceCandidate],
@@ -342,7 +320,7 @@ def select_place_candidates(
         selected_ids.add(place.source_place_id)
 
     selected_cells = {
-        _place_grid_cell(
+        calculate_place_grid_cell(
             place=place,
             location=location,
         )
@@ -356,7 +334,7 @@ def select_place_candidates(
         if place.source_place_id in selected_ids:
             continue
 
-        place_cell = _place_grid_cell(
+        place_cell = calculate_place_grid_cell(
             place=place,
             location=location,
         )
