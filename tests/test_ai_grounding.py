@@ -85,7 +85,13 @@ def build_grounded_plan() -> dict[str, object]:
                         "description": ("Прогуляться по историческому центру."),
                     }
                 ],
-                "evening": [],
+                "evening": [
+                    {
+                        "source_place_id": None,
+                        "place_name": None,
+                        "description": "Отдохнуть в местном кафе.",
+                    }
+                ],
             }
         ],
     }
@@ -185,6 +191,7 @@ def test_validates_and_converts_grounded_plan() -> None:
         )
     ]
     assert result.days[0].afternoon == ["Прогуляться по историческому центру."]
+    assert result.days[0].evening == ["Отдохнуть в местном кафе."]
     assert result.practical_tips == [
         (
             "Часы работы и ссылки на сайты получены "
@@ -260,6 +267,77 @@ def test_rejects_llm_generated_practical_tips() -> None:
     plan["practical_tips"] = ["Непроверенный дресс-код."]
 
     with pytest.raises(ValueError):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(),
+            travel_context=build_travel_context(),
+        )
+
+
+@pytest.mark.parametrize(
+    "period_name",
+    [
+        "morning",
+        "afternoon",
+        "evening",
+    ],
+)
+def test_rejects_empty_day_period(
+    period_name: str,
+) -> None:
+    """Не разрешает оставлять часть дня без активностей."""
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    days[0][period_name] = []
+
+    with pytest.raises(
+        ValueError,
+        match="at least 1 item",
+    ):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(),
+            travel_context=build_travel_context(),
+        )
+
+
+def test_rejects_more_than_two_activities_per_period() -> None:
+    """Ограничивает перегрузку одного периода дня."""
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    morning = days[0]["morning"]
+
+    assert isinstance(morning, list)
+
+    morning.extend(
+        [
+            {
+                "source_place_id": None,
+                "place_name": None,
+                "description": "Прогуляться по площади.",
+            },
+            {
+                "source_place_id": None,
+                "place_name": None,
+                "description": "Осмотреть архитектуру района.",
+            },
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="at most 2 items",
+    ):
         _validate_grounded_trip_plan(
             json.dumps(plan, ensure_ascii=False),
             preferences=build_preferences(),

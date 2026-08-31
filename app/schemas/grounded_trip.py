@@ -73,9 +73,18 @@ class GroundedDayPlan(StrictSchema):
         min_length=1,
         max_length=255,
     )
-    morning: list[GroundedActivity]
-    afternoon: list[GroundedActivity]
-    evening: list[GroundedActivity]
+    morning: list[GroundedActivity] = Field(
+        min_length=1,
+        max_length=2,
+    )
+    afternoon: list[GroundedActivity] = Field(
+        min_length=1,
+        max_length=2,
+    )
+    evening: list[GroundedActivity] = Field(
+        min_length=1,
+        max_length=2,
+    )
 
 
 class GroundedTripPlanResponse(StrictSchema):
