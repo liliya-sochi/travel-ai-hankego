@@ -64,6 +64,14 @@ def test_format_opening_hours_keeps_unknown_syntax(
             ("morning", "afternoon"),
         ),
         (
+            "Mo-Su 09:00-18:30",
+            ("morning", "afternoon"),
+        ),
+        (
+            "Mo-Su 18:00-19:00",
+            ("evening",),
+        ),
+        (
             "Mo-Su 12:00-17:30",
             ("afternoon",),
         ),
