@@ -11,6 +11,8 @@ ALL_DAY_PERIODS: tuple[DayPeriod, ...] = (
     "evening",
 )
 
+MIN_PERIOD_OVERLAP_MINUTES = 60
+
 _DAY_PERIOD_MINUTES: dict[DayPeriod, tuple[int, int]] = {
     "morning": (6 * 60, 12 * 60),
     "afternoon": (12 * 60, 18 * 60),
@@ -184,10 +186,11 @@ def infer_available_periods(
         period
         for period in ALL_DAY_PERIODS
         if any(
-            _intervals_overlap(
+            _calculate_overlap_minutes(
                 open_interval,
                 _DAY_PERIOD_MINUTES[period],
             )
+            >= MIN_PERIOD_OVERLAP_MINUTES
             for open_interval in open_intervals
         )
     )
@@ -216,13 +219,16 @@ def _parse_clock_minutes(value: str) -> int | None:
     return hour * 60 + minute
 
 
-def _intervals_overlap(
+def _calculate_overlap_minutes(
     first: tuple[int, int],
     second: tuple[int, int],
-) -> bool:
-    """Проверяет наличие ненулевого пересечения двух интервалов."""
+) -> int:
+    """Return the overlap duration between two intervals in minutes."""
 
     first_start, first_end = first
     second_start, second_end = second
 
-    return first_start < second_end and first_end > second_start
+    overlap_start = max(first_start, second_start)
+    overlap_end = min(first_end, second_end)
+
+    return max(0, overlap_end - overlap_start)
