@@ -1,6 +1,21 @@
-"""Безопасное форматирование часов работы из данных OpenStreetMap."""
+"""Безопасная обработка часов работы из данных OpenStreetMap."""
 
 import re
+from typing import Literal
+
+DayPeriod = Literal["morning", "afternoon", "evening"]
+
+ALL_DAY_PERIODS: tuple[DayPeriod, ...] = (
+    "morning",
+    "afternoon",
+    "evening",
+)
+
+_DAY_PERIOD_MINUTES: dict[DayPeriod, tuple[int, int]] = {
+    "morning": (6 * 60, 12 * 60),
+    "afternoon": (12 * 60, 18 * 60),
+    "evening": (18 * 60, 24 * 60),
+}
 
 _DAY_NAMES = {
     "Mo": "пн",
@@ -32,6 +47,8 @@ _DAY_SCHEDULE_PATTERN = re.compile(
 )
 
 _TIME_ONLY_PATTERN = re.compile(rf"^{_TIME_LIST_PATTERN}$")
+
+_CLOCK_TIME_PATTERN = re.compile(r"^(?P<hour>\d{2}):(?P<minute>\d{2})$")
 
 
 def _format_days(days: str) -> str:
@@ -96,3 +113,116 @@ def format_opening_hours(opening_hours: str) -> str:
         formatted_segments.append(f"{formatted_days}: {formatted_schedule}")
 
     return "; ".join(formatted_segments)
+
+
+def infer_available_periods(
+    opening_hours: str | None,
+) -> tuple[DayPeriod, ...] | None:
+    """
+    Определяет допустимые периоды дня для планирования.
+
+    ``None`` означает, что расписание отсутствует или содержит
+    неподдерживаемый синтаксис. В этом случае планировщик не вводит
+    ограничение, чтобы неполные внешние данные не исключили место.
+    """
+
+    if opening_hours is None:
+        return None
+
+    normalized_hours = opening_hours.strip()
+
+    if not normalized_hours:
+        return None
+
+    if normalized_hours == "24/7":
+        return ALL_DAY_PERIODS
+
+    open_intervals: list[tuple[int, int]] = []
+
+    for segment in normalized_hours.split(";"):
+        normalized_segment = segment.strip()
+
+        if _TIME_ONLY_PATTERN.fullmatch(normalized_segment):
+            schedule = normalized_segment
+        else:
+            schedule_match = _DAY_SCHEDULE_PATTERN.fullmatch(normalized_segment)
+
+            if schedule_match is None:
+                return None
+
+            schedule = schedule_match.group("schedule")
+
+        if schedule == "off":
+            continue
+
+        for time_range in schedule.split(","):
+            start_text, end_text = time_range.strip().split(
+                "-",
+                maxsplit=1,
+            )
+            start_minutes = _parse_clock_minutes(start_text)
+            end_minutes = _parse_clock_minutes(end_text)
+
+            if start_minutes is None or end_minutes is None:
+                return None
+
+            if start_minutes == end_minutes:
+                return None
+
+            if start_minutes < end_minutes:
+                open_intervals.append((start_minutes, end_minutes))
+                continue
+
+            open_intervals.extend(
+                [
+                    (start_minutes, 24 * 60),
+                    (0, end_minutes),
+                ]
+            )
+
+    return tuple(
+        period
+        for period in ALL_DAY_PERIODS
+        if any(
+            _intervals_overlap(
+                open_interval,
+                _DAY_PERIOD_MINUTES[period],
+            )
+            for open_interval in open_intervals
+        )
+    )
+
+
+def _parse_clock_minutes(value: str) -> int | None:
+    """Преобразует корректное время OSM в минуты от начала суток."""
+
+    match = _CLOCK_TIME_PATTERN.fullmatch(value)
+
+    if match is None:
+        return None
+
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+
+    if minute > 59:
+        return None
+
+    if hour == 24:
+        return 24 * 60 if minute == 0 else None
+
+    if hour > 23:
+        return None
+
+    return hour * 60 + minute
+
+
+def _intervals_overlap(
+    first: tuple[int, int],
+    second: tuple[int, int],
+) -> bool:
+    """Проверяет наличие ненулевого пересечения двух интервалов."""
+
+    first_start, first_end = first
+    second_start, second_end = second
+
+    return first_start < second_end and first_end > second_start

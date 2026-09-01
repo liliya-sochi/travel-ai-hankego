@@ -117,6 +117,10 @@ def test_builds_grounded_user_message() -> None:
     assert len(llm_places) == 1
     assert llm_places[0]["source_place_id"] == ("hagia-sophia-id")
     assert llm_places[0]["area_group"] == "area:0:0"
+    assert llm_places[0]["available_periods"] == [
+        "morning",
+        "afternoon",
+    ]
     assert "website" not in llm_places[0]
     assert "opening_hours" not in llm_places[0]
     assert message["travel_context"]["geographic_planning"] == {
@@ -258,6 +262,69 @@ def test_rejects_wrong_name_for_valid_id() -> None:
             preferences=build_preferences(),
             travel_context=build_travel_context(),
         )
+
+
+def test_rejects_place_outside_available_periods() -> None:
+    """Не разрешает ставить закрытое вечером место в evening."""
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    days[0]["evening"] = [
+        {
+            "source_place_id": "hagia-sophia-id",
+            "place_name": "Айя-София",
+            "description": "Посетить музей.",
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="outside its available periods",
+    ):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(),
+            travel_context=build_travel_context(),
+        )
+
+
+def test_allows_any_period_when_schedule_is_unknown() -> None:
+    """Не ограничивает место при неподдерживаемом расписании."""
+
+    context = build_travel_context()
+    context.places[0].opening_hours = "sunrise-sunset"
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    days[0]["evening"] = [
+        {
+            "source_place_id": "hagia-sophia-id",
+            "place_name": "Айя-София",
+            "description": "Посетить музей.",
+        }
+    ]
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(),
+        travel_context=context,
+    )
+
+    assert result.days[0].evening == [
+        (
+            "Айя-София: Посетить музей. "
+            "Часы по данным Geoapify: sunrise-sunset. "
+            "Сайт из данных Geoapify: https://museum.example/"
+        )
+    ]
 
 
 def test_rejects_llm_generated_practical_tips() -> None:

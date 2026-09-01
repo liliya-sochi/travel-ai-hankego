@@ -22,7 +22,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from app.config import get_settings
-from app.schemas.geoapify import TravelContext
+from app.schemas.geoapify import PlaceCandidate, TravelContext
 from app.schemas.grounded_trip import (
     GroundedActivity,
     GroundedTripPlanResponse,
@@ -32,6 +32,10 @@ from app.schemas.trip import (
     TripIntakeExtraction,
     TripPlanResponse,
     TripPreferences,
+)
+from app.services.opening_hours import (
+    DayPeriod,
+    infer_available_periods,
 )
 from app.services.place_geography import (
     GEOGRAPHIC_CELL_SIZE_METERS,
@@ -81,6 +85,14 @@ SYSTEM_PROMPT = """
   центра направления; одинаковая метка означает близкие места;
 - area_group не является названием реального района,
   поэтому не показывай эту метку пользователю.
+- available_periods содержит допустимые периоды для места,
+  вычисленные приложением из проверенных часов работы;
+- если available_periods является null, расписание неизвестно
+  или слишком сложно для безопасного анализа — такое место
+  разрешено использовать в любом периоде;
+- если available_periods является пустым списком,
+  не выбирай это место;
+- не показывай available_periods пользователю.
 
 Правила использования мест:
 - конкретные места можно выбирать только из travel_context.places;
@@ -109,6 +121,16 @@ SYSTEM_PROMPT = """
 - распределяй разные area_group по разным дням;
 - если пользователь явно ограничил поездку одним районом,
   следуй этому ограничению вместо geographic_planning.
+
+Правила расписания:
+- конкретное место выбирай только для периода,
+  указанного в его available_periods;
+- morning соответствует значению morning, afternoon — afternoon,
+  evening — evening;
+- available_periods=null не создаёт ограничений;
+- не переноси конкретное место в запрещённый период;
+- общие активности без source_place_id можно использовать
+  в любом периоде.
 
 Содержательные правила:
 - отвечай на русском языке;
@@ -147,6 +169,10 @@ SEMANTIC_RETRY_PROMPT = """
   если пользователь явно не ограничил поездку одним районом;
 - не засчитывай общую активность без source_place_id
   как посещение отдельной area_group.
+- используй конкретное место только в периоде,
+  разрешённом его available_periods;
+- available_periods=null означает отсутствие ограничения,
+  а пустой список запрещает выбирать место.
 """.strip()
 
 
@@ -531,6 +557,7 @@ def _build_grounded_user_message(
             location=travel_context.location,
         )
         place_data["area_group"] = area_group
+        place_data["available_periods"] = infer_available_periods(place.opening_hours)
         area_groups.add(area_group)
 
     target_area_count = min(
@@ -670,22 +697,23 @@ def _validate_grounded_trip_plan(
 
     places_by_id = {place.source_place_id: place for place in travel_context.places}
 
-    allowed_places = {
-        source_place_id: place.name for source_place_id, place in places_by_id.items()
-    }
-
     for day in grounded_plan.days:
-        activities = [
-            *day.morning,
-            *day.afternoon,
-            *day.evening,
-        ]
+        period_activities: tuple[
+            tuple[DayPeriod, list[GroundedActivity]],
+            ...,
+        ] = (
+            ("morning", day.morning),
+            ("afternoon", day.afternoon),
+            ("evening", day.evening),
+        )
 
-        for activity in activities:
-            _validate_grounded_activity(
-                activity=activity,
-                allowed_places=allowed_places,
-            )
+        for period, activities in period_activities:
+            for activity in activities:
+                _validate_grounded_activity(
+                    activity=activity,
+                    places_by_id=places_by_id,
+                    period=period,
+                )
 
     return grounded_plan.to_trip_plan_response(
         practical_tips=_build_grounded_practical_tips(travel_context),
@@ -696,20 +724,26 @@ def _validate_grounded_trip_plan(
 def _validate_grounded_activity(
     *,
     activity: GroundedActivity,
-    allowed_places: dict[str, str],
+    places_by_id: dict[str, PlaceCandidate],
+    period: DayPeriod,
 ) -> None:
-    """Проверяет ID и точное имя конкретного места."""
+    """Проверяет ID, имя и допустимый период конкретного места."""
 
     if activity.source_place_id is None:
         return
 
-    expected_name = allowed_places.get(activity.source_place_id)
+    place = places_by_id.get(activity.source_place_id)
 
-    if expected_name is None:
+    if place is None:
         raise ValueError("LLM used a place ID outside travel context.")
 
-    if activity.place_name != expected_name:
+    if activity.place_name != place.name:
         raise ValueError("LLM place name does not match its place ID.")
+
+    available_periods = infer_available_periods(place.opening_hours)
+
+    if available_periods is not None and period not in available_periods:
+        raise ValueError("LLM used a place outside its available periods.")
 
 
 async def _request_model(
