@@ -99,7 +99,7 @@ Redis is used for:
 - centered two-kilometre area groups that keep nearby places together across coordinate quadrants;
 - an explicit multi-day area target passed to the LLM without exposing technical group labels to users;
 - Geoapify Place Details API integration for opening hours and provider websites;
-- safe inference of morning, afternoon, and evening availability from simple OSM opening-hours syntax;
+- safe inference of morning, afternoon, and evening availability from common OSM opening-hours syntax, including calendar exceptions;
 - concurrent retrieval of details for no more than five selected candidates;
 - fail-open handling when optional place details are unavailable;
 - explicit labeling of provider websites without claiming that they are official;
