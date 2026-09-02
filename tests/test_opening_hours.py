@@ -92,6 +92,31 @@ def test_format_opening_hours_keeps_unknown_syntax(
             ("morning", "afternoon"),
         ),
         (
+            "We-Su 9:00-17:00",
+            ("morning", "afternoon"),
+        ),
+        (
+            "Tu off; Jan 1 off; May 1 off; Dec 25 off; Tu-Su 09:30-18:15",
+            ("morning", "afternoon"),
+        ),
+        (
+            "Mo-Su 09:30-19:30; Dec 24,31 09:30-14:00; "
+            "Jan 01 off; May 01 off; Dec 25 off",
+            ("morning", "afternoon", "evening"),
+        ),
+        (
+            "Tu-Fr, Su 11:00-19:00; Sa 11:00-22:00; May 1 off; Dec 25 off",
+            ("morning", "afternoon", "evening"),
+        ),
+        (
+            "Mo-Su,PH 10:00-19:00; Dec 31 10:00-17:30; Jan 01 off",
+            ("morning", "afternoon", "evening"),
+        ),
+        (
+            "Sa-Su, Tu-Th 10:00-18:00; Fr,We[2] 10:00-20:00; Mo off",
+            ("morning", "afternoon", "evening"),
+        ),
+        (
             "Mo-Su off",
             (),
         ),
@@ -116,6 +141,7 @@ def test_infer_available_periods_from_simple_osm_syntax(
         "sunrise-sunset",
         "Mo-Fr sunrise-sunset",
         "Mo-Su 25:00-26:00",
+        "Mo-Su 109:00-17:00",
         "Mo-Su 09:00-09:00",
     ],
 )

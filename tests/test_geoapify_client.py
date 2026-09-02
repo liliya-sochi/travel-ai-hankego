@@ -323,6 +323,50 @@ async def test_get_place_details() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "opening_hours",
+    [
+        "none",
+        "unknown",
+        "   ",
+    ],
+)
+async def test_get_place_details_normalizes_missing_opening_hours(
+    opening_hours: str,
+) -> None:
+    """Checks normalization of missing provider schedules."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "feature_type": "details",
+                            "name": "Test museum",
+                            "formatted": "Paris, France",
+                            "lat": 48.8566,
+                            "lon": 2.3522,
+                            "place_id": "details-feature-place-id",
+                            "opening_hours": opening_hours,
+                        },
+                    }
+                ],
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        details = await client.get_place_details("museum-place-id")
+
+    assert details.opening_hours is None
+
+
+@pytest.mark.asyncio
 async def test_get_place_details_rejects_missing_details() -> None:
     """Проверяет ответ без объекта feature_type=details."""
 

@@ -37,7 +37,7 @@ _DAY_LIST_PATTERN = (
     rf"(?:\s*,\s*{_DAY_GROUP_PATTERN})*"
 )
 
-_TIME_RANGE_PATTERN = r"\d{2}:\d{2}-\d{2}:\d{2}"
+_TIME_RANGE_PATTERN = r"\d{1,2}:\d{2}-\d{1,2}:\d{2}"
 _TIME_LIST_PATTERN = (
     rf"{_TIME_RANGE_PATTERN}"
     rf"(?:\s*,\s*{_TIME_RANGE_PATTERN})*"
@@ -50,7 +50,11 @@ _DAY_SCHEDULE_PATTERN = re.compile(
 
 _TIME_ONLY_PATTERN = re.compile(rf"^{_TIME_LIST_PATTERN}$")
 
-_CLOCK_TIME_PATTERN = re.compile(r"^(?P<hour>\d{2}):(?P<minute>\d{2})$")
+_SCHEDULE_SUFFIX_PATTERN = re.compile(
+    rf"(?:^|\s)(?P<schedule>off|{_TIME_LIST_PATTERN})$"
+)
+
+_CLOCK_TIME_PATTERN = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})$")
 
 
 def _format_days(days: str) -> str:
@@ -150,7 +154,10 @@ def infer_available_periods(
             schedule_match = _DAY_SCHEDULE_PATTERN.fullmatch(normalized_segment)
 
             if schedule_match is None:
-                return None
+                schedule_match = _SCHEDULE_SUFFIX_PATTERN.search(normalized_segment)
+
+                if schedule_match is None:
+                    return None
 
             schedule = schedule_match.group("schedule")
 

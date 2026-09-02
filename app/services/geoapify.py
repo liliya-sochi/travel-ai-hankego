@@ -154,6 +154,22 @@ def _normalize_website(
     return normalized_value
 
 
+def _normalize_opening_hours(
+    value: str | None,
+) -> str | None:
+    """Convert provider sentinel values into missing schedules."""
+
+    normalized_value = _normalize_optional_text(value)
+
+    if normalized_value is None:
+        return None
+
+    if normalized_value.casefold() in {"none", "unknown"}:
+        return None
+
+    return normalized_value
+
+
 class GeoapifyServiceError(Exception):
     """Безопасная ошибка интеграции с Geoapify."""
 
@@ -515,5 +531,5 @@ class GeoapifyClient:
             # другой place_id для того же физического места.
             source_place_id=normalized_place_id,
             website=_normalize_website(properties.website),
-            opening_hours=_normalize_optional_text(properties.opening_hours),
+            opening_hours=_normalize_opening_hours(properties.opening_hours),
         )
