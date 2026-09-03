@@ -210,6 +210,26 @@ def test_validates_and_converts_grounded_plan() -> None:
     ]
 
 
+def test_labels_google_opening_hours_and_adds_provider_tip() -> None:
+    """Показывает реальный источник fallback-расписания."""
+
+    context = build_travel_context()
+    context.places[0].opening_hours_source = "google"
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(build_grounded_plan(), ensure_ascii=False),
+        preferences=build_preferences(),
+        travel_context=context,
+    )
+
+    assert "Часы по данным Google Maps" in result.days[0].morning[0]
+    assert result.practical_tips[0] == (
+        "Часы работы получены из Geoapify/OSM и Google Maps, "
+        "а ссылки на сайты — из Geoapify/OSM; данные могут быть "
+        "устаревшими, проверяйте их перед посещением."
+    )
+
+
 def test_rejects_unknown_place_id() -> None:
     """Проверяет запрет места вне TravelContext."""
 

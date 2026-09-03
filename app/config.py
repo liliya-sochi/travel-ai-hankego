@@ -7,8 +7,9 @@
 """
 
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +43,27 @@ class Settings(BaseSettings):
         default=30.0,
         ge=1.0,
         le=60.0,
+    )
+
+    # Google используется только как ограниченный fallback,
+    # когда Geoapify не вернул расписание режимного объекта.
+    google_places_fallback_enabled: bool = False
+    google_places_base_url: str = "https://places.googleapis.com"
+    google_places_api_key: SecretStr | None = None
+    google_places_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=30.0,
+    )
+    google_places_monthly_lookup_limit: int = Field(
+        default=900,
+        ge=1,
+        le=1000,
+    )
+    google_places_fallback_limit_per_trip: int = Field(
+        default=2,
+        ge=1,
+        le=5,
     )
 
     # Время хранения туристического контекста в Redis.
@@ -115,6 +137,17 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_google_places_configuration(self) -> Self:
+        """Не разрешает включить платный fallback без API-ключа."""
+
+        if self.google_places_fallback_enabled and self.google_places_api_key is None:
+            raise ValueError(
+                "GOOGLE_PLACES_API_KEY is required when fallback is enabled."
+            )
+
+        return self
 
 
 @lru_cache

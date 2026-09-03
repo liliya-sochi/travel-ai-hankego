@@ -198,7 +198,12 @@ def _format_activity(
 
     if place.opening_hours is not None:
         formatted_opening_hours = format_opening_hours(place.opening_hours)
-        activity_parts.append(f"Часы по данным Geoapify: {formatted_opening_hours}.")
+        source_name = (
+            "Google Maps" if place.opening_hours_source == "google" else "Geoapify"
+        )
+        activity_parts.append(
+            f"Часы по данным {source_name}: {formatted_opening_hours}."
+        )
 
     if place.website is not None:
         activity_parts.append(f"Сайт из данных Geoapify: {place.website}")

@@ -539,6 +539,7 @@ def _build_grounded_user_message(
                 "__all__": {
                     "website",
                     "opening_hours",
+                    "opening_hours_source",
                 }
             }
         },
@@ -659,12 +660,26 @@ def _build_grounded_practical_tips(
     самому объекту или его управляющей организации.
     """
 
-    return [
-        (
+    uses_google_hours = any(
+        place.opening_hours is not None and place.opening_hours_source == "google"
+        for place in travel_context.places
+    )
+
+    if uses_google_hours:
+        provider_tip = (
+            "Часы работы получены из Geoapify/OSM и Google Maps, "
+            "а ссылки на сайты — из Geoapify/OSM; данные могут быть "
+            "устаревшими, проверяйте их перед посещением."
+        )
+    else:
+        provider_tip = (
             "Часы работы и ссылки на сайты получены "
             "из данных Geoapify/OSM и могут быть устаревшими; "
             "проверяйте их перед посещением."
-        ),
+        )
+
+    return [
+        provider_tip,
         (
             "Точные цены и расписания могут измениться; "
             "проверяйте их непосредственно перед поездкой."
