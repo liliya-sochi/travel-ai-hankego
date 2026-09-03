@@ -13,6 +13,10 @@ from app.config import get_settings
 from app.core.redis import get_redis_client
 from app.database import engine
 from app.services.geoapify import GeoapifyClient
+from app.services.google_places import (
+    GooglePlacesClient,
+    GooglePlacesMonthlyBudget,
+)
 from app.services.health import HealthService
 from app.services.rate_limit import (
     TripIntakeRateLimiter,
@@ -121,7 +125,32 @@ async def get_trip_enrichment_service(
             base_url=settings.geoapify_base_url,
         )
 
+        google_places_client = None
+        google_places_budget = None
+
+        if settings.google_places_fallback_enabled:
+            google_api_key = settings.google_places_api_key
+
+            if google_api_key is None:
+                raise RuntimeError("Google Places API key is not configured.")
+
+            google_places_client = GooglePlacesClient(
+                client=http_client,
+                api_key=google_api_key,
+                base_url=settings.google_places_base_url,
+                timeout_seconds=settings.google_places_timeout_seconds,
+            )
+            google_places_budget = GooglePlacesMonthlyBudget(
+                redis_client=redis_client,
+                monthly_limit=settings.google_places_monthly_lookup_limit,
+            )
+
         yield TripEnrichmentService(
             places_provider=geoapify_client,
             travel_context_cache=travel_context_cache,
+            opening_hours_fallback_provider=google_places_client,
+            opening_hours_budget=google_places_budget,
+            opening_hours_fallback_limit=(
+                settings.google_places_fallback_limit_per_trip
+            ),
         )

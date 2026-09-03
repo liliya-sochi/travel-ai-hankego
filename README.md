@@ -100,6 +100,10 @@ Redis is used for:
 - an explicit multi-day area target passed to the LLM without exposing technical group labels to users;
 - Geoapify Place Details API integration for opening hours and provider websites;
 - safe inference of morning, afternoon, and evening availability from common OSM opening-hours syntax, including calendar exceptions;
+- opt-in Google Places fallback only for schedule-sensitive venues whose Geoapify opening hours are missing;
+- deterministic category filtering, a per-trip cap, and a global monthly Redis budget for Google lookups;
+- fail-closed Google budget enforcement and fail-open itinerary generation when the optional fallback is unavailable;
+- Google opening hours are applied after the Geoapify cache and are not persisted in the travel-context cache;
 - concurrent retrieval of details for no more than five selected candidates;
 - fail-open handling when optional place details are unavailable;
 - explicit labeling of provider websites without claiming that they are official;
@@ -158,6 +162,7 @@ Redis is used for:
 - aiogram 3
 - httpx
 - Geoapify Geocoding, Places, and Place Details APIs
+- Google Places API (New), optional opening-hours fallback
 - pytest
 - uv
 - systemd

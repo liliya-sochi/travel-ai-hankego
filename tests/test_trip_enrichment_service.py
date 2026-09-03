@@ -12,12 +12,55 @@ from app.schemas.geoapify import (
 )
 from app.schemas.trip import TripPreferences
 from app.services.geoapify import GeoapifyServiceError
+from app.services.google_places import GooglePlacesServiceError
 from app.services.trip_enrichment import (
     TripEnrichmentError,
     TripEnrichmentService,
+    requires_opening_hours_fallback,
     select_place_candidates,
     select_place_categories,
 )
+
+
+class FakeOpeningHoursFallbackProvider:
+    """Управляемый резервный источник расписаний."""
+
+    def __init__(
+        self,
+        *,
+        hours: dict[str, str | None] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.hours = hours or {}
+        self.error = error
+        self.received_place_ids: list[str] = []
+
+    async def get_opening_hours(
+        self,
+        place: PlaceCandidate,
+    ) -> str | None:
+        """Возвращает подготовленное расписание."""
+
+        self.received_place_ids.append(place.source_place_id)
+
+        if self.error is not None:
+            raise self.error
+
+        return self.hours.get(place.source_place_id)
+
+
+class FakeOpeningHoursBudget:
+    """Считает попытки резервирования Google-запросов."""
+
+    def __init__(self, *, allowed: bool = True) -> None:
+        self.allowed = allowed
+        self.calls = 0
+
+    async def try_acquire(self) -> bool:
+        """Возвращает заданное решение."""
+
+        self.calls += 1
+        return self.allowed
 
 
 class FakePlacesProvider:
@@ -609,4 +652,142 @@ async def test_place_details_error_does_not_cancel_enrichment() -> None:
         "hagia-sophia-id",
     ]
     assert context.places[0].website is None
+    assert context.places[0].opening_hours is None
+
+
+@pytest.mark.parametrize(
+    ("categories", "expected"),
+    [
+        (["entertainment.museum"], True),
+        (["building.tourism"], True),
+        (["tourism.sights.castle"], True),
+        (["tourism.sights.memorial.necropolis"], True),
+        (["fee", "tourism.sights.archaeological_site"], True),
+        (["tourism.sights.square"], False),
+        (["tourism.sights.memorial.monument"], False),
+    ],
+)
+def test_selects_only_schedule_sensitive_fallback_categories(
+    categories: list[str],
+    expected: bool,
+) -> None:
+    """Проверяет фильтр, полученный из аудита пяти направлений."""
+
+    place = build_place(
+        categories=categories,
+        available_details=["details"],
+    )
+
+    assert requires_opening_hours_fallback(place) is expected
+
+
+def test_does_not_request_fallback_for_existing_hours() -> None:
+    """Geoapify всегда имеет приоритет перед Google."""
+
+    place = build_place(
+        categories=["entertainment.museum"],
+        available_details=["details"],
+    ).model_copy(update={"opening_hours": "Mo-Fr 09:00-17:00"})
+
+    assert requires_opening_hours_fallback(place) is False
+
+
+@pytest.mark.asyncio
+async def test_enriches_cached_context_with_google_hours_without_saving_them() -> None:
+    """Добавляет fallback после чтения кеша и не записывает Google-данные."""
+
+    museum = build_place(
+        name="Военный музей",
+        source_place_id="museum-id",
+        categories=["entertainment.museum"],
+        available_details=["details", "details.contact"],
+    )
+    square = build_place(
+        name="Историческая площадь",
+        source_place_id="square-id",
+        categories=["tourism.sights.square"],
+        available_details=["details"],
+    )
+    cached_context = build_context().model_copy(update={"places": [museum, square]})
+    cache = FakeTravelContextCache(cached_context=cached_context)
+    fallback_provider = FakeOpeningHoursFallbackProvider(
+        hours={"museum-id": "We-Su 09:00-17:00"}
+    )
+    budget = FakeOpeningHoursBudget()
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=cache,
+        opening_hours_fallback_provider=fallback_provider,
+        opening_hours_budget=budget,
+    )
+
+    context = await service.enrich(
+        TripPreferences(
+            destination="Стамбул",
+            duration_days=2,
+        )
+    )
+
+    places_by_id = {place.source_place_id: place for place in context.places}
+
+    assert fallback_provider.received_place_ids == ["museum-id"]
+    assert budget.calls == 1
+    assert places_by_id["museum-id"].opening_hours == "We-Su 09:00-17:00"
+    assert places_by_id["museum-id"].opening_hours_source == "google"
+    assert places_by_id["square-id"].opening_hours is None
+    assert cache.saved_context is None
+    assert cached_context.places[0].opening_hours is None
+
+
+@pytest.mark.asyncio
+async def test_budget_denial_skips_google_fallback() -> None:
+    """Не вызывает Google после исчерпания месячного лимита."""
+
+    museum = build_place(
+        categories=["entertainment.museum"],
+        available_details=["details"],
+    )
+    cache = FakeTravelContextCache(
+        cached_context=build_context().model_copy(update={"places": [museum]})
+    )
+    fallback_provider = FakeOpeningHoursFallbackProvider()
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=cache,
+        opening_hours_fallback_provider=fallback_provider,
+        opening_hours_budget=FakeOpeningHoursBudget(allowed=False),
+    )
+
+    context = await service.enrich(
+        TripPreferences(destination="Стамбул", duration_days=1)
+    )
+
+    assert fallback_provider.received_place_ids == []
+    assert context.places[0].opening_hours is None
+
+
+@pytest.mark.asyncio
+async def test_google_error_does_not_cancel_trip_enrichment() -> None:
+    """Ошибка необязательного fallback не отменяет маршрут."""
+
+    museum = build_place(
+        categories=["entertainment.museum"],
+        available_details=["details"],
+    )
+    cache = FakeTravelContextCache(
+        cached_context=build_context().model_copy(update={"places": [museum]})
+    )
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=cache,
+        opening_hours_fallback_provider=FakeOpeningHoursFallbackProvider(
+            error=GooglePlacesServiceError("unavailable")
+        ),
+        opening_hours_budget=FakeOpeningHoursBudget(),
+    )
+
+    context = await service.enrich(
+        TripPreferences(destination="Стамбул", duration_days=1)
+    )
+
     assert context.places[0].opening_hours is None

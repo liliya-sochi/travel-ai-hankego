@@ -18,6 +18,10 @@ from app.schemas.geoapify import (
 )
 from app.schemas.trip import TripPreferences
 from app.services.geoapify import GeoapifyServiceError
+from app.services.google_places import (
+    GooglePlacesBudgetUnavailableError,
+    GooglePlacesServiceError,
+)
 from app.services.place_geography import calculate_place_grid_cell
 
 logger = logging.getLogger(__name__)
@@ -30,6 +34,13 @@ DEFAULT_PLACE_CATEGORIES = [
 PROVIDER_PLACE_LIMIT = 120
 TRAVEL_CONTEXT_PLACE_LIMIT = 20
 PLACE_DETAILS_LIMIT = 5
+
+SCHEDULE_SENSITIVE_CATEGORY_PREFIXES = (
+    "entertainment.museum",
+    "building.tourism",
+    "tourism.sights.castle",
+    "tourism.sights.memorial.necropolis",
+)
 
 INTEREST_CATEGORY_RULES: tuple[
     tuple[tuple[str, ...], str],
@@ -127,6 +138,27 @@ class TravelContextCache(Protocol):
         context: TravelContext,
     ) -> None:
         """Сохраняет проверенный контекст."""
+
+        ...
+
+
+class OpeningHoursFallbackProvider(Protocol):
+    """Контракт резервного источника часов работы."""
+
+    async def get_opening_hours(
+        self,
+        place: PlaceCandidate,
+    ) -> str | None:
+        """Возвращает расписание совпавшего места или ``None``."""
+
+        ...
+
+
+class OpeningHoursBudget(Protocol):
+    """Контракт глобального ограничителя платных запросов."""
+
+    async def try_acquire(self) -> bool:
+        """Резервирует один запрос, если месячный лимит не исчерпан."""
 
         ...
 
@@ -399,6 +431,25 @@ def select_place_details_candidates(
     )[:limit]
 
 
+def requires_opening_hours_fallback(place: PlaceCandidate) -> bool:
+    """Выбирает режимные объекты без расписания Geoapify."""
+
+    if place.opening_hours is not None:
+        return False
+
+    for category in place.categories:
+        if any(
+            category == prefix or category.startswith(f"{prefix}.")
+            for prefix in SCHEDULE_SENSITIVE_CATEGORY_PREFIXES
+        ):
+            return True
+
+    return (
+        "fee" in place.categories
+        and "tourism.sights.archaeological_site" in place.categories
+    )
+
+
 class TripEnrichmentService:
     """Собирает проверенный контекст для генерации маршрута."""
 
@@ -406,9 +457,19 @@ class TripEnrichmentService:
         self,
         places_provider: PlacesDataProvider,
         travel_context_cache: TravelContextCache | None = None,
+        opening_hours_fallback_provider: OpeningHoursFallbackProvider | None = None,
+        opening_hours_budget: OpeningHoursBudget | None = None,
+        opening_hours_fallback_limit: int = 2,
     ) -> None:
         self._places_provider = places_provider
         self._travel_context_cache = travel_context_cache
+        self._opening_hours_fallback_provider = opening_hours_fallback_provider
+        self._opening_hours_budget = opening_hours_budget
+
+        if opening_hours_fallback_limit <= 0:
+            raise ValueError("Opening hours fallback limit must be positive.")
+
+        self._opening_hours_fallback_limit = opening_hours_fallback_limit
 
     async def _get_place_details_or_none(
         self,
@@ -468,11 +529,89 @@ class TripEnrichmentService:
                         **place.model_dump(),
                         "website": details.website,
                         "opening_hours": details.opening_hours,
+                        "opening_hours_source": "geoapify",
                     }
                 )
             )
 
         return enriched_places
+
+    async def _enrich_missing_opening_hours(
+        self,
+        context: TravelContext,
+    ) -> TravelContext:
+        """Добавляет Google-часы без сохранения Google-данных в кеш."""
+
+        provider = self._opening_hours_fallback_provider
+        budget = self._opening_hours_budget
+
+        if provider is None or budget is None:
+            return context
+
+        detail_candidates = select_place_details_candidates(
+            places=context.places,
+        )
+        fallback_candidates = [
+            place
+            for place in detail_candidates
+            if requires_opening_hours_fallback(place)
+        ][: self._opening_hours_fallback_limit]
+
+        allowed_candidates: list[PlaceCandidate] = []
+
+        for place in fallback_candidates:
+            try:
+                is_allowed = await budget.try_acquire()
+            except GooglePlacesBudgetUnavailableError:
+                logger.warning("Google Places budget limiter is unavailable")
+                break
+
+            if not is_allowed:
+                logger.warning("Google Places monthly lookup limit reached")
+                break
+
+            allowed_candidates.append(place)
+
+        fallback_results = await asyncio.gather(
+            *(provider.get_opening_hours(place) for place in allowed_candidates),
+            return_exceptions=True,
+        )
+        fallback_hours_by_place_id: dict[str, str] = {}
+
+        for place, result in zip(
+            allowed_candidates,
+            fallback_results,
+            strict=True,
+        ):
+            if isinstance(result, GooglePlacesServiceError):
+                logger.warning(
+                    "Failed to load Google Places opening hours",
+                    extra={"source_place_id": place.source_place_id},
+                )
+                continue
+
+            if isinstance(result, BaseException):
+                raise result
+
+            if result is not None:
+                fallback_hours_by_place_id[place.source_place_id] = result
+
+        if not fallback_hours_by_place_id:
+            return context
+
+        enriched_places = [
+            place.model_copy(
+                update={
+                    "opening_hours": fallback_hours_by_place_id[place.source_place_id],
+                    "opening_hours_source": "google",
+                }
+            )
+            if place.source_place_id in fallback_hours_by_place_id
+            else place
+            for place in context.places
+        ]
+
+        return context.model_copy(update={"places": enriched_places})
 
     async def enrich(
         self,
@@ -489,7 +628,7 @@ class TripEnrichmentService:
             )
 
             if cached_context is not None:
-                return cached_context
+                return await self._enrich_missing_opening_hours(cached_context)
 
         try:
             location = await self._places_provider.geocode_destination(
@@ -532,4 +671,4 @@ class TripEnrichmentService:
                 context=context,
             )
 
-        return context
+        return await self._enrich_missing_opening_hours(context)
