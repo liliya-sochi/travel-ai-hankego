@@ -196,6 +196,16 @@ def _format_activity(
 
     activity_parts = [f"{place.name}: {formatted_description}"]
 
+    if place.location_source == "google":
+        formatted_address = place.formatted_address
+
+        if not formatted_address.endswith((".", "!", "?")):
+            formatted_address = f"{formatted_address}."
+
+        activity_parts.append(
+            f"Актуальный адрес по данным Google Maps: {formatted_address}"
+        )
+
     if place.opening_hours is not None:
         formatted_opening_hours = format_opening_hours(place.opening_hours)
         source_name = (

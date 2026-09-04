@@ -218,6 +218,7 @@ class PlaceCandidate(HankeGoGeoSchema):
         max_length=1000,
     )
     opening_hours_source: Literal["geoapify", "google"] = "geoapify"
+    location_source: Literal["geoapify", "google"] = "geoapify"
     source_place_id: str = Field(
         min_length=1,
         max_length=500,

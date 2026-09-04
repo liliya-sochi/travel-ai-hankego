@@ -230,6 +230,34 @@ def test_labels_google_opening_hours_and_adds_provider_tip() -> None:
     )
 
 
+def test_formats_verified_google_relocation_address() -> None:
+    """Показывает проверенный актуальный адрес пользователю."""
+
+    context = build_travel_context()
+    context.places[0].formatted_address = "Новый адрес музея, Стамбул"
+    context.places[0].location_source = "google"
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(
+            build_grounded_plan(),
+            ensure_ascii=False,
+        ),
+        preferences=build_preferences(),
+        travel_context=context,
+    )
+
+    assert result.days[0].morning == [
+        (
+            "Айя-София: Осмотреть здание и его интерьеры. "
+            "Актуальный адрес по данным Google Maps: "
+            "Новый адрес музея, Стамбул. "
+            "Часы по данным Geoapify: пн–вс: 09:00–18:00. "
+            "Сайт из данных Geoapify: "
+            "https://museum.example/"
+        )
+    ]
+
+
 def test_marks_google_closed_place_unavailable_for_llm() -> None:
     """Передаёт закрытому месту пустой список допустимых периодов."""
 

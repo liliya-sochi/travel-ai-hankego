@@ -52,6 +52,17 @@ class GooglePlace(GooglePlacesResponseSchema):
     id: str = Field(min_length=1, max_length=500)
     display_name: GoogleLocalizedText = Field(alias="displayName")
     location: GoogleLocation
+    formatted_address: str | None = Field(
+        default=None,
+        alias="formattedAddress",
+        max_length=1000,
+    )
+    types: list[str] = Field(default_factory=list)
+    website_uri: str | None = Field(
+        default=None,
+        alias="websiteUri",
+        max_length=2000,
+    )
     business_status: str | None = Field(
         default=None,
         alias="businessStatus",

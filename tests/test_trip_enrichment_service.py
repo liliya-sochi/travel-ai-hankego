@@ -23,30 +23,46 @@ from app.services.trip_enrichment import (
 
 
 class FakeOpeningHoursFallbackProvider:
-    """Управляемый резервный источник расписаний."""
+    """Управляемый резервный источник данных места."""
 
     def __init__(
         self,
         *,
         hours: dict[str, str | None] | None = None,
+        updates: dict[str, dict[str, object]] | None = None,
         error: Exception | None = None,
     ) -> None:
         self.hours = hours or {}
+        self.updates = updates or {}
         self.error = error
         self.received_place_ids: list[str] = []
 
-    async def get_opening_hours(
+    async def enrich_place(
         self,
         place: PlaceCandidate,
-    ) -> str | None:
-        """Возвращает подготовленное расписание."""
+    ) -> PlaceCandidate:
+        """Возвращает подготовленное дополнение места."""
 
         self.received_place_ids.append(place.source_place_id)
 
         if self.error is not None:
             raise self.error
 
-        return self.hours.get(place.source_place_id)
+        place_updates = dict(self.updates.get(place.source_place_id, {}))
+        opening_hours = self.hours.get(place.source_place_id)
+
+        if opening_hours is not None:
+            place_updates.update(
+                {
+                    "opening_hours": opening_hours,
+                    "opening_hours_source": "google",
+                }
+            )
+
+        if not place_updates:
+            return place
+
+        return place.model_copy(update=place_updates)
 
 
 class FakeOpeningHoursBudget:
@@ -737,6 +753,61 @@ async def test_enriches_cached_context_with_google_hours_without_saving_them() -
     assert places_by_id["square-id"].opening_hours is None
     assert cache.saved_context is None
     assert cached_context.places[0].opening_hours is None
+
+
+@pytest.mark.asyncio
+async def test_applies_relocation_only_to_current_context() -> None:
+    """Переносит место после кеша и не меняет кешированные данные."""
+
+    museum = build_place(
+        name="Полицейский музей",
+        source_place_id="museum-id",
+        categories=["entertainment.museum"],
+        available_details=["details", "details.contact"],
+    ).model_copy(
+        update={
+            "website": "https://museum.example/current",
+        }
+    )
+    cached_context = build_context().model_copy(update={"places": [museum]})
+    cache = FakeTravelContextCache(cached_context=cached_context)
+    fallback_provider = FakeOpeningHoursFallbackProvider(
+        updates={
+            "museum-id": {
+                "formatted_address": ("Новый адрес музея, Стамбул"),
+                "latitude": 41.0200,
+                "longitude": 28.9900,
+                "distance_meters": None,
+                "location_source": "google",
+                "opening_hours": "Tu-Su 09:30-16:00",
+                "opening_hours_source": "google",
+            }
+        }
+    )
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=cache,
+        opening_hours_fallback_provider=fallback_provider,
+        opening_hours_budget=FakeOpeningHoursBudget(),
+    )
+
+    context = await service.enrich(
+        TripPreferences(
+            destination="Стамбул",
+            duration_days=1,
+        )
+    )
+
+    relocated_place = context.places[0]
+
+    assert relocated_place.formatted_address == ("Новый адрес музея, Стамбул")
+    assert relocated_place.location_source == "google"
+    assert relocated_place.opening_hours_source == "google"
+    assert relocated_place.distance_meters is not None
+    assert relocated_place.distance_meters > 0
+    assert cached_context.places[0].formatted_address == ("Султанахмет, Стамбул")
+    assert cached_context.places[0].location_source == "geoapify"
+    assert cache.saved_context is None
 
 
 @pytest.mark.asyncio

@@ -22,7 +22,10 @@ from app.services.google_places import (
     GooglePlacesBudgetUnavailableError,
     GooglePlacesServiceError,
 )
-from app.services.place_geography import calculate_place_grid_cell
+from app.services.place_geography import (
+    calculate_distance_meters,
+    calculate_place_grid_cell,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,13 +146,13 @@ class TravelContextCache(Protocol):
 
 
 class OpeningHoursFallbackProvider(Protocol):
-    """Контракт резервного источника часов работы."""
+    """Контракт резервного источника данных места."""
 
-    async def get_opening_hours(
+    async def enrich_place(
         self,
         place: PlaceCandidate,
-    ) -> str | None:
-        """Возвращает расписание совпавшего места или ``None``."""
+    ) -> PlaceCandidate:
+        """Возвращает исходное или дополненное место."""
 
         ...
 
@@ -540,7 +543,7 @@ class TripEnrichmentService:
         self,
         context: TravelContext,
     ) -> TravelContext:
-        """Добавляет Google-часы без сохранения Google-данных в кеш."""
+        """Добавляет Google-данные без их сохранения в кеш."""
 
         provider = self._opening_hours_fallback_provider
         budget = self._opening_hours_budget
@@ -573,10 +576,10 @@ class TripEnrichmentService:
             allowed_candidates.append(place)
 
         fallback_results = await asyncio.gather(
-            *(provider.get_opening_hours(place) for place in allowed_candidates),
+            *(provider.enrich_place(place) for place in allowed_candidates),
             return_exceptions=True,
         )
-        fallback_hours_by_place_id: dict[str, str] = {}
+        enriched_by_place_id: dict[str, PlaceCandidate] = {}
 
         for place, result in zip(
             allowed_candidates,
@@ -585,7 +588,7 @@ class TripEnrichmentService:
         ):
             if isinstance(result, GooglePlacesServiceError):
                 logger.warning(
-                    "Failed to load Google Places opening hours",
+                    "Failed to load Google Places enrichment",
                     extra={"source_place_id": place.source_place_id},
                 )
                 continue
@@ -593,21 +596,34 @@ class TripEnrichmentService:
             if isinstance(result, BaseException):
                 raise result
 
-            if result is not None:
-                fallback_hours_by_place_id[place.source_place_id] = result
+            if result.source_place_id != place.source_place_id:
+                raise ValueError("Google enrichment changed source place ID.")
 
-        if not fallback_hours_by_place_id:
+            if result.location_source == "google":
+                result = result.model_copy(
+                    update={
+                        "distance_meters": (
+                            calculate_distance_meters(
+                                first_latitude=(context.location.latitude),
+                                first_longitude=(context.location.longitude),
+                                second_latitude=result.latitude,
+                                second_longitude=result.longitude,
+                            )
+                        )
+                    }
+                )
+
+            if result != place:
+                enriched_by_place_id[place.source_place_id] = result
+
+        if not enriched_by_place_id:
             return context
 
         enriched_places = [
-            place.model_copy(
-                update={
-                    "opening_hours": fallback_hours_by_place_id[place.source_place_id],
-                    "opening_hours_source": "google",
-                }
+            enriched_by_place_id.get(
+                place.source_place_id,
+                place,
             )
-            if place.source_place_id in fallback_hours_by_place_id
-            else place
             for place in context.places
         ]
 
