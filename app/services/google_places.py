@@ -1,11 +1,11 @@
 """Точечный fallback часов работы через Google Places API (New)."""
 
-import math
 import re
 import unicodedata
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import SecretStr, ValidationError
@@ -18,24 +18,36 @@ from app.schemas.google_places import (
     GooglePlace,
     GoogleTextSearchResponse,
 )
+from app.services.place_geography import calculate_distance_meters
 
 GOOGLE_TEXT_SEARCH_PATH = "/v1/places:searchText"
 GOOGLE_TEXT_SEARCH_FIELD_MASK = (
     "places.id,places.displayName,places.location,"
+    "places.formattedAddress,places.types,places.websiteUri,"
     "places.businessStatus,places.regularOpeningHours"
 )
 GOOGLE_SEARCH_RADIUS_METERS = 1_000.0
 GOOGLE_MATCH_DISTANCE_METERS = 1_500.0
 GOOGLE_TRANSLATED_MATCH_DISTANCE_METERS = 250.0
 GOOGLE_MATCH_NAME_SIMILARITY = 0.6
+GOOGLE_RELOCATION_MAX_DISTANCE_METERS = 50_000.0
+GOOGLE_RELOCATION_PLACE_TYPES = frozenset(
+    {
+        "archaeological_site",
+        "cultural_landmark",
+        "historical_landmark",
+        "historical_place",
+        "history_museum",
+        "museum",
+        "tourist_attraction",
+    }
+)
 GOOGLE_CLOSED_BUSINESS_STATUSES = frozenset(
     {
         "CLOSED_TEMPORARILY",
         "CLOSED_PERMANENTLY",
     }
 )
-EARTH_RADIUS_METERS = 6_371_000.0
-
 GOOGLE_MONTHLY_BUDGET_SCRIPT = """
 local current = redis.call("INCR", KEYS[1])
 
@@ -81,39 +93,68 @@ def _normalize_name(value: str) -> str:
     return _NAME_CHARACTER_PATTERN.sub("", without_accents)
 
 
-def _calculate_distance_meters(
+def _normalize_website_identity(
+    value: str | None,
+) -> tuple[str, str] | None:
+    """Выделяет домен и конкретный путь страницы места."""
+
+    if value is None:
+        return None
+
+    parsed_url = urlsplit(value.strip())
+
+    if parsed_url.scheme.casefold() not in {"http", "https"}:
+        return None
+
+    host = (parsed_url.hostname or "").casefold()
+
+    if host.startswith("www."):
+        host = host[4:]
+
+    path = re.sub(r"/+", "/", parsed_url.path).rstrip("/")
+
+    if not host or not path:
+        return None
+
+    return host, path
+
+
+def _is_verified_relocation(
     *,
-    first_latitude: float,
-    first_longitude: float,
-    second_latitude: float,
-    second_longitude: float,
-) -> float:
-    """Считает расстояние между двумя координатами по сфере."""
+    source_place: PlaceCandidate,
+    google_place: GooglePlace,
+    result_index: int,
+    distance_meters: float,
+) -> bool:
+    """Проверяет перенос по точному совпадению страницы объекта."""
 
-    first_latitude_radians = math.radians(first_latitude)
-    second_latitude_radians = math.radians(second_latitude)
-    latitude_delta = math.radians(second_latitude - first_latitude)
-    longitude_delta = math.radians(second_longitude - first_longitude)
+    if result_index != 0:
+        return False
 
-    haversine_value = (
-        math.sin(latitude_delta / 2) ** 2
-        + math.cos(first_latitude_radians)
-        * math.cos(second_latitude_radians)
-        * math.sin(longitude_delta / 2) ** 2
-    )
+    if distance_meters > GOOGLE_RELOCATION_MAX_DISTANCE_METERS:
+        return False
 
-    return 2 * EARTH_RADIUS_METERS * math.asin(math.sqrt(haversine_value))
+    if google_place.formatted_address is None:
+        return False
+
+    if not GOOGLE_RELOCATION_PLACE_TYPES.intersection(google_place.types):
+        return False
+
+    source_identity = _normalize_website_identity(source_place.website)
+    google_identity = _normalize_website_identity(google_place.website_uri)
+
+    return source_identity is not None and source_identity == google_identity
 
 
 def _select_matching_place(
     *,
     source_place: PlaceCandidate,
     google_places: list[GooglePlace],
-) -> GooglePlace | None:
-    """Выбирает только близкий результат с достаточно похожим названием."""
+) -> tuple[GooglePlace, bool] | None:
+    """Выбирает обычное совпадение или проверенный перенос."""
 
     normalized_source_name = _normalize_name(source_place.name)
-    matches: list[tuple[bool, float, float, GooglePlace]] = []
+    matches: list[tuple[bool, bool, float, float, GooglePlace]] = []
 
     for result_index, google_place in enumerate(google_places):
         normalized_google_name = _normalize_name(google_place.display_name.text)
@@ -122,27 +163,34 @@ def _select_matching_place(
             normalized_source_name,
             normalized_google_name,
         ).ratio()
-        distance_meters = _calculate_distance_meters(
+        distance_meters = calculate_distance_meters(
             first_latitude=source_place.latitude,
             first_longitude=source_place.longitude,
             second_latitude=google_place.location.latitude,
             second_longitude=google_place.location.longitude,
         )
 
-        if distance_meters > GOOGLE_MATCH_DISTANCE_METERS:
-            continue
-
         has_similar_name = name_similarity >= GOOGLE_MATCH_NAME_SIMILARITY
         is_nearby_first_result = (
             result_index == 0
             and distance_meters <= GOOGLE_TRANSLATED_MATCH_DISTANCE_METERS
         )
+        is_normal_match = distance_meters <= GOOGLE_MATCH_DISTANCE_METERS and (
+            has_similar_name or is_nearby_first_result
+        )
+        is_verified_relocation = not is_normal_match and _is_verified_relocation(
+            source_place=source_place,
+            google_place=google_place,
+            result_index=result_index,
+            distance_meters=distance_meters,
+        )
 
-        if not has_similar_name and not is_nearby_first_result:
+        if not is_normal_match and not is_verified_relocation:
             continue
 
         matches.append(
             (
+                is_verified_relocation,
                 not has_similar_name,
                 -name_similarity,
                 distance_meters,
@@ -153,7 +201,12 @@ def _select_matching_place(
     if not matches:
         return None
 
-    return min(matches, key=lambda match: match[:3])[3]
+    selected_match = min(
+        matches,
+        key=lambda match: match[:4],
+    )
+
+    return selected_match[4], selected_match[0]
 
 
 def _format_clock(hour: int, minute: int) -> str:
@@ -292,11 +345,11 @@ class GooglePlacesClient:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
 
-    async def get_opening_hours(
+    async def enrich_place(
         self,
         place: PlaceCandidate,
-    ) -> str | None:
-        """Возвращает нормализованное расписание совпавшего Google-места."""
+    ) -> PlaceCandidate:
+        """Дополняет совпавшее место проверенными данными Google."""
 
         request_body = {
             "textQuery": f"{place.name}, {place.formatted_address}",
@@ -349,18 +402,49 @@ class GooglePlacesClient:
                 "Сервис резервных расписаний вернул некорректные данные."
             ) from error
 
-        matched_place = _select_matching_place(
+        selected_match = _select_matching_place(
             source_place=place,
             google_places=parsed_response.places,
         )
 
-        if matched_place is None:
-            return None
+        if selected_match is None:
+            return place
+
+        matched_place, is_verified_relocation = selected_match
+        updates: dict[str, object] = {}
 
         if matched_place.business_status in GOOGLE_CLOSED_BUSINESS_STATUSES:
-            return "off"
+            updates.update(
+                {
+                    "opening_hours": "off",
+                    "opening_hours_source": "google",
+                }
+            )
+        elif matched_place.regular_opening_hours is not None:
+            formatted_hours = format_google_opening_hours(
+                matched_place.regular_opening_hours
+            )
 
-        if matched_place.regular_opening_hours is None:
-            return None
+            if formatted_hours is not None:
+                updates.update(
+                    {
+                        "opening_hours": formatted_hours,
+                        "opening_hours_source": "google",
+                    }
+                )
 
-        return format_google_opening_hours(matched_place.regular_opening_hours)
+        if is_verified_relocation:
+            updates.update(
+                {
+                    "formatted_address": (matched_place.formatted_address),
+                    "latitude": matched_place.location.latitude,
+                    "longitude": matched_place.location.longitude,
+                    "distance_meters": None,
+                    "location_source": "google",
+                }
+            )
+
+        if not updates:
+            return place
+
+        return place.model_copy(update=updates)

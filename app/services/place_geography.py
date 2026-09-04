@@ -9,6 +9,31 @@ from app.schemas.geoapify import (
 
 GEOGRAPHIC_CELL_SIZE_METERS = 2_000
 METERS_PER_LATITUDE_DEGREE = 111_320
+EARTH_RADIUS_METERS = 6_371_000.0
+
+
+def calculate_distance_meters(
+    *,
+    first_latitude: float,
+    first_longitude: float,
+    second_latitude: float,
+    second_longitude: float,
+) -> float:
+    """Считает расстояние между двумя координатами по сфере."""
+
+    first_latitude_radians = math.radians(first_latitude)
+    second_latitude_radians = math.radians(second_latitude)
+    latitude_delta = math.radians(second_latitude - first_latitude)
+    longitude_delta = math.radians(second_longitude - first_longitude)
+
+    haversine_value = (
+        math.sin(latitude_delta / 2) ** 2
+        + math.cos(first_latitude_radians)
+        * math.cos(second_latitude_radians)
+        * math.sin(longitude_delta / 2) ** 2
+    )
+
+    return 2 * EARTH_RADIUS_METERS * math.asin(math.sqrt(haversine_value))
 
 
 def calculate_place_grid_cell(

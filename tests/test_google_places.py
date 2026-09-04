@@ -53,13 +53,13 @@ def build_client(
 
 
 @pytest.mark.asyncio
-async def test_get_opening_hours_matches_place_and_formats_schedule() -> None:
-    """Проверяет запрос, сопоставление места и недельное расписание."""
+async def test_enrich_place_matches_and_formats_schedule() -> None:
+    """Проверяет запрос, сопоставление и расписание."""
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url == "https://places.googleapis.test/v1/places:searchText"
-        assert request.headers["X-Goog-Api-Key"] == "test-google-key"
-        assert request.headers["X-Goog-FieldMask"] == GOOGLE_TEXT_SEARCH_FIELD_MASK
+        assert request.url == ("https://places.googleapis.test/v1/places:searchText")
+        assert request.headers["X-Goog-Api-Key"] == ("test-google-key")
+        assert request.headers["X-Goog-FieldMask"] == (GOOGLE_TEXT_SEARCH_FIELD_MASK)
 
         request_data = json.loads(request.content)
 
@@ -80,8 +80,14 @@ async def test_get_opening_hours_matches_place_and_formats_schedule() -> None:
                         "regularOpeningHours": {
                             "periods": [
                                 {
-                                    "open": {"day": day, "hour": 9},
-                                    "close": {"day": day, "hour": 17},
+                                    "open": {
+                                        "day": day,
+                                        "hour": 9,
+                                    },
+                                    "close": {
+                                        "day": day,
+                                        "hour": 17,
+                                    },
                                 }
                                 for day in range(1, 6)
                             ]
@@ -94,15 +100,17 @@ async def test_get_opening_hours_matches_place_and_formats_schedule() -> None:
     http_client, client = build_client(handler)
 
     async with http_client:
-        opening_hours = await client.get_opening_hours(build_place())
+        enriched_place = await client.enrich_place(build_place())
 
-    assert opening_hours == (
+    assert enriched_place.opening_hours == (
         "Mo 09:00-17:00; Tu 09:00-17:00; We 09:00-17:00; Th 09:00-17:00; Fr 09:00-17:00"
     )
+    assert enriched_place.opening_hours_source == "google"
+    assert enriched_place.location_source == "geoapify"
 
 
 @pytest.mark.asyncio
-async def test_get_opening_hours_rejects_unrelated_place() -> None:
+async def test_enrich_place_rejects_unrelated_place() -> None:
     """Не принимает далёкий объект с другим названием."""
 
     def handler(_: httpx.Request) -> httpx.Response:
@@ -120,8 +128,14 @@ async def test_get_opening_hours_rejects_unrelated_place() -> None:
                         "regularOpeningHours": {
                             "periods": [
                                 {
-                                    "open": {"day": 1, "hour": 9},
-                                    "close": {"day": 1, "hour": 17},
+                                    "open": {
+                                        "day": 1,
+                                        "hour": 9,
+                                    },
+                                    "close": {
+                                        "day": 1,
+                                        "hour": 17,
+                                    },
                                 }
                             ]
                         },
@@ -130,17 +144,18 @@ async def test_get_opening_hours_rejects_unrelated_place() -> None:
             },
         )
 
+    source_place = build_place()
     http_client, client = build_client(handler)
 
     async with http_client:
-        opening_hours = await client.get_opening_hours(build_place())
+        enriched_place = await client.enrich_place(source_place)
 
-    assert opening_hours is None
+    assert enriched_place == source_place
 
 
 @pytest.mark.asyncio
-async def test_get_opening_hours_accepts_nearby_translated_first_result() -> None:
-    """Принимает перевод названия только у ближайшего первого результата."""
+async def test_enrich_place_accepts_nearby_translated_result() -> None:
+    """Принимает перевод названия у ближайшего результата."""
 
     source_place = build_place().model_copy(
         update={
@@ -166,8 +181,14 @@ async def test_get_opening_hours_accepts_nearby_translated_first_result() -> Non
                         "regularOpeningHours": {
                             "periods": [
                                 {
-                                    "open": {"day": 3, "hour": 10},
-                                    "close": {"day": 3, "hour": 17},
+                                    "open": {
+                                        "day": 3,
+                                        "hour": 10,
+                                    },
+                                    "close": {
+                                        "day": 3,
+                                        "hour": 17,
+                                    },
                                 }
                             ]
                         },
@@ -179,9 +200,10 @@ async def test_get_opening_hours_accepts_nearby_translated_first_result() -> Non
     http_client, client = build_client(handler)
 
     async with http_client:
-        opening_hours = await client.get_opening_hours(source_place)
+        enriched_place = await client.enrich_place(source_place)
 
-    assert opening_hours == "We 10:00-17:00"
+    assert enriched_place.opening_hours == "We 10:00-17:00"
+    assert enriched_place.location_source == "geoapify"
 
 
 @pytest.mark.asyncio
@@ -192,10 +214,10 @@ async def test_get_opening_hours_accepts_nearby_translated_first_result() -> Non
         "CLOSED_PERMANENTLY",
     ],
 )
-async def test_get_opening_hours_marks_closed_place_as_off(
+async def test_enrich_place_marks_closed_place_as_off(
     business_status: str,
 ) -> None:
-    """Передаёт закрытый статус как полное отсутствие доступных периодов."""
+    """Передаёт закрытый статус как отсутствие периодов."""
 
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -218,13 +240,189 @@ async def test_get_opening_hours_marks_closed_place_as_off(
     http_client, client = build_client(handler)
 
     async with http_client:
-        opening_hours = await client.get_opening_hours(build_place())
+        enriched_place = await client.enrich_place(build_place())
 
-    assert opening_hours == "off"
+    assert enriched_place.opening_hours == "off"
+    assert enriched_place.opening_hours_source == "google"
 
 
 @pytest.mark.asyncio
-async def test_get_opening_hours_converts_provider_error() -> None:
+async def test_enrich_place_accepts_verified_relocation() -> None:
+    """Принимает перенос по совпавшей странице объекта."""
+
+    website = (
+        "https://www.keishicho.metro.tokyo.lg.jp/"
+        "about_mpd/welcome/welcome/museum_tour.html"
+    )
+    source_place = PlaceCandidate(
+        name="警察博物館",
+        formatted_address="京橋三丁目, Токио, Япония",
+        latitude=35.6751234,
+        longitude=139.769582,
+        categories=["entertainment.museum"],
+        available_details=["details", "details.contact"],
+        website=website,
+        source_place_id="geoapify-police-museum",
+    )
+    current_address = (
+        "Japan, Tokyo, Shinagawa City, Nishigotanda, 7-chōme-22-17 Toc Building, 3F"
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "places": [
+                    {
+                        "id": "google-police-museum",
+                        "displayName": {"text": "Police Museum"},
+                        "formattedAddress": current_address,
+                        "types": [
+                            "museum",
+                            "history_museum",
+                        ],
+                        "websiteUri": website,
+                        "location": {
+                            "latitude": 35.6218791,
+                            "longitude": 139.7190516,
+                        },
+                        "businessStatus": "OPERATIONAL",
+                        "regularOpeningHours": {
+                            "periods": [
+                                {
+                                    "open": {
+                                        "day": 2,
+                                        "hour": 9,
+                                        "minute": 30,
+                                    },
+                                    "close": {
+                                        "day": 2,
+                                        "hour": 16,
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        enriched_place = await client.enrich_place(source_place)
+
+    assert enriched_place.formatted_address == current_address
+    assert enriched_place.latitude == 35.6218791
+    assert enriched_place.longitude == 139.7190516
+    assert enriched_place.location_source == "google"
+    assert enriched_place.opening_hours == "Tu 09:30-16:00"
+    assert enriched_place.opening_hours_source == "google"
+    assert enriched_place.source_place_id == ("geoapify-police-museum")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "google_website",
+        "google_types",
+        "latitude",
+        "longitude",
+    ),
+    [
+        (
+            "https://example.com/different-place",
+            ["museum"],
+            35.6218791,
+            139.7190516,
+        ),
+        (
+            (
+                "https://www.keishicho.metro.tokyo.lg.jp/"
+                "about_mpd/welcome/welcome/museum_tour.html"
+            ),
+            ["cafe"],
+            35.6218791,
+            139.7190516,
+        ),
+        (
+            (
+                "https://www.keishicho.metro.tokyo.lg.jp/"
+                "about_mpd/welcome/welcome/museum_tour.html"
+            ),
+            ["museum"],
+            34.6937,
+            135.5023,
+        ),
+    ],
+)
+async def test_enrich_place_rejects_unverified_relocation(
+    google_website: str,
+    google_types: list[str],
+    latitude: float,
+    longitude: float,
+) -> None:
+    """Не переносит место при недостаточных доказательствах."""
+
+    source_website = (
+        "https://www.keishicho.metro.tokyo.lg.jp/"
+        "about_mpd/welcome/welcome/museum_tour.html"
+    )
+    source_place = PlaceCandidate(
+        name="警察博物館",
+        formatted_address="京橋三丁目, Токио, Япония",
+        latitude=35.6751234,
+        longitude=139.769582,
+        categories=["entertainment.museum"],
+        available_details=["details", "details.contact"],
+        website=source_website,
+        source_place_id="geoapify-police-museum",
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "places": [
+                    {
+                        "id": "google-police-museum",
+                        "displayName": {"text": "Police Museum"},
+                        "formattedAddress": ("Current Google address"),
+                        "types": google_types,
+                        "websiteUri": google_website,
+                        "location": {
+                            "latitude": latitude,
+                            "longitude": longitude,
+                        },
+                        "regularOpeningHours": {
+                            "periods": [
+                                {
+                                    "open": {
+                                        "day": 2,
+                                        "hour": 9,
+                                    },
+                                    "close": {
+                                        "day": 2,
+                                        "hour": 16,
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        enriched_place = await client.enrich_place(source_place)
+
+    assert enriched_place == source_place
+
+
+@pytest.mark.asyncio
+async def test_enrich_place_converts_provider_error() -> None:
     """Не раскрывает тело ошибочного ответа Google."""
 
     def handler(_: httpx.Request) -> httpx.Response:
@@ -240,7 +438,7 @@ async def test_get_opening_hours_converts_provider_error() -> None:
             GooglePlacesServiceError,
             match="вернул ошибку",
         ):
-            await client.get_opening_hours(build_place())
+            await client.enrich_place(build_place())
 
 
 def test_formats_overnight_opening_period() -> None:
