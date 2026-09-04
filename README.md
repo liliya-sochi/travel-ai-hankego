@@ -101,6 +101,7 @@ Redis is used for:
 - Geoapify Place Details API integration for opening hours and provider websites;
 - safe inference of morning, afternoon, and evening availability from common OSM opening-hours syntax, including calendar exceptions;
 - opt-in Google Places fallback only for schedule-sensitive venues whose Geoapify opening hours are missing;
+- rejection of places marked temporarily or permanently closed by a matched Google result;
 - deterministic category filtering, a per-trip cap, and a global monthly Redis budget for Google lookups;
 - fail-closed Google budget enforcement and fail-open itinerary generation when the optional fallback is unavailable;
 - Google opening hours are applied after the Geoapify cache and are not persisted in the travel-context cache;

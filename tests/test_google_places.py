@@ -185,6 +185,45 @@ async def test_get_opening_hours_accepts_nearby_translated_first_result() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "business_status",
+    [
+        "CLOSED_TEMPORARILY",
+        "CLOSED_PERMANENTLY",
+    ],
+)
+async def test_get_opening_hours_marks_closed_place_as_off(
+    business_status: str,
+) -> None:
+    """Передаёт закрытый статус как полное отсутствие доступных периодов."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "places": [
+                    {
+                        "id": "google-museum-id",
+                        "displayName": {"text": "Askeri Muze"},
+                        "location": {
+                            "latitude": 41.0476,
+                            "longitude": 28.9888,
+                        },
+                        "businessStatus": business_status,
+                    }
+                ]
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        opening_hours = await client.get_opening_hours(build_place())
+
+    assert opening_hours == "off"
+
+
+@pytest.mark.asyncio
 async def test_get_opening_hours_converts_provider_error() -> None:
     """Не раскрывает тело ошибочного ответа Google."""
 
