@@ -52,6 +52,11 @@ class GooglePlace(GooglePlacesResponseSchema):
     id: str = Field(min_length=1, max_length=500)
     display_name: GoogleLocalizedText = Field(alias="displayName")
     location: GoogleLocation
+    business_status: str | None = Field(
+        default=None,
+        alias="businessStatus",
+        max_length=50,
+    )
     regular_opening_hours: GoogleOpeningHours | None = Field(
         default=None,
         alias="regularOpeningHours",

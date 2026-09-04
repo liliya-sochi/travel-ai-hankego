@@ -230,6 +230,66 @@ def test_labels_google_opening_hours_and_adds_provider_tip() -> None:
     )
 
 
+def test_marks_google_closed_place_unavailable_for_llm() -> None:
+    """Передаёт закрытому месту пустой список допустимых периодов."""
+
+    context = build_travel_context()
+    context.places[0].opening_hours = "off"
+    context.places[0].opening_hours_source = "google"
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+    )
+
+    assert message["travel_context"]["places"][0]["available_periods"] == []
+
+    with pytest.raises(
+        ValueError,
+        match="outside its available periods",
+    ):
+        _validate_grounded_trip_plan(
+            json.dumps(build_grounded_plan(), ensure_ascii=False),
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+
+
+def test_adds_warning_for_google_closed_place() -> None:
+    """Добавляет предупреждение о закрытии без участия LLM."""
+
+    context = build_travel_context()
+    context.places[0].opening_hours = "off"
+    context.places[0].opening_hours_source = "google"
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    days[0]["morning"] = [
+        {
+            "source_place_id": None,
+            "place_name": None,
+            "description": "Прогуляться по историческому центру.",
+        }
+    ]
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(),
+        travel_context=context,
+    )
+
+    assert result.practical_tips[1] == (
+        "По данным Google Maps, место «Айя-София» отмечено "
+        "как закрыто; не планируйте посещение без дополнительной проверки."
+    )
+
+
 def test_rejects_unknown_place_id() -> None:
     """Проверяет запрет места вне TravelContext."""
 

@@ -21,12 +21,19 @@ from app.schemas.google_places import (
 
 GOOGLE_TEXT_SEARCH_PATH = "/v1/places:searchText"
 GOOGLE_TEXT_SEARCH_FIELD_MASK = (
-    "places.id,places.displayName,places.location,places.regularOpeningHours"
+    "places.id,places.displayName,places.location,"
+    "places.businessStatus,places.regularOpeningHours"
 )
 GOOGLE_SEARCH_RADIUS_METERS = 1_000.0
 GOOGLE_MATCH_DISTANCE_METERS = 1_500.0
 GOOGLE_TRANSLATED_MATCH_DISTANCE_METERS = 250.0
 GOOGLE_MATCH_NAME_SIMILARITY = 0.6
+GOOGLE_CLOSED_BUSINESS_STATUSES = frozenset(
+    {
+        "CLOSED_TEMPORARILY",
+        "CLOSED_PERMANENTLY",
+    }
+)
 EARTH_RADIUS_METERS = 6_371_000.0
 
 GOOGLE_MONTHLY_BUDGET_SCRIPT = """
@@ -347,7 +354,13 @@ class GooglePlacesClient:
             google_places=parsed_response.places,
         )
 
-        if matched_place is None or matched_place.regular_opening_hours is None:
+        if matched_place is None:
+            return None
+
+        if matched_place.business_status in GOOGLE_CLOSED_BUSINESS_STATUSES:
+            return "off"
+
+        if matched_place.regular_opening_hours is None:
             return None
 
         return format_google_opening_hours(matched_place.regular_opening_hours)

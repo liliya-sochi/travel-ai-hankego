@@ -664,6 +664,11 @@ def _build_grounded_practical_tips(
         place.opening_hours is not None and place.opening_hours_source == "google"
         for place in travel_context.places
     )
+    closed_google_places = [
+        place
+        for place in travel_context.places
+        if place.opening_hours == "off" and place.opening_hours_source == "google"
+    ]
 
     if uses_google_hours:
         provider_tip = (
@@ -678,8 +683,17 @@ def _build_grounded_practical_tips(
             "проверяйте их перед посещением."
         )
 
+    closed_place_tips = [
+        (
+            f"По данным Google Maps, место «{place.name}» отмечено "
+            "как закрыто; не планируйте посещение без дополнительной проверки."
+        )
+        for place in closed_google_places
+    ]
+
     return [
         provider_tip,
+        *closed_place_tips,
         (
             "Точные цены и расписания могут измениться; "
             "проверяйте их непосредственно перед поездкой."
