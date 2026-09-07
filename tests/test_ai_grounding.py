@@ -12,6 +12,7 @@ from app.schemas.geoapify import (
 )
 from app.schemas.trip import TripPreferences
 from app.services.ai import (
+    AIServiceError,
     _build_grounded_user_message,
     _validate_grounded_trip_plan,
 )
@@ -20,6 +21,7 @@ from app.services.ai import (
 def build_preferences(
     *,
     duration_days: int = 1,
+    must_visit_places: list[str] | None = None,
 ) -> TripPreferences:
     """Создаёт тестовые параметры поездки."""
 
@@ -27,6 +29,7 @@ def build_preferences(
         destination="Стамбул",
         duration_days=duration_days,
         interests="История",
+        must_visit_places=must_visit_places or [],
     )
 
 
@@ -316,6 +319,77 @@ def test_adds_warning_for_google_closed_place() -> None:
         "По данным Google Maps, место «Айя-София» отмечено "
         "как закрыто; не планируйте посещение без дополнительной проверки."
     )
+
+
+def test_passes_must_visit_place_id_to_llm() -> None:
+    """Передаёт модели проверенный ID обязательного места."""
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(
+                must_visit_places=["Обязательно: Айя-София"],
+            ),
+            travel_context=build_travel_context(),
+        )
+    )
+
+    assert message["travel_context"]["must_visit_place_ids"] == [
+        "hagia-sophia-id",
+    ]
+
+
+def test_rejects_plan_without_must_visit_place() -> None:
+    """Отклоняет маршрут, в котором модель пропустила обязательное место."""
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    days[0]["morning"] = [
+        {
+            "source_place_id": None,
+            "place_name": None,
+            "description": "Прогуляться по историческому центру.",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="required place"):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(
+                must_visit_places=["Айя-София"],
+            ),
+            travel_context=build_travel_context(),
+        )
+
+
+def test_rejects_unavailable_must_visit_place_before_llm() -> None:
+    """Не отправляет модели заведомо невыполнимое требование."""
+
+    context = build_travel_context()
+    context.places[0].opening_hours = "off"
+
+    with pytest.raises(AIServiceError, match="Обязательное место"):
+        _build_grounded_user_message(
+            preferences=build_preferences(
+                must_visit_places=["Айя-София"],
+            ),
+            travel_context=context,
+        )
+
+
+def test_rejects_unknown_must_visit_place_before_llm() -> None:
+    """Не подменяет неизвестное обязательное место другим объектом."""
+
+    with pytest.raises(AIServiceError, match="Не удалось однозначно найти"):
+        _build_grounded_user_message(
+            preferences=build_preferences(
+                must_visit_places=["Несуществующий музей"],
+            ),
+            travel_context=build_travel_context(),
+        )
 
 
 def test_rejects_unknown_place_id() -> None:

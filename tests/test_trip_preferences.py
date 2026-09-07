@@ -16,6 +16,7 @@ def test_trip_preferences_accept_valid_data() -> None:
             "travel_period": " В октябре ",
             "budget": " 150000 ₽ ",
             "interests": " Архитектура и местная еда ",
+            "must_visit_places": [" Военный музей Стамбула "],
         }
     )
 
@@ -24,6 +25,7 @@ def test_trip_preferences_accept_valid_data() -> None:
     assert preferences.travel_period == "В октябре"
     assert preferences.budget == "150000 ₽"
     assert preferences.interests == "Архитектура и местная еда"
+    assert preferences.must_visit_places == ["Военный музей Стамбула"]
 
 
 def test_trip_preferences_accept_only_required_fields() -> None:
@@ -37,6 +39,7 @@ def test_trip_preferences_accept_only_required_fields() -> None:
     assert preferences.travel_period is None
     assert preferences.budget is None
     assert preferences.interests is None
+    assert preferences.must_visit_places == []
 
 
 def test_trip_draft_accepts_incomplete_data() -> None:
@@ -51,6 +54,7 @@ def test_trip_draft_accepts_incomplete_data() -> None:
     assert draft.travel_period is None
     assert draft.budget is None
     assert draft.interests is None
+    assert draft.must_visit_places == []
 
 
 @pytest.mark.parametrize(
