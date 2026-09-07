@@ -23,6 +23,7 @@ def build_extraction_data() -> dict[str, object]:
         "travel_period": "Осенью",
         "budget": None,
         "interests": None,
+        "must_visit_places": None,
     }
 
 
@@ -35,6 +36,7 @@ def test_intake_extraction_accepts_nullable_fields() -> None:
     assert extraction.destination == "Япония"
     assert extraction.duration_days is None
     assert extraction.travel_period == "Осенью"
+    assert extraction.must_visit_places is None
 
 
 def test_intake_extraction_requires_every_field() -> None:

@@ -22,6 +22,7 @@ def build_extraction(
     travel_period: str | None = None,
     budget: str | None = None,
     interests: str | None = None,
+    must_visit_places: list[str] | None = None,
 ) -> TripIntakeExtraction:
     """Создаёт полный strict Structured Output для теста."""
 
@@ -32,6 +33,7 @@ def build_extraction(
         travel_period=travel_period,
         budget=budget,
         interests=interests,
+        must_visit_places=must_visit_places,
     )
 
 
@@ -54,6 +56,24 @@ def test_complete_message_is_ready_without_optional_fields() -> None:
     assert result.draft.duration_days == 7
     assert result.draft.budget is None
     assert result.draft.interests is None
+
+
+def test_preserves_explicit_must_visit_place() -> None:
+    """Сохраняет обязательное место отдельно от общих интересов."""
+
+    result = build_trip_intake_response(
+        draft=TripDraft(),
+        extraction=build_extraction(
+            destination="Токио",
+            duration_days=1,
+            interests="Полиция, история и музеи",
+            must_visit_places=["警察博物館"],
+        ),
+    )
+
+    assert result.ready_to_generate is True
+    assert result.draft.interests == "Полиция, история и музеи"
+    assert result.draft.must_visit_places == ["警察博物館"]
 
 
 def test_only_first_missing_field_is_asked() -> None:

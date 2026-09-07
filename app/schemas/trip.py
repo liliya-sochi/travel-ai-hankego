@@ -3,7 +3,7 @@ Pydantic-схемы планирования путешествий.
 """
 
 from datetime import datetime
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -11,6 +11,14 @@ from pydantic import (
     Field,
     model_validator,
 )
+
+MustVisitPlaceName = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=500,
+    ),
+]
 
 
 class StrictSchema(BaseModel):
@@ -72,6 +80,15 @@ class TripPreferences(StrictSchema):
         examples=["Архитектура, местная еда и прогулки"],
     )
 
+    must_visit_places: list[MustVisitPlaceName] = Field(
+        default_factory=list,
+        max_length=5,
+        description=(
+            "Конкретные места, которые пользователь явно потребовал включить в маршрут."
+        ),
+        examples=[["Военный музей Стамбула"]],
+    )
+
 
 class TripDraft(StrictSchema):
     """
@@ -109,6 +126,11 @@ class TripDraft(StrictSchema):
         default=None,
         min_length=2,
         max_length=1000,
+    )
+
+    must_visit_places: list[MustVisitPlaceName] = Field(
+        default_factory=list,
+        max_length=5,
     )
 
 
@@ -166,6 +188,14 @@ class TripIntakeExtraction(StrictSchema):
         min_length=2,
         max_length=1000,
         description="Полное новое значение интересов или null.",
+    )
+
+    must_visit_places: list[MustVisitPlaceName] | None = Field(
+        max_length=5,
+        description=(
+            "Конкретные места, которые пользователь явно потребовал "
+            "включить в маршрут, или null."
+        ),
     )
 
 

@@ -77,6 +77,7 @@ async def test_analyze_trip_message_returns_extraction(
         "travel_period": "Осенью",
         "budget": None,
         "interests": "Природа",
+        "must_visit_places": ["警察博物館"],
     }
 
     async def fake_request_model(
@@ -124,6 +125,7 @@ async def test_analyze_trip_message_returns_extraction(
 
     assert extraction.destination == "Япония"
     assert extraction.duration_days == 7
+    assert extraction.must_visit_places == ["警察博物館"]
 
     response_format = captured_payload["response_format"]
 

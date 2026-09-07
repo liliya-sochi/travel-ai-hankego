@@ -13,6 +13,7 @@
 import asyncio
 import json
 import logging
+import unicodedata
 from dataclasses import dataclass
 from math import isfinite
 from time import perf_counter
@@ -63,7 +64,9 @@ SYSTEM_PROMPT = """
 Во входном JSON находятся:
 - trip_preferences — параметры поездки пользователя;
 - travel_context — проверенные туристические данные
-  с разрешённым списком places.
+  с разрешённым списком places;
+- travel_context.must_visit_place_ids — идентификаторы мест,
+  которые обязательно должны присутствовать в маршруте.
 
 Создай реалистичный и практичный план поездки.
 
@@ -95,6 +98,9 @@ SYSTEM_PROMPT = """
 - не показывай available_periods пользователю.
 
 Правила использования мест:
+- каждый идентификатор из must_visit_place_ids обязательно используй
+  хотя бы один раз в маршруте;
+- не заменяй обязательное место похожим или альтернативным местом;
 - конкретные места можно выбирать только из travel_context.places;
 - для конкретного места верни его точные source_place_id и name;
 - не изменяй source_place_id;
@@ -162,7 +168,9 @@ SEMANTIC_RETRY_PROMPT = """
   в travel_context.places;
 - place_name точно соответствует выбранному source_place_id;
 - для общей активности source_place_id и place_name равны null;
-- не используй места вне travel_context.places.
+- не используй места вне travel_context.places;
+- включи каждый идентификатор из must_visit_place_ids
+  хотя бы в одну конкретную активность;
 - morning, afternoon и evening каждого дня содержат
   от одной до двух активностей;
 - выполни geographic_planning.target_area_count,
@@ -203,6 +211,15 @@ INTAKE_SYSTEM_PROMPT = """
 - если поле не изменилось и новой информации нет, верни null;
 - если пользователь исправляет поле, верни полное новое значение;
 - если пользователь дополняет интересы, объедини их с current_draft;
+- must_visit_places содержит только конкретные места, которые пользователь
+  явно потребовал посетить словами «обязательно», «непременно»,
+  «точно хочу посетить» или равнозначной формулировкой;
+- не добавляй в must_visit_places обычные интересы и необязательные пожелания;
+- если одно место указано на нескольких языках, сохрани наиболее точное
+  оригинальное название, особенно название в скобках;
+- если требования к обязательным местам не изменились, верни null;
+- если пользователь добавил или исправил обязательные места,
+  верни полный обновлённый список с учётом current_draft;
 - travel_period может содержать даты, месяц, сезон или другой период;
 - даты не являются обязательными и не должны выдумываться.
 """.strip()
@@ -519,6 +536,85 @@ def _build_user_message(
     return preferences.model_dump_json()
 
 
+def _normalize_required_place_name(value: str) -> str:
+    """Нормализует название для безопасного локального сопоставления."""
+
+    return "".join(
+        character
+        for character in unicodedata.normalize("NFKC", value).casefold()
+        if character.isalnum()
+    )
+
+
+def _required_place_name_matches(
+    *,
+    required_name: str,
+    candidate_name: str,
+) -> bool:
+    """Сопоставляет точное название и уточнение в скобках."""
+
+    normalized_required = _normalize_required_place_name(required_name)
+    normalized_candidate = _normalize_required_place_name(candidate_name)
+
+    if not normalized_required or not normalized_candidate:
+        return False
+
+    if normalized_required == normalized_candidate:
+        return True
+
+    shorter_name = min(normalized_required, normalized_candidate, key=len)
+    longer_name = max(normalized_required, normalized_candidate, key=len)
+
+    return len(shorter_name) >= 4 and shorter_name in longer_name
+
+
+def _resolve_must_visit_place_ids(
+    *,
+    preferences: TripPreferences,
+    travel_context: TravelContext,
+) -> list[str]:
+    """
+    Сопоставляет обязательные названия с проверенными местами.
+
+    Неоднозначность и недоступность обрабатываются до обращения
+    к LLM, чтобы модель не могла молча заменить обязательное место.
+    """
+
+    resolved_place_ids: list[str] = []
+
+    for required_name in preferences.must_visit_places:
+        matches_by_id = {
+            place.source_place_id: place
+            for place in travel_context.places
+            if _required_place_name_matches(
+                required_name=required_name,
+                candidate_name=place.name,
+            )
+        }
+
+        if len(matches_by_id) != 1:
+            raise AIServiceError(
+                f"Не удалось однозначно найти обязательное место "
+                f"«{required_name}» среди найденных объектов. "
+                "Уточните его официальное название."
+            )
+
+        matched_place = next(iter(matches_by_id.values()))
+        available_periods = infer_available_periods(matched_place.opening_hours)
+
+        if available_periods == ():
+            raise AIServiceError(
+                f"Обязательное место «{matched_place.name}» отмечено "
+                "как закрыто или не имеет подходящего времени посещения. "
+                "Проверьте актуальное расписание и измените запрос."
+            )
+
+        if matched_place.source_place_id not in resolved_place_ids:
+            resolved_place_ids.append(matched_place.source_place_id)
+
+    return resolved_place_ids
+
+
 def _build_grounded_user_message(
     *,
     preferences: TripPreferences,
@@ -531,6 +627,11 @@ def _build_grounded_user_message(
     модель выбирает места, а точные справочные данные
     позднее добавляет Python.
     """
+
+    must_visit_place_ids = _resolve_must_visit_place_ids(
+        preferences=preferences,
+        travel_context=travel_context,
+    )
 
     llm_travel_context = travel_context.model_dump(
         mode="json",
@@ -571,6 +672,7 @@ def _build_grounded_user_message(
         "area_group_size_meters": GEOGRAPHIC_CELL_SIZE_METERS,
         "target_area_count": target_area_count,
     }
+    llm_travel_context["must_visit_place_ids"] = must_visit_place_ids
 
     return json.dumps(
         {
@@ -725,6 +827,13 @@ def _validate_grounded_trip_plan(
         raise ValueError("LLM destination does not match trip preferences.")
 
     places_by_id = {place.source_place_id: place for place in travel_context.places}
+    must_visit_place_ids = set(
+        _resolve_must_visit_place_ids(
+            preferences=preferences,
+            travel_context=travel_context,
+        )
+    )
+    selected_place_ids: set[str] = set()
 
     for day in grounded_plan.days:
         period_activities: tuple[
@@ -743,6 +852,14 @@ def _validate_grounded_trip_plan(
                     places_by_id=places_by_id,
                     period=period,
                 )
+
+                if activity.source_place_id is not None:
+                    selected_place_ids.add(activity.source_place_id)
+
+    missing_must_visit_place_ids = must_visit_place_ids - selected_place_ids
+
+    if missing_must_visit_place_ids:
+        raise ValueError("LLM omitted a required place.")
 
     return grounded_plan.to_trip_plan_response(
         practical_tips=_build_grounded_practical_tips(travel_context),
