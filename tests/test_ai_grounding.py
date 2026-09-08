@@ -261,6 +261,32 @@ def test_formats_verified_google_relocation_address() -> None:
     ]
 
 
+def test_formats_request_scoped_google_place_sources() -> None:
+    """Маркирует место, найденное точечным Google-поиском."""
+
+    context = build_travel_context()
+    context.places[0] = context.places[0].model_copy(
+        update={
+            "source": "google",
+            "location_source": "google",
+            "opening_hours_source": "google",
+        }
+    )
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(build_grounded_plan(), ensure_ascii=False),
+        preferences=build_preferences(),
+        travel_context=context,
+    )
+
+    assert "Сайт из данных Google Maps" in result.days[0].morning[0]
+    assert result.practical_tips[0] == (
+        "Данные мест и часы работы получены из Geoapify/OSM "
+        "и Google Maps; данные могут быть устаревшими, "
+        "проверяйте их перед посещением."
+    )
+
+
 def test_marks_google_closed_place_unavailable_for_llm() -> None:
     """Передаёт закрытому месту пустой список допустимых периодов."""
 

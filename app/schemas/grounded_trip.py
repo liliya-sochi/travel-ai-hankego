@@ -216,6 +216,7 @@ def _format_activity(
         )
 
     if place.website is not None:
-        activity_parts.append(f"Сайт из данных Geoapify: {place.website}")
+        website_source = "Google Maps" if place.source == "google" else "Geoapify"
+        activity_parts.append(f"Сайт из данных {website_source}: {place.website}")
 
     return " ".join(activity_parts)

@@ -223,7 +223,7 @@ class PlaceCandidate(HankeGoGeoSchema):
         min_length=1,
         max_length=500,
     )
-    source: Literal["geoapify"] = "geoapify"
+    source: Literal["geoapify", "google"] = "geoapify"
 
 
 class PlaceDetails(HankeGoGeoSchema):

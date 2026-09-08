@@ -8,9 +8,10 @@ import pytest
 from pydantic import SecretStr
 from redis.exceptions import RedisError
 
-from app.schemas.geoapify import PlaceCandidate
+from app.schemas.geoapify import DestinationLocation, PlaceCandidate
 from app.schemas.google_places import GoogleOpeningHours
 from app.services.google_places import (
+    GOOGLE_REQUIRED_SEARCH_RADIUS_METERS,
     GOOGLE_TEXT_SEARCH_FIELD_MASK,
     GooglePlacesBudgetUnavailableError,
     GooglePlacesClient,
@@ -31,6 +32,17 @@ def build_place() -> PlaceCandidate:
         categories=["entertainment.museum"],
         available_details=["details", "details.contact"],
         source_place_id="geoapify-museum-id",
+    )
+
+
+def build_location() -> DestinationLocation:
+    """Создаёт центр обязательного поиска."""
+
+    return DestinationLocation(
+        formatted_name="Стамбул, Турция",
+        latitude=41.0082,
+        longitude=28.9784,
+        source_place_id="istanbul-place-id",
     )
 
 
@@ -107,6 +119,98 @@ async def test_enrich_place_matches_and_formats_schedule() -> None:
     )
     assert enriched_place.opening_hours_source == "google"
     assert enriched_place.location_source == "geoapify"
+
+
+@pytest.mark.asyncio
+async def test_search_required_place_builds_google_candidate() -> None:
+    """Преобразует точный Google-результат во внутреннее место HankeGo."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_data = json.loads(request.content)
+
+        assert request_data["textQuery"] == ("Цистерна Базилика, Стамбул, Турция")
+        assert request_data["maxResultCount"] == 5
+        assert request_data["locationBias"]["circle"]["radius"] == (
+            GOOGLE_REQUIRED_SEARCH_RADIUS_METERS
+        )
+
+        return httpx.Response(
+            status_code=200,
+            json={
+                "places": [
+                    {
+                        "id": "basilica-cistern-id",
+                        "displayName": {"text": "Цистерна Базилика"},
+                        "formattedAddress": "Alemdar, Istanbul, Türkiye",
+                        "types": ["tourist_attraction"],
+                        "websiteUri": "https://yerebatan.com/",
+                        "location": {
+                            "latitude": 41.0084,
+                            "longitude": 28.9779,
+                        },
+                        "regularOpeningHours": {
+                            "periods": [
+                                {
+                                    "open": {"day": 1, "hour": 9},
+                                    "close": {"day": 1, "hour": 18},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        place = await client.search_required_place(
+            required_name="Цистерна Базилика",
+            location=build_location(),
+        )
+
+    assert place is not None
+    assert place.name == "Цистерна Базилика"
+    assert place.source_place_id == "google:basilica-cistern-id"
+    assert place.source == "google"
+    assert place.location_source == "google"
+    assert place.opening_hours_source == "google"
+    assert place.opening_hours == "Mo 09:00-18:00"
+    assert place.website == "https://yerebatan.com/"
+    assert place.distance_meters is not None
+
+
+@pytest.mark.asyncio
+async def test_search_required_place_rejects_unrelated_result() -> None:
+    """Не подменяет обязательное место похожим объектом Google."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "places": [
+                    {
+                        "id": "unrelated-id",
+                        "displayName": {"text": "Случайное кафе"},
+                        "formattedAddress": "Стамбул, Турция",
+                        "location": {
+                            "latitude": 41.0084,
+                            "longitude": 28.9779,
+                        },
+                    }
+                ]
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        place = await client.search_required_place(
+            required_name="Цистерна Базилика",
+            location=build_location(),
+        )
+
+    assert place is None
 
 
 @pytest.mark.asyncio
