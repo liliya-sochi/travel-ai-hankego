@@ -30,12 +30,15 @@ class FakeOpeningHoursFallbackProvider:
         *,
         hours: dict[str, str | None] | None = None,
         updates: dict[str, dict[str, object]] | None = None,
+        required_places: dict[str, PlaceCandidate | None] | None = None,
         error: Exception | None = None,
     ) -> None:
         self.hours = hours or {}
         self.updates = updates or {}
+        self.required_places = required_places or {}
         self.error = error
         self.received_place_ids: list[str] = []
+        self.received_required_names: list[str] = []
 
     async def enrich_place(
         self,
@@ -63,6 +66,23 @@ class FakeOpeningHoursFallbackProvider:
             return place
 
         return place.model_copy(update=place_updates)
+
+    async def search_required_place(
+        self,
+        *,
+        required_name: str,
+        location: DestinationLocation,
+    ) -> PlaceCandidate | None:
+        """Возвращает подготовленный результат обязательного поиска."""
+
+        self.received_required_names.append(required_name)
+
+        assert location.source_place_id == "istanbul-place-id"
+
+        if self.error is not None:
+            raise self.error
+
+        return self.required_places.get(required_name)
 
 
 class FakeOpeningHoursBudget:
@@ -551,6 +571,189 @@ async def test_returns_cached_context_without_provider_call() -> None:
     assert cache.saved_context is None
     assert provider.received_destination is None
     assert provider.received_categories is None
+
+
+@pytest.mark.asyncio
+async def test_does_not_search_google_when_required_place_is_in_context() -> None:
+    """Не тратит Google-бюджет на уже найденное обязательное место."""
+
+    fallback_provider = FakeOpeningHoursFallbackProvider()
+    budget = FakeOpeningHoursBudget()
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=FakeTravelContextCache(
+            cached_context=build_context(),
+        ),
+        opening_hours_fallback_provider=fallback_provider,
+        opening_hours_budget=budget,
+    )
+
+    context = await service.enrich(
+        TripPreferences(
+            destination="Стамбул",
+            duration_days=1,
+            must_visit_places=["Обязательно: Айя-София"],
+        )
+    )
+
+    assert context == build_context()
+    assert fallback_provider.received_required_names == []
+    assert budget.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_adds_missing_required_place_without_changing_cache() -> None:
+    """Добавляет Google-место только в контекст текущего запроса."""
+
+    cached_context = build_context()
+    required_place = build_place(
+        name="Цистерна Базилика",
+        source_place_id="google:basilica-cistern",
+        categories=["tourism.sights"],
+        latitude=41.0084,
+        longitude=28.9779,
+        distance_meters=50.0,
+    ).model_copy(
+        update={
+            "formatted_address": "Alemdar, Istanbul, Türkiye",
+            "opening_hours": "Mo-Su 09:00-18:00",
+            "opening_hours_source": "google",
+            "location_source": "google",
+            "source": "google",
+        }
+    )
+    fallback_provider = FakeOpeningHoursFallbackProvider(
+        required_places={"Цистерна Базилика": required_place},
+    )
+    budget = FakeOpeningHoursBudget()
+    cache = FakeTravelContextCache(cached_context=cached_context)
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=cache,
+        opening_hours_fallback_provider=fallback_provider,
+        opening_hours_budget=budget,
+    )
+
+    context = await service.enrich(
+        TripPreferences(
+            destination="Стамбул",
+            duration_days=1,
+            must_visit_places=["Цистерна Базилика"],
+        )
+    )
+
+    assert fallback_provider.received_required_names == [
+        "Цистерна Базилика",
+    ]
+    assert budget.calls == 1
+    assert context.places[-1] == required_place
+    assert "Google Maps" in context.attribution
+    assert cache.saved_context is None
+    assert cached_context.places == [build_place()]
+
+
+@pytest.mark.asyncio
+async def test_required_place_replaces_non_required_candidate_at_limit() -> None:
+    """Сохраняет ограничение в 20 мест и не удаляет обязательное."""
+
+    cached_context = build_context().model_copy(
+        update={
+            "places": [
+                build_place(
+                    name=f"Место {index}",
+                    source_place_id=f"place-{index}",
+                    distance_meters=float(index),
+                )
+                for index in range(20)
+            ]
+        }
+    )
+    required_place = build_place(
+        name="Цистерна Базилика",
+        source_place_id="google:basilica-cistern",
+    ).model_copy(
+        update={
+            "location_source": "google",
+            "source": "google",
+        }
+    )
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=FakeTravelContextCache(
+            cached_context=cached_context,
+        ),
+        opening_hours_fallback_provider=FakeOpeningHoursFallbackProvider(
+            required_places={"Цистерна Базилика": required_place},
+        ),
+        opening_hours_budget=FakeOpeningHoursBudget(),
+    )
+
+    context = await service.enrich(
+        TripPreferences(
+            destination="Стамбул",
+            duration_days=1,
+            must_visit_places=["Цистерна Базилика"],
+        )
+    )
+
+    assert len(context.places) == 20
+    assert required_place in context.places
+    assert all(place.source_place_id != "place-19" for place in context.places)
+
+
+@pytest.mark.asyncio
+async def test_rejects_unknown_required_place_from_google() -> None:
+    """Не заменяет неизвестное обязательное место первым результатом."""
+
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=FakeTravelContextCache(
+            cached_context=build_context(),
+        ),
+        opening_hours_fallback_provider=FakeOpeningHoursFallbackProvider(),
+        opening_hours_budget=FakeOpeningHoursBudget(),
+    )
+
+    with pytest.raises(
+        TripEnrichmentError,
+        match="Не удалось однозначно найти обязательное место",
+    ):
+        await service.enrich(
+            TripPreferences(
+                destination="Стамбул",
+                duration_days=1,
+                must_visit_places=["Несуществующий музей"],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_rejects_required_search_when_google_budget_is_exhausted() -> None:
+    """Не выполняет обязательный поиск вне контролируемого бюджета."""
+
+    fallback_provider = FakeOpeningHoursFallbackProvider()
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=FakeTravelContextCache(
+            cached_context=build_context(),
+        ),
+        opening_hours_fallback_provider=fallback_provider,
+        opening_hours_budget=FakeOpeningHoursBudget(allowed=False),
+    )
+
+    with pytest.raises(
+        TripEnrichmentError,
+        match="Лимит проверки обязательных мест",
+    ):
+        await service.enrich(
+            TripPreferences(
+                destination="Стамбул",
+                duration_days=1,
+                must_visit_places=["Цистерна Базилика"],
+            )
+        )
+
+    assert fallback_provider.received_required_names == []
 
 
 @pytest.mark.asyncio

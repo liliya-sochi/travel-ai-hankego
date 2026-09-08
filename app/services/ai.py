@@ -13,7 +13,6 @@
 import asyncio
 import json
 import logging
-import unicodedata
 from dataclasses import dataclass
 from math import isfinite
 from time import perf_counter
@@ -42,6 +41,7 @@ from app.services.place_geography import (
     GEOGRAPHIC_CELL_SIZE_METERS,
     format_place_area_group,
 )
+from app.services.place_matching import required_place_name_matches
 
 logger = logging.getLogger(__name__)
 
@@ -536,38 +536,6 @@ def _build_user_message(
     return preferences.model_dump_json()
 
 
-def _normalize_required_place_name(value: str) -> str:
-    """Нормализует название для безопасного локального сопоставления."""
-
-    return "".join(
-        character
-        for character in unicodedata.normalize("NFKC", value).casefold()
-        if character.isalnum()
-    )
-
-
-def _required_place_name_matches(
-    *,
-    required_name: str,
-    candidate_name: str,
-) -> bool:
-    """Сопоставляет точное название и уточнение в скобках."""
-
-    normalized_required = _normalize_required_place_name(required_name)
-    normalized_candidate = _normalize_required_place_name(candidate_name)
-
-    if not normalized_required or not normalized_candidate:
-        return False
-
-    if normalized_required == normalized_candidate:
-        return True
-
-    shorter_name = min(normalized_required, normalized_candidate, key=len)
-    longer_name = max(normalized_required, normalized_candidate, key=len)
-
-    return len(shorter_name) >= 4 and shorter_name in longer_name
-
-
 def _resolve_must_visit_place_ids(
     *,
     preferences: TripPreferences,
@@ -586,7 +554,7 @@ def _resolve_must_visit_place_ids(
         matches_by_id = {
             place.source_place_id: place
             for place in travel_context.places
-            if _required_place_name_matches(
+            if required_place_name_matches(
                 required_name=required_name,
                 candidate_name=place.name,
             )
@@ -766,13 +734,22 @@ def _build_grounded_practical_tips(
         place.opening_hours is not None and place.opening_hours_source == "google"
         for place in travel_context.places
     )
+    uses_google_places = any(
+        place.source == "google" for place in travel_context.places
+    )
     closed_google_places = [
         place
         for place in travel_context.places
         if place.opening_hours == "off" and place.opening_hours_source == "google"
     ]
 
-    if uses_google_hours:
+    if uses_google_places:
+        provider_tip = (
+            "Данные мест и часы работы получены из Geoapify/OSM "
+            "и Google Maps; данные могут быть устаревшими, "
+            "проверяйте их перед посещением."
+        )
+    elif uses_google_hours:
         provider_tip = (
             "Часы работы получены из Geoapify/OSM и Google Maps, "
             "а ссылки на сайты — из Geoapify/OSM; данные могут быть "

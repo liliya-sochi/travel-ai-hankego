@@ -104,6 +104,7 @@ Redis is used for:
 - rejection of places marked temporarily or permanently closed by a matched Google result;
 - safe handling of verified place relocations when Google and Geoapify reference the same specific provider page;
 - deterministic enforcement of explicitly required places in generated itineraries;
+- request-scoped Google lookup for required places missing from the cached shortlist;
 - deterministic category filtering, a per-trip cap, and a global monthly Redis budget for Google lookups;
 - fail-closed Google budget enforcement and fail-open itinerary generation when the optional fallback is unavailable;
 - Google opening hours are applied after the Geoapify cache and are not persisted in the travel-context cache;

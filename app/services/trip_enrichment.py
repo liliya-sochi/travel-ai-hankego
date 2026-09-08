@@ -2,7 +2,7 @@
 Обогащение параметров поездки актуальными туристическими данными.
 
 Сервис находится между пользовательскими предпочтениями и LLM:
-TripPreferences -> Geoapify -> TravelContext -> LLM.
+TripPreferences -> Geoapify/Google -> TravelContext -> LLM.
 """
 
 import asyncio
@@ -26,6 +26,7 @@ from app.services.place_geography import (
     calculate_distance_meters,
     calculate_place_grid_cell,
 )
+from app.services.place_matching import required_place_name_matches
 
 logger = logging.getLogger(__name__)
 
@@ -145,14 +146,24 @@ class TravelContextCache(Protocol):
         ...
 
 
-class OpeningHoursFallbackProvider(Protocol):
-    """Контракт резервного источника данных места."""
+class GooglePlacesProvider(Protocol):
+    """Контракт точечных Google-запросов для одного места."""
 
     async def enrich_place(
         self,
         place: PlaceCandidate,
     ) -> PlaceCandidate:
         """Возвращает исходное или дополненное место."""
+
+        ...
+
+    async def search_required_place(
+        self,
+        *,
+        required_name: str,
+        location: DestinationLocation,
+    ) -> PlaceCandidate | None:
+        """Ищет обязательное место, отсутствующее в контексте."""
 
         ...
 
@@ -460,7 +471,7 @@ class TripEnrichmentService:
         self,
         places_provider: PlacesDataProvider,
         travel_context_cache: TravelContextCache | None = None,
-        opening_hours_fallback_provider: OpeningHoursFallbackProvider | None = None,
+        opening_hours_fallback_provider: GooglePlacesProvider | None = None,
         opening_hours_budget: OpeningHoursBudget | None = None,
         opening_hours_fallback_limit: int = 2,
     ) -> None:
@@ -473,6 +484,130 @@ class TripEnrichmentService:
             raise ValueError("Opening hours fallback limit must be positive.")
 
         self._opening_hours_fallback_limit = opening_hours_fallback_limit
+
+    async def _ensure_must_visit_places(
+        self,
+        *,
+        context: TravelContext,
+        required_names: list[str],
+    ) -> TravelContext:
+        """Точечно добавляет отсутствующие обязательные места через Google."""
+
+        if not required_names:
+            return context
+
+        provider = self._opening_hours_fallback_provider
+        budget = self._opening_hours_budget
+        places = list(context.places)
+
+        missing_names = [
+            required_name
+            for required_name in required_names
+            if not any(
+                required_place_name_matches(
+                    required_name=required_name,
+                    candidate_name=place.name,
+                )
+                for place in places
+            )
+        ]
+
+        if not missing_names:
+            return context
+
+        if provider is None or budget is None:
+            raise TripEnrichmentError(
+                "Не удалось проверить обязательное место. "
+                "Уточните его официальное название."
+            )
+
+        added_place_ids: set[str] = set()
+
+        for required_name in missing_names:
+            if any(
+                required_place_name_matches(
+                    required_name=required_name,
+                    candidate_name=place.name,
+                )
+                for place in places
+            ):
+                continue
+
+            try:
+                is_allowed = await budget.try_acquire()
+            except GooglePlacesBudgetUnavailableError as error:
+                raise TripEnrichmentError(
+                    "Сервис проверки обязательных мест временно недоступен."
+                ) from error
+
+            if not is_allowed:
+                raise TripEnrichmentError(
+                    "Лимит проверки обязательных мест временно исчерпан."
+                )
+
+            try:
+                found_place = await provider.search_required_place(
+                    required_name=required_name,
+                    location=context.location,
+                )
+            except GooglePlacesServiceError as error:
+                raise TripEnrichmentError(str(error)) from error
+
+            if found_place is None:
+                raise TripEnrichmentError(
+                    f"Не удалось однозначно найти обязательное место "
+                    f"«{required_name}». Уточните его официальное название."
+                )
+
+            if found_place.source_place_id in {
+                place.source_place_id for place in places
+            }:
+                continue
+
+            places.append(found_place)
+            added_place_ids.add(found_place.source_place_id)
+
+        protected_place_ids = {
+            place.source_place_id
+            for place in places
+            if place.source_place_id in added_place_ids
+            or any(
+                required_place_name_matches(
+                    required_name=required_name,
+                    candidate_name=place.name,
+                )
+                for required_name in required_names
+            )
+        }
+
+        while len(places) > TRAVEL_CONTEXT_PLACE_LIMIT:
+            removable_index = next(
+                (
+                    index
+                    for index in range(len(places) - 1, -1, -1)
+                    if places[index].source_place_id not in protected_place_ids
+                ),
+                None,
+            )
+
+            if removable_index is None:
+                raise TripEnrichmentError(
+                    "Слишком много обязательных мест для одного маршрута."
+                )
+
+            places.pop(removable_index)
+
+        attribution = context.attribution
+
+        if added_place_ids and "Google Maps" not in attribution:
+            attribution = f"{attribution}; place data from Google Maps"
+
+        return context.model_copy(
+            update={
+                "places": places,
+                "attribution": attribution,
+            }
+        )
 
     async def _get_place_details_or_none(
         self,
@@ -644,7 +779,12 @@ class TripEnrichmentService:
             )
 
             if cached_context is not None:
-                return await self._enrich_missing_opening_hours(cached_context)
+                context = await self._ensure_must_visit_places(
+                    context=cached_context,
+                    required_names=preferences.must_visit_places,
+                )
+
+                return await self._enrich_missing_opening_hours(context)
 
         try:
             location = await self._places_provider.geocode_destination(
@@ -686,5 +826,10 @@ class TripEnrichmentService:
                 categories=categories,
                 context=context,
             )
+
+        context = await self._ensure_must_visit_places(
+            context=context,
+            required_names=preferences.must_visit_places,
+        )
 
         return await self._enrich_missing_opening_hours(context)

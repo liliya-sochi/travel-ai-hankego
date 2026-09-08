@@ -1,4 +1,4 @@
-"""Точечный fallback часов работы через Google Places API (New)."""
+"""Точечный поиск мест и часов через Google Places API (New)."""
 
 import re
 import unicodedata
@@ -11,7 +11,7 @@ import httpx
 from pydantic import SecretStr, ValidationError
 from redis.exceptions import RedisError
 
-from app.schemas.geoapify import PlaceCandidate
+from app.schemas.geoapify import DestinationLocation, PlaceCandidate
 from app.schemas.google_places import (
     GoogleOpeningHours,
     GoogleOpeningPeriod,
@@ -19,6 +19,10 @@ from app.schemas.google_places import (
     GoogleTextSearchResponse,
 )
 from app.services.place_geography import calculate_distance_meters
+from app.services.place_matching import (
+    normalize_place_name,
+    required_place_name_matches,
+)
 
 GOOGLE_TEXT_SEARCH_PATH = "/v1/places:searchText"
 GOOGLE_TEXT_SEARCH_FIELD_MASK = (
@@ -31,6 +35,8 @@ GOOGLE_MATCH_DISTANCE_METERS = 1_500.0
 GOOGLE_TRANSLATED_MATCH_DISTANCE_METERS = 250.0
 GOOGLE_MATCH_NAME_SIMILARITY = 0.6
 GOOGLE_RELOCATION_MAX_DISTANCE_METERS = 50_000.0
+GOOGLE_REQUIRED_SEARCH_RADIUS_METERS = 50_000.0
+GOOGLE_REQUIRED_MATCH_NAME_SIMILARITY = 0.75
 GOOGLE_RELOCATION_PLACE_TYPES = frozenset(
     {
         "archaeological_site",
@@ -91,6 +97,82 @@ def _normalize_name(value: str) -> str:
     )
 
     return _NAME_CHARACTER_PATTERN.sub("", without_accents)
+
+
+def _select_required_place(
+    *,
+    required_name: str,
+    location: DestinationLocation,
+    google_places: list[GooglePlace],
+) -> GooglePlace | None:
+    """Выбирает одно близкое место с совпадающим названием."""
+
+    normalized_required = normalize_place_name(required_name)
+    matches: list[tuple[bool, float, float, GooglePlace]] = []
+
+    for google_place in google_places:
+        if google_place.formatted_address is None:
+            continue
+
+        normalized_candidate = normalize_place_name(
+            google_place.display_name.text,
+        )
+        name_similarity = SequenceMatcher(
+            None,
+            normalized_required,
+            normalized_candidate,
+        ).ratio()
+        name_matches = required_place_name_matches(
+            required_name=required_name,
+            candidate_name=google_place.display_name.text,
+        )
+
+        if not name_matches and name_similarity < GOOGLE_REQUIRED_MATCH_NAME_SIMILARITY:
+            continue
+
+        distance_meters = calculate_distance_meters(
+            first_latitude=location.latitude,
+            first_longitude=location.longitude,
+            second_latitude=google_place.location.latitude,
+            second_longitude=google_place.location.longitude,
+        )
+
+        if distance_meters > GOOGLE_REQUIRED_SEARCH_RADIUS_METERS:
+            continue
+
+        matches.append(
+            (
+                not name_matches,
+                -name_similarity,
+                distance_meters,
+                google_place,
+            )
+        )
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda match: match[:3])
+
+    if len(matches) > 1 and matches[0][:2] == matches[1][:2]:
+        return None
+
+    return matches[0][3]
+
+
+def _google_place_categories(google_place: GooglePlace) -> list[str]:
+    """Преобразует минимальный набор Google types в категории HankeGo."""
+
+    if any("museum" in place_type for place_type in google_place.types):
+        return ["entertainment.museum"]
+
+    if "park" in google_place.types:
+        return ["leisure.park"]
+
+    if "restaurant" in google_place.types:
+        return ["catering.restaurant"]
+
+    return ["tourism.sights"]
 
 
 def _normalize_website_identity(
@@ -330,7 +412,7 @@ class GooglePlacesMonthlyBudget:
 
 
 class GooglePlacesClient:
-    """Ищет часы работы только для одного уже известного места."""
+    """Ищет обязательные места и дополняет известные места."""
 
     def __init__(
         self,
@@ -345,22 +427,27 @@ class GooglePlacesClient:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
 
-    async def enrich_place(
+    async def _search_text(
         self,
-        place: PlaceCandidate,
-    ) -> PlaceCandidate:
-        """Дополняет совпавшее место проверенными данными Google."""
+        *,
+        text_query: str,
+        latitude: float,
+        longitude: float,
+        radius_meters: float,
+        max_result_count: int,
+    ) -> list[GooglePlace]:
+        """Выполняет один проверенный запрос Google Text Search."""
 
         request_body = {
-            "textQuery": f"{place.name}, {place.formatted_address}",
-            "maxResultCount": 3,
+            "textQuery": text_query,
+            "maxResultCount": max_result_count,
             "locationBias": {
                 "circle": {
                     "center": {
-                        "latitude": place.latitude,
-                        "longitude": place.longitude,
+                        "latitude": latitude,
+                        "longitude": longitude,
                     },
-                    "radius": GOOGLE_SEARCH_RADIUS_METERS,
+                    "radius": radius_meters,
                 }
             },
         }
@@ -379,32 +466,48 @@ class GooglePlacesClient:
             )
         except httpx.TimeoutException as error:
             raise GooglePlacesServiceError(
-                "Сервис резервных расписаний временно не отвечает."
+                "Сервис Google Places временно не отвечает."
             ) from error
         except httpx.RequestError as error:
             raise GooglePlacesServiceError(
-                "Не удалось подключиться к сервису резервных расписаний."
+                "Не удалось подключиться к сервису Google Places."
             ) from error
 
         if response.status_code == 429:
             raise GooglePlacesServiceError(
-                "Лимит сервиса резервных расписаний временно исчерпан."
+                "Лимит сервиса Google Places временно исчерпан."
             )
 
         if not 200 <= response.status_code < 300:
-            raise GooglePlacesServiceError("Сервис резервных расписаний вернул ошибку.")
+            raise GooglePlacesServiceError("Сервис Google Places вернул ошибку.")
 
         try:
             response_data = response.json()
             parsed_response = GoogleTextSearchResponse.model_validate(response_data)
         except (ValueError, ValidationError) as error:
             raise GooglePlacesServiceError(
-                "Сервис резервных расписаний вернул некорректные данные."
+                "Сервис Google Places вернул некорректные данные."
             ) from error
+
+        return parsed_response.places
+
+    async def enrich_place(
+        self,
+        place: PlaceCandidate,
+    ) -> PlaceCandidate:
+        """Дополняет совпавшее место проверенными данными Google."""
+
+        google_places = await self._search_text(
+            text_query=f"{place.name}, {place.formatted_address}",
+            latitude=place.latitude,
+            longitude=place.longitude,
+            radius_meters=GOOGLE_SEARCH_RADIUS_METERS,
+            max_result_count=3,
+        )
 
         selected_match = _select_matching_place(
             source_place=place,
-            google_places=parsed_response.places,
+            google_places=google_places,
         )
 
         if selected_match is None:
@@ -448,3 +551,58 @@ class GooglePlacesClient:
             return place
 
         return place.model_copy(update=updates)
+
+    async def search_required_place(
+        self,
+        *,
+        required_name: str,
+        location: DestinationLocation,
+    ) -> PlaceCandidate | None:
+        """Ищет отсутствующее обязательное место около направления."""
+
+        google_places = await self._search_text(
+            text_query=f"{required_name}, {location.formatted_name}",
+            latitude=location.latitude,
+            longitude=location.longitude,
+            radius_meters=GOOGLE_REQUIRED_SEARCH_RADIUS_METERS,
+            max_result_count=5,
+        )
+        matched_place = _select_required_place(
+            required_name=required_name,
+            location=location,
+            google_places=google_places,
+        )
+
+        if matched_place is None or matched_place.formatted_address is None:
+            return None
+
+        opening_hours: str | None = None
+
+        if matched_place.business_status in GOOGLE_CLOSED_BUSINESS_STATUSES:
+            opening_hours = "off"
+        elif matched_place.regular_opening_hours is not None:
+            opening_hours = format_google_opening_hours(
+                matched_place.regular_opening_hours,
+            )
+
+        distance_meters = calculate_distance_meters(
+            first_latitude=location.latitude,
+            first_longitude=location.longitude,
+            second_latitude=matched_place.location.latitude,
+            second_longitude=matched_place.location.longitude,
+        )
+
+        return PlaceCandidate(
+            name=matched_place.display_name.text,
+            formatted_address=matched_place.formatted_address,
+            latitude=matched_place.location.latitude,
+            longitude=matched_place.location.longitude,
+            categories=_google_place_categories(matched_place),
+            distance_meters=distance_meters,
+            website=matched_place.website_uri,
+            opening_hours=opening_hours,
+            opening_hours_source="google",
+            location_source="google",
+            source_place_id=f"google:{matched_place.id}",
+            source="google",
+        )
