@@ -256,7 +256,7 @@ async def test_search_required_place_accepts_unique_translated_result() -> None:
         )
 
     assert place is not None
-    assert place.name == "Meguro Parasitological Museum"
+    assert place.name == "目黒寄生虫館"
     assert place.source_place_id == ("google:meguro-parasitological-museum")
 
 
