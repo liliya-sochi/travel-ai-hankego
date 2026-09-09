@@ -214,6 +214,103 @@ async def test_search_required_place_rejects_unrelated_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_required_place_accepts_unique_translated_result() -> None:
+    """Принимает единственный результат с названием в другой письменности."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "places": [
+                    {
+                        "id": "meguro-parasitological-museum",
+                        "displayName": {
+                            "text": "Meguro Parasitological Museum",
+                        },
+                        "formattedAddress": ("4-chome-1-1 Shimomeguro, Tokyo, Japan"),
+                        "types": [
+                            "tourist_attraction",
+                            "museum",
+                        ],
+                        "businessStatus": "OPERATIONAL",
+                        "location": {
+                            "latitude": 35.6336,
+                            "longitude": 139.7088,
+                        },
+                    }
+                ]
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        place = await client.search_required_place(
+            required_name="目黒寄生虫館",
+            location=DestinationLocation(
+                formatted_name="Токио, Япония",
+                latitude=35.6764,
+                longitude=139.6500,
+                source_place_id="tokyo-place-id",
+            ),
+        )
+
+    assert place is not None
+    assert place.name == "Meguro Parasitological Museum"
+    assert place.source_place_id == ("google:meguro-parasitological-museum")
+
+
+@pytest.mark.asyncio
+async def test_search_required_place_rejects_multiple_translated_results() -> None:
+    """Не угадывает между несколькими названиями в другой письменности."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "places": [
+                    {
+                        "id": place_id,
+                        "displayName": {"text": name},
+                        "formattedAddress": "Tokyo, Japan",
+                        "location": {
+                            "latitude": latitude,
+                            "longitude": 139.7088,
+                        },
+                    }
+                    for place_id, name, latitude in (
+                        (
+                            "first-museum",
+                            "Meguro Parasitological Museum",
+                            35.6336,
+                        ),
+                        (
+                            "second-museum",
+                            "Tokyo Museum",
+                            35.6400,
+                        ),
+                    )
+                ]
+            },
+        )
+
+    http_client, client = build_client(handler)
+
+    async with http_client:
+        place = await client.search_required_place(
+            required_name="目黒寄生虫館",
+            location=DestinationLocation(
+                formatted_name="Токио, Япония",
+                latitude=35.6764,
+                longitude=139.6500,
+                source_place_id="tokyo-place-id",
+            ),
+        )
+
+    assert place is None
+
+
+@pytest.mark.asyncio
 async def test_enrich_place_rejects_unrelated_place() -> None:
     """Не принимает далёкий объект с другим названием."""
 
