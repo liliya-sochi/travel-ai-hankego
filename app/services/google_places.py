@@ -66,6 +66,19 @@ return current
 
 _DAY_CODES = ("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
 _NAME_CHARACTER_PATTERN = re.compile(r"[^\w]+", flags=re.UNICODE)
+_NAME_SCRIPT_MARKERS = (
+    "LATIN",
+    "CYRILLIC",
+    "GREEK",
+    "HEBREW",
+    "ARABIC",
+    "CJK",
+    "HIRAGANA",
+    "KATAKANA",
+    "HANGUL",
+    "THAI",
+    "DEVANAGARI",
+)
 
 
 class GooglePlacesServiceError(Exception):
@@ -99,6 +112,42 @@ def _normalize_name(value: str) -> str:
     return _NAME_CHARACTER_PATTERN.sub("", without_accents)
 
 
+def _name_scripts(value: str) -> frozenset[str]:
+    """Возвращает системы письма, использованные в названии."""
+
+    scripts: set[str] = set()
+
+    for character in value:
+        if not character.isalpha():
+            continue
+
+        unicode_name = unicodedata.name(character, "")
+
+        for marker in _NAME_SCRIPT_MARKERS:
+            if marker in unicode_name:
+                scripts.add(marker)
+                break
+
+    return frozenset(scripts)
+
+
+def _is_cross_script_translation(
+    *,
+    required_name: str,
+    candidate_name: str,
+) -> bool:
+    """Определяет случай, когда строки нельзя сравнить без перевода."""
+
+    required_scripts = _name_scripts(required_name)
+    candidate_scripts = _name_scripts(candidate_name)
+
+    return bool(
+        required_scripts
+        and candidate_scripts
+        and required_scripts.isdisjoint(candidate_scripts)
+    )
+
+
 def _select_required_place(
     *,
     required_name: str,
@@ -109,6 +158,7 @@ def _select_required_place(
 
     normalized_required = normalize_place_name(required_name)
     matches: list[tuple[bool, float, float, GooglePlace]] = []
+    nearby_places: list[GooglePlace] = []
 
     for google_place in google_places:
         if google_place.formatted_address is None:
@@ -127,9 +177,6 @@ def _select_required_place(
             candidate_name=google_place.display_name.text,
         )
 
-        if not name_matches and name_similarity < GOOGLE_REQUIRED_MATCH_NAME_SIMILARITY:
-            continue
-
         distance_meters = calculate_distance_meters(
             first_latitude=location.latitude,
             first_longitude=location.longitude,
@@ -138,6 +185,11 @@ def _select_required_place(
         )
 
         if distance_meters > GOOGLE_REQUIRED_SEARCH_RADIUS_METERS:
+            continue
+
+        nearby_places.append(google_place)
+
+        if not name_matches and name_similarity < GOOGLE_REQUIRED_MATCH_NAME_SIMILARITY:
             continue
 
         matches.append(
@@ -150,7 +202,18 @@ def _select_required_place(
         )
 
     if not matches:
-        return None
+        if len(google_places) != 1 or len(nearby_places) != 1:
+            return None
+
+        only_place = nearby_places[0]
+
+        if not _is_cross_script_translation(
+            required_name=required_name,
+            candidate_name=only_place.display_name.text,
+        ):
+            return None
+
+        return only_place
 
     matches.sort(key=lambda match: match[:3])
 
