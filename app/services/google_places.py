@@ -656,7 +656,9 @@ class GooglePlacesClient:
         )
 
         return PlaceCandidate(
-            name=matched_place.display_name.text,
+            # Сохраняем исходное обязательное название: оно служит
+            # детерминированным контрактом между enrichment и grounding.
+            name=required_name,
             formatted_address=matched_place.formatted_address,
             latitude=matched_place.location.latitude,
             longitude=matched_place.location.longitude,
