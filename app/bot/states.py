@@ -14,3 +14,9 @@ class TripPlanning(StatesGroup):
     """
 
     collecting = State()
+
+
+class TripEditing(StatesGroup):
+    """Ожидание одной инструкции для выбранного маршрута."""
+
+    waiting_instruction = State()

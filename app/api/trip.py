@@ -26,6 +26,8 @@ from app.schemas.trip import (
     TripDeleteResponse,
     TripDetailsRequest,
     TripDetailsResponse,
+    TripEditRequest,
+    TripEditResponse,
     TripHistoryRequest,
     TripHistoryResponse,
     TripIntakeRequest,
@@ -43,6 +45,8 @@ from app.services.rate_limit import (
     TripPlanRateLimiter,
 )
 from app.services.trip import (
+    TripEditUnavailableError,
+    TripEditUnsupportedError,
     TripNotFoundError,
     TripService,
     TripServiceError,
@@ -251,6 +255,115 @@ async def create_trip_plan(
         raise _build_provider_rate_limit_http_error(
             error,
         ) from error
+
+    except AIServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    except TripServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(error),
+        ) from error
+
+
+@router.post(
+    "/trip-edit",
+    response_model=TripEditResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Изменить и сохранить существующий маршрут",
+)
+async def edit_trip_plan(
+    request: TripEditRequest,
+    session: SessionDependency,
+    rate_limiter: RateLimiterDependency,
+    generation_lock: GenerationLockDependency,
+    enrichment_service: EnrichmentServiceDependency,
+) -> TripEditResponse:
+    """Применяет текстовую инструкцию только к маршруту пользователя."""
+
+    service = TripService(session)
+
+    try:
+        async with generation_lock.hold(
+            telegram_id=request.telegram_id,
+        ):
+            await rate_limiter.check(
+                telegram_id=request.telegram_id,
+            )
+
+            return await service.edit_trip_plan(
+                telegram_id=request.telegram_id,
+                trip_id=request.trip_id,
+                instruction=request.instruction,
+                enrichment_service=enrichment_service,
+            )
+
+    except TripGenerationInProgressError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Другое изменение или создание маршрута уже выполняется. "
+                "Дождитесь его завершения."
+            ),
+        ) from error
+
+    except TripGenerationLockUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Редактирование маршрутов временно недоступно.",
+        ) from error
+
+    except RateLimitExceededError as error:
+        retry_minutes = max(
+            1,
+            ceil(error.retry_after_seconds / 60),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Лимит изменений маршрутов исчерпан. "
+                f"Попробуйте снова примерно через {retry_minutes} мин."
+            ),
+            headers={
+                "Retry-After": str(error.retry_after_seconds),
+            },
+        ) from error
+
+    except RateLimitUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Редактирование маршрутов временно недоступно.",
+        ) from error
+
+    except TripNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+
+    except TripEditUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+
+    except TripEditUnsupportedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+    except TripEnrichmentError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    except AIProviderRateLimitError as error:
+        raise _build_provider_rate_limit_http_error(error) from error
 
     except AIServiceError as error:
         raise HTTPException(

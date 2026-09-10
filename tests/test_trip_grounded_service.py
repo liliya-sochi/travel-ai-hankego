@@ -54,6 +54,7 @@ class FakeTripRepository:
 
     def __init__(self) -> None:
         self.plan_data: dict[str, object] | None = None
+        self.preferences_data: dict[str, object] | None = None
 
     async def create_trip(
         self,
@@ -62,6 +63,7 @@ class FakeTripRepository:
         """Имитирует сохранение маршрута."""
 
         self.plan_data = arguments["plan_data"]
+        self.preferences_data = arguments["preferences_data"]
 
         return SimpleNamespace(
             id=7,
@@ -179,5 +181,6 @@ async def test_enriches_before_generation_and_saving(
     assert session.committed is True
     assert session.rolled_back is False
     assert trip_repository.plan_data is not None
+    assert trip_repository.preferences_data == preferences.model_dump(mode="json")
     assert result.trip_id == 7
     assert result.destination == "Стамбул"

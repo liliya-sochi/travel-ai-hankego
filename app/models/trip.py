@@ -67,6 +67,14 @@ class Trip(Base):
         nullable=False,
     )
 
+    # Исходные предпочтения позволяют заново получить актуальные
+    # данные мест перед безопасным редактированием маршрута.
+    # Для маршрутов, созданных до появления функции, значение равно null.
+    preferences_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
     # Время сохранения маршрута устанавливает PostgreSQL.
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

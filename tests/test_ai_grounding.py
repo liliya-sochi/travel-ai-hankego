@@ -10,9 +10,10 @@ from app.schemas.geoapify import (
     PlaceCandidate,
     TravelContext,
 )
-from app.schemas.trip import TripPreferences
+from app.schemas.trip import TripPlanResponse, TripPreferences
 from app.services.ai import (
     AIServiceError,
+    _build_grounded_edit_user_message,
     _build_grounded_user_message,
     _validate_grounded_trip_plan,
 )
@@ -100,6 +101,26 @@ def build_grounded_plan() -> dict[str, object]:
     }
 
 
+def build_public_plan() -> TripPlanResponse:
+    """Создаёт текущую публичную версию для редактирования."""
+
+    return TripPlanResponse(
+        destination="Стамбул",
+        duration_days=1,
+        summary="Старый маршрут.",
+        days=[
+            {
+                "day": 1,
+                "title": "Старый день",
+                "morning": ["Старая прогулка"],
+                "afternoon": ["Старый музей"],
+                "evening": ["Старый ужин"],
+            }
+        ],
+        practical_tips=["Старый совет"],
+    )
+
+
 def test_builds_grounded_user_message() -> None:
     """Не передаёт LLM сайты и часы работы."""
 
@@ -130,6 +151,26 @@ def test_builds_grounded_user_message() -> None:
         "area_group_size_meters": 2000,
         "target_area_count": 1,
     }
+
+
+def test_builds_grounded_edit_message_with_fresh_context() -> None:
+    """Передаёт старый план и инструкцию отдельно от проверенных мест."""
+
+    current_plan = build_public_plan()
+    message = json.loads(
+        _build_grounded_edit_user_message(
+            preferences=build_preferences(),
+            travel_context=build_travel_context(),
+            current_plan=current_plan,
+            instruction="Замени вечер на спокойную прогулку",
+        )
+    )
+
+    assert message["current_trip_plan"] == current_plan.model_dump(mode="json")
+    assert message["edit_instruction"] == ("Замени вечер на спокойную прогулку")
+    assert message["travel_context"]["places"][0]["source_place_id"] == (
+        "hagia-sophia-id"
+    )
 
 
 def test_builds_multiday_geographic_planning_target() -> None:
@@ -414,6 +455,30 @@ def test_rejects_unknown_must_visit_place_before_llm() -> None:
             preferences=build_preferences(
                 must_visit_places=["Несуществующий музей"],
             ),
+            travel_context=build_travel_context(),
+        )
+
+
+def test_rejects_provider_details_copied_into_edited_description() -> None:
+    """Не допускает повторного добавления старых часов и сайтов."""
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+    morning = days[0]["morning"]
+
+    assert isinstance(morning, list)
+    assert isinstance(morning[0], dict)
+    morning[0]["description"] = (
+        "Посетить музей. Сайт из данных Google Maps: https://example.com/"
+    )
+
+    with pytest.raises(ValueError, match="provider details"):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(),
             travel_context=build_travel_context(),
         )
 

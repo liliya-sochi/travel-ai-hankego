@@ -17,6 +17,7 @@ Users can:
 - generate and save a structured day-by-day itinerary;
 - view previously saved trips through Telegram buttons;
 - open an itinerary through an inline button;
+- edit a newly created saved itinerary through a natural-language instruction;
 - delete an itinerary only after explicit confirmation.
 
 ## Architecture
@@ -32,6 +33,8 @@ flowchart TD
 ```
 
 The Telegram bot provides the conversational user interface. It stores the current dialogue state and unfinished trip draft in Redis, but it does not communicate with PostgreSQL or the LLM provider directly.
+
+Itineraries created after the editing migration store their original validated preferences and can be changed through the edit button. Older itineraries remain available for viewing and deletion, but are deliberately not editable because their original preferences cannot be reconstructed safely from formatted text.
 
 The FastAPI backend:
 
@@ -50,6 +53,9 @@ The FastAPI backend:
 - provides the LLM with a trusted travel context containing real place identifiers;
 - rejects itinerary places whose identifiers or names are absent from that context;
 - generates complete itineraries when enough information has been collected;
+- stores the original trip preferences for safe future editing;
+- rebuilds fresh travel context and validates a complete replacement version
+  before atomically saving an itinerary edit;
 - enforces access rules and request limits;
 - stores users and itineraries in PostgreSQL.
 
@@ -59,7 +65,7 @@ Redis is used for:
 - unfinished `TripDraft` storage between user messages;
 - cache-aside storage of validated `TravelContext` objects;
 - separate rate limiting for conversational intake and itinerary generation;
-- preventing concurrent itinerary generation for the same user.
+- preventing concurrent itinerary generation or editing for the same user.
 
 ## Implemented Features
 
@@ -127,11 +133,12 @@ Redis is used for:
 - SQLAlchemy 2 with asyncpg;
 - Alembic database migrations;
 - PostgreSQL storage for users and itineraries;
+- owner-scoped atomic updates of saved itineraries;
 - reproducible multi-stage Docker image for the FastAPI backend;
 - Gunicorn with Uvicorn workers for production process management;
 - automated Docker image build and runtime verification in CI.
 - Redis-based rate limiting;
-- Redis lock for concurrent generation protection;
+- Redis lock for concurrent generation and editing protection;
 - internal API key authentication between the bot and backend;
 - correlation IDs from Telegram updates to LLM requests;
 - liveness and readiness health checks;
@@ -148,7 +155,8 @@ Redis is used for:
 - Redis-backed storage of unfinished trip drafts;
 - automatic itinerary generation when destination and duration are known;
 - persistent reply keyboard for creating, viewing, and cancelling trips;
-- inline buttons for opening and deleting saved itineraries;
+- inline buttons for opening, editing, and deleting saved itineraries;
+- one-message natural-language editing within the same destination and duration;
 - explicit confirmation before destructive deletion;
 - automatic splitting of long itineraries into multiple messages;
 - safe backend error handling without exposing internal details;
@@ -286,13 +294,12 @@ For safety, the test database name must end with `_test`.
 - incoming data is validated with strict Pydantic schemas;
 - unknown request fields are rejected;
 - itinerary generation is protected by rate limiting and Redis locks;
-- itineraries can only be viewed or deleted by their owners;
+- itineraries can only be viewed, edited, or deleted by their owners;
 - the readiness endpoint verifies PostgreSQL and Redis availability.
 
 ## Roadmap
 
 - enrichment of verified places with official references, prices, and schedules where reliable sources provide them;
-- itinerary editing without regenerating the entire trip;
 - production metrics and automated alerting;
 - expanded end-to-end testing of Telegram dialogue scenarios;
 - web interface using the existing FastAPI backend;

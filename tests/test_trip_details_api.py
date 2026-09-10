@@ -61,6 +61,7 @@ class FakeTripDetailsService:
                 }
             ],
             practical_tips=["Проверяйте расписание."],
+            editable=True,
         )
 
 
@@ -135,6 +136,7 @@ async def test_trip_details_returns_owned_trip(
     assert response_data["trip_id"] == 7
     assert response_data["destination"] == "Токио"
     assert response_data["days"][0]["day"] == 1
+    assert response_data["editable"] is True
 
     assert "telegram_id" not in response_data
     assert "user_id" not in response_data

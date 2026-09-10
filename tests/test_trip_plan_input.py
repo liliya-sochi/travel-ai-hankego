@@ -55,6 +55,41 @@ async def test_create_trip_plan_serializes_preferences(
 
 
 @pytest.mark.asyncio
+async def test_edit_trip_serializes_instruction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Передаёт выбранный маршрут и одну инструкцию backend."""
+
+    captured_arguments: dict[str, Any] = {}
+
+    async def fake_request_backend(**arguments: Any) -> dict[str, Any]:
+        captured_arguments.update(arguments)
+        return {"updated": True}
+
+    monkeypatch.setattr(
+        api_client,
+        "_request_backend",
+        fake_request_backend,
+    )
+
+    result = await api_client.edit_trip(
+        telegram_id=9000000001,
+        trip_id=7,
+        instruction="Сделай вечер спокойнее",
+    )
+
+    assert result == {"updated": True}
+    assert captured_arguments["method"] == "POST"
+    assert captured_arguments["path"] == "/trip-edit"
+    assert captured_arguments["payload"] == {
+        "telegram_id": 9000000001,
+        "trip_id": 7,
+        "instruction": "Сделай вечер спокойнее",
+    }
+    assert captured_arguments["request_timeout"] == 150.0
+
+
+@pytest.mark.asyncio
 async def test_process_trip_intake_serializes_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
