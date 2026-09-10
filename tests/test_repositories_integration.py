@@ -44,6 +44,19 @@ def build_plan_data(
     }
 
 
+def build_preferences_data(destination: str) -> dict[str, Any]:
+    """Создаёт исходные параметры сохранённой поездки."""
+
+    return {
+        "destination": destination,
+        "duration_days": 1,
+        "travel_period": None,
+        "budget": None,
+        "interests": None,
+        "must_visit_places": [],
+    }
+
+
 @pytest.mark.asyncio
 async def test_user_upsert_updates_existing_row(
     database_session: AsyncSession,
@@ -113,6 +126,7 @@ async def test_trip_repository_enforces_ownership(
         destination="Токио",
         duration_days=1,
         plan_data=plan_data,
+        preferences_data=build_preferences_data("Токио"),
     )
 
     await database_session.commit()
@@ -137,9 +151,59 @@ async def test_trip_repository_enforces_ownership(
 
     assert owned_trip is not None
     assert owned_trip.plan_data == plan_data
+    assert owned_trip.preferences_data == build_preferences_data("Токио")
 
     # Другой пользователь не видит маршрут владельца.
     assert foreign_trip is None
+
+
+@pytest.mark.asyncio
+async def test_trip_repository_updates_only_owned_trip(
+    database_session: AsyncSession,
+) -> None:
+    """Проверяет атомарное обновление плана и исходных параметров."""
+
+    user_repository = UserRepository(database_session)
+    trip_repository = TripRepository(database_session)
+    owner = await user_repository.upsert_telegram_user(
+        telegram_id=9000000001,
+        first_name="Liliya",
+    )
+    other_user = await user_repository.upsert_telegram_user(
+        telegram_id=9000000002,
+        first_name="Other",
+    )
+    trip = await trip_repository.create_trip(
+        user_id=owner.id,
+        destination="Токио",
+        duration_days=1,
+        plan_data=build_plan_data("Токио"),
+        preferences_data=build_preferences_data("Токио"),
+    )
+    await database_session.commit()
+
+    foreign_result = await trip_repository.update_by_id_and_user_id(
+        trip_id=trip.id,
+        user_id=other_user.id,
+        plan_data=build_plan_data("Чужое изменение"),
+        preferences_data=build_preferences_data("Чужое изменение"),
+    )
+    updated_plan = build_plan_data("Токио")
+    updated_plan["summary"] = "Обновлённый маршрут."
+    updated_preferences = build_preferences_data("Токио")
+    updated_preferences["interests"] = "Музеи"
+    owner_result = await trip_repository.update_by_id_and_user_id(
+        trip_id=trip.id,
+        user_id=owner.id,
+        plan_data=updated_plan,
+        preferences_data=updated_preferences,
+    )
+    await database_session.commit()
+
+    assert foreign_result is None
+    assert owner_result is not None
+    assert owner_result.plan_data == updated_plan
+    assert owner_result.preferences_data == updated_preferences
 
 
 @pytest.mark.asyncio
@@ -163,6 +227,7 @@ async def test_user_deletion_cascades_to_trips(
         destination="Стамбул",
         duration_days=1,
         plan_data=build_plan_data(destination="Стамбул"),
+        preferences_data=build_preferences_data("Стамбул"),
     )
 
     await database_session.commit()
@@ -203,6 +268,7 @@ async def test_database_rejects_invalid_trip_duration(
                 "destination": "Ошибка",
                 "duration_days": 0,
             },
+            preferences_data=build_preferences_data("Ошибка"),
         )
 
     await database_session.rollback()
@@ -238,6 +304,7 @@ async def test_trip_repository_deletes_only_owned_trip(
         destination="Токио",
         duration_days=1,
         plan_data=build_plan_data(destination="Токио"),
+        preferences_data=build_preferences_data("Токио"),
     )
 
     await database_session.commit()

@@ -27,7 +27,7 @@ from app.bot.services.trip_formatter import (
     format_trip_plan,
     split_text,
 )
-from app.bot.states import TripPlanning
+from app.bot.states import TripEditing, TripPlanning
 from app.schemas.trip import (
     TripDraft,
     TripIntakeResponse,
@@ -273,7 +273,13 @@ async def cancel_trip_dialog(
     Очищает активный черновик поездки.
     """
 
+    current_state = await state.get_state()
     await state.clear()
+
+    if current_state == TripEditing.waiting_instruction.state:
+        await message.answer("Редактирование маршрута отменено.")
+        return
+
     await message.answer("Планирование поездки отменено.")
 
 

@@ -233,6 +233,42 @@ class TripIntakeResponse(StrictSchema):
     next_question: str | None
 
 
+class TripEditAnalysis(StrictSchema):
+    """Structured Output разбора инструкции редактирования."""
+
+    supported: bool = Field(
+        description=(
+            "Можно ли выполнить изменение без смены направления "
+            "или продолжительности поездки."
+        ),
+    )
+
+    interests_changed: bool = Field(
+        description="Изменяет ли инструкция интересы и стиль поездки.",
+    )
+
+    interests: str | None = Field(
+        min_length=2,
+        max_length=1000,
+        description=(
+            "Полное новое значение интересов, null для очистки "
+            "или при отсутствии изменения."
+        ),
+    )
+
+    must_visit_places_changed: bool = Field(
+        description="Изменяет ли инструкция список конкретных обязательных мест.",
+    )
+
+    must_visit_places: list[MustVisitPlaceName] = Field(
+        max_length=5,
+        description=(
+            "Полный новый список обязательных мест или текущий список, "
+            "если он не изменился."
+        ),
+    )
+
+
 class TripPlanRequest(StrictSchema):
     """
     Запрос на создание и сохранение маршрута.
@@ -253,6 +289,26 @@ class TripPlanRequest(StrictSchema):
 
     preferences: TripPreferences = Field(
         description="Проверенные параметры будущей поездки.",
+    )
+
+
+class TripEditRequest(StrictSchema):
+    """Запрос изменения существующего маршрута."""
+
+    telegram_id: int = Field(
+        gt=0,
+        description="Уникальный идентификатор пользователя Telegram.",
+    )
+
+    trip_id: int = Field(
+        gt=0,
+        description="Внутренний идентификатор маршрута.",
+    )
+
+    instruction: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="Одно текстовое требование к изменению маршрута.",
     )
 
 
@@ -421,6 +477,19 @@ class TripDetailsResponse(TripPlanResponse):
 
     created_at: datetime = Field(
         description="Время сохранения маршрута.",
+    )
+
+    editable: bool = Field(
+        description="Доступны ли исходные параметры для редактирования.",
+    )
+
+
+class TripEditResponse(TripDetailsResponse):
+    """Обновлённый и сохранённый маршрут."""
+
+    updated: Literal[True] = Field(
+        default=True,
+        description="Подтверждение успешного сохранения изменений.",
     )
 
 

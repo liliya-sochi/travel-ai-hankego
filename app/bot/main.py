@@ -47,8 +47,10 @@ async def run_bot() -> None:
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
 
     dispatcher.include_router(start_router)
-    dispatcher.include_router(plan_router)
+    # State-specific редактирование должно проверяться раньше
+    # общего обработчика свободного текста планирования.
     dispatcher.include_router(history_router)
+    dispatcher.include_router(plan_router)
 
     try:
         # Удаляем старый webhook перед запуском polling.

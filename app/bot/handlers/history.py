@@ -2,11 +2,14 @@
 Обработчики сохранённых маршрутов.
 """
 
+import logging
 from datetime import datetime
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -17,17 +20,26 @@ from aiogram.types import (
 from app.bot.api_client import (
     BackendError,
     delete_trip,
+    edit_trip,
     get_trip_details,
     get_trip_history,
+)
+from app.bot.keyboards import (
+    CANCEL_BUTTON_TEXT,
+    MY_TRIPS_BUTTON_TEXT,
+    NEW_TRIP_BUTTON_TEXT,
 )
 from app.bot.services.trip_formatter import (
     format_trip_plan,
     split_text,
 )
+from app.bot.states import TripEditing
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 OPEN_TRIP_PREFIX = "trip_open:"
+EDIT_REQUEST_PREFIX = "trip_edit_request:"
 DELETE_REQUEST_PREFIX = "trip_delete_request:"
 DELETE_CONFIRM_PREFIX = "trip_delete_confirm:"
 DELETE_CANCEL_PREFIX = "trip_delete_cancel:"
@@ -68,21 +80,162 @@ def build_trip_history_keyboard(
 
 def build_trip_actions_keyboard(
     trip_id: int,
+    *,
+    editable: bool = True,
 ) -> InlineKeyboardMarkup:
     """
     Создаёт действия для открытого маршрута.
     """
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🗑 Удалить маршрут",
-                    callback_data=f"{DELETE_REQUEST_PREFIX}{trip_id}",
-                ),
-            ]
-        ]
+    action_buttons = []
+
+    if editable:
+        action_buttons.append(
+            InlineKeyboardButton(
+                text="✏️ Редактировать",
+                callback_data=f"{EDIT_REQUEST_PREFIX}{trip_id}",
+            )
+        )
+
+    action_buttons.append(
+        InlineKeyboardButton(
+            text="🗑 Удалить маршрут",
+            callback_data=f"{DELETE_REQUEST_PREFIX}{trip_id}",
+        )
     )
+
+    return InlineKeyboardMarkup(inline_keyboard=[action_buttons])
+
+
+@router.callback_query(F.data.startswith(EDIT_REQUEST_PREFIX))
+async def request_trip_edit_callback_handler(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    """Запоминает маршрут и ожидает одну инструкцию изменения."""
+
+    trip_id = extract_callback_trip_id(
+        callback.data,
+        EDIT_REQUEST_PREFIX,
+    )
+
+    if trip_id is None:
+        await callback.answer(
+            "Некорректный ID маршрута.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer()
+    await state.clear()
+    await state.set_state(TripEditing.waiting_instruction)
+    await state.update_data(editing_trip_id=trip_id)
+
+    edit_prompt = (
+        "Напишите одним сообщением, что изменить в маршруте.\n\n"
+        "Например:\n"
+        "• Замени вечер на спокойную прогулку.\n"
+        "• Добавь музей современного искусства.\n"
+        "• Сделай второй день менее насыщенным.\n\n"
+        "Город и количество дней при редактировании не меняются."
+    )
+
+    if isinstance(callback.message, Message):
+        await callback.message.answer(edit_prompt)
+        return
+
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=edit_prompt,
+    )
+
+
+async def delete_edit_progress_message(progress_message: Message) -> None:
+    """Удаляет служебное сообщение, не скрывая успешный результат."""
+
+    try:
+        await progress_message.delete()
+
+    except TelegramAPIError as error:
+        logger.warning(
+            "Failed to delete trip edit progress message | error_type=%s",
+            type(error).__name__,
+        )
+
+
+@router.message(
+    TripEditing.waiting_instruction,
+    F.text,
+    ~F.text.startswith("/"),
+    F.text != CANCEL_BUTTON_TEXT,
+    F.text != MY_TRIPS_BUTTON_TEXT,
+    F.text != NEW_TRIP_BUTTON_TEXT,
+)
+async def trip_edit_instruction_handler(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """Отправляет изменение backend и показывает сохранённую версию."""
+
+    telegram_user = message.from_user
+
+    if telegram_user is None or message.text is None:
+        await state.clear()
+        await message.answer("Не удалось определить пользователя Telegram.")
+        return
+
+    state_data = await state.get_data()
+    trip_id = state_data.get("editing_trip_id")
+
+    if not isinstance(trip_id, int) or trip_id <= 0:
+        await state.clear()
+        await message.answer(
+            "Не удалось восстановить выбранный маршрут. "
+            "Откройте его снова в «🧳 Мои маршруты»."
+        )
+        return
+
+    progress_message = await message.answer("✏️ Проверяю и обновляю маршрут...")
+
+    try:
+        try:
+            updated_trip = await edit_trip(
+                telegram_id=telegram_user.id,
+                trip_id=trip_id,
+                instruction=message.text,
+            )
+
+        except BackendError as error:
+            await message.answer(
+                f"Не удалось изменить маршрут:\n{error}\n\n"
+                "Отправьте исправленный вариант или нажмите «Отмена»."
+            )
+            return
+
+        formatted_trip = format_trip_plan(updated_trip)
+        text_parts = split_text(formatted_trip)
+
+        for index, text_part in enumerate(text_parts):
+            is_last_part = index == len(text_parts) - 1
+            reply_markup = (
+                build_trip_actions_keyboard(trip_id) if is_last_part else None
+            )
+            await message.answer(
+                text_part,
+                reply_markup=reply_markup,
+            )
+
+        await state.clear()
+
+    finally:
+        await delete_edit_progress_message(progress_message)
+
+
+@router.message(TripEditing.waiting_instruction, ~F.text)
+async def non_text_trip_edit_handler(message: Message) -> None:
+    """Просит прислать изменение обычным текстом."""
+
+    await message.answer("Опишите изменение обычным текстовым сообщением.")
 
 
 def build_delete_confirmation_keyboard(
@@ -186,7 +339,14 @@ async def send_trip_details(
     for index, text_part in enumerate(text_parts):
         is_last_part = index == len(text_parts) - 1
 
-        reply_markup = build_trip_actions_keyboard(trip_id) if is_last_part else None
+        reply_markup = (
+            build_trip_actions_keyboard(
+                trip_id,
+                editable=bool(trip.get("editable", False)),
+            )
+            if is_last_part
+            else None
+        )
 
         await message.answer(
             text_part,

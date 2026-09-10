@@ -6,7 +6,7 @@
 
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.trip import Trip
@@ -30,6 +30,7 @@ class TripRepository:
         destination: str,
         duration_days: int,
         plan_data: dict[str, Any],
+        preferences_data: dict[str, Any],
     ) -> Trip:
         """
         Создаёт сохранённый маршрут пользователя.
@@ -40,6 +41,7 @@ class TripRepository:
             destination=destination,
             duration_days=duration_days,
             plan_data=plan_data,
+            preferences_data=preferences_data,
         )
 
         self._session.add(trip)
@@ -48,6 +50,33 @@ class TripRepository:
         await self._session.refresh(trip)
 
         return trip
+
+    async def update_by_id_and_user_id(
+        self,
+        *,
+        trip_id: int,
+        user_id: int,
+        plan_data: dict[str, Any],
+        preferences_data: dict[str, Any],
+    ) -> Trip | None:
+        """Атомарно обновляет принадлежащий пользователю маршрут."""
+
+        statement = (
+            update(Trip)
+            .where(
+                Trip.id == trip_id,
+                Trip.user_id == user_id,
+            )
+            .values(
+                plan_data=plan_data,
+                preferences_data=preferences_data,
+            )
+            .returning(Trip)
+        )
+
+        result = await self._session.execute(statement)
+
+        return result.scalar_one_or_none()
 
     async def list_by_user_id(
         self,

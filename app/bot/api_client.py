@@ -244,6 +244,28 @@ async def get_trip_details(
     )
 
 
+async def edit_trip(
+    *,
+    telegram_id: int,
+    trip_id: int,
+    instruction: str,
+) -> dict[str, Any]:
+    """Изменяет сохранённый маршрут по текстовой инструкции."""
+
+    return await _request_backend(
+        method="POST",
+        path="/trip-edit",
+        payload={
+            "telegram_id": telegram_id,
+            "trip_id": trip_id,
+            "instruction": instruction,
+        },
+        request_timeout=150.0,
+        timeout_message="Backend не успел изменить маршрут.",
+        default_error_message="Backend не смог изменить маршрут.",
+    )
+
+
 async def delete_trip(
     *,
     telegram_id: int,
