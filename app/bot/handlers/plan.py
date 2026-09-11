@@ -17,7 +17,10 @@ from app.bot.api_client import (
     create_trip_plan,
     process_trip_intake,
 )
-from app.bot.handlers.history import send_trip_history
+from app.bot.handlers.history import (
+    build_trip_actions_keyboard,
+    send_trip_history,
+)
 from app.bot.keyboards import (
     CANCEL_BUTTON_TEXT,
     MY_TRIPS_BUTTON_TEXT,
@@ -234,9 +237,20 @@ async def generate_and_send_trip(
             return
 
         formatted_plan = format_trip_plan(trip_plan)
+        text_parts = split_text(formatted_plan)
+        trip_id = trip_plan.get("trip_id")
 
-        for text_part in split_text(formatted_plan):
-            await message.answer(text_part)
+        for index, text_part in enumerate(text_parts):
+            is_last_part = index == len(text_parts) - 1
+            reply_markup = (
+                build_trip_actions_keyboard(trip_id)
+                if is_last_part and isinstance(trip_id, int) and trip_id > 0
+                else None
+            )
+            await message.answer(
+                text_part,
+                reply_markup=reply_markup,
+            )
 
         await state.clear()
 

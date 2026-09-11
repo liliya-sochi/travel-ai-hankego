@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -102,3 +102,61 @@ async def test_edit_error_keeps_selected_trip_for_retry(
         "Отправьте исправленный вариант или нажмите «Отмена»."
     )
     message.progress_message.delete.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_regenerate_callback_sends_another_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Кнопка сразу создаёт другой вариант без нового текстового диалога."""
+
+    progress_message = SimpleNamespace(delete=AsyncMock())
+    callback_message = MagicMock(spec=history_handler.Message)
+    callback_message.answer = AsyncMock(return_value=progress_message)
+    callback = SimpleNamespace(
+        data=f"{history_handler.REGENERATE_REQUEST_PREFIX}7",
+        answer=AsyncMock(),
+        message=callback_message,
+        from_user=SimpleNamespace(id=9000000001),
+        bot=SimpleNamespace(send_message=AsyncMock()),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+    captured_arguments: dict[str, Any] = {}
+
+    async def fake_edit_trip(**arguments: Any) -> dict[str, Any]:
+        captured_arguments.update(arguments)
+        return {"trip_id": 7, "updated": True}
+
+    monkeypatch.setattr(history_handler, "edit_trip", fake_edit_trip)
+    monkeypatch.setattr(history_handler, "format_trip_plan", lambda _: "Маршрут")
+    monkeypatch.setattr(
+        history_handler,
+        "split_text",
+        lambda _: ["Другой вариант"],
+    )
+
+    await history_handler.regenerate_trip_callback_handler(
+        callback=callback,
+        state=state,
+    )
+
+    assert captured_arguments == {
+        "telegram_id": 9000000001,
+        "trip_id": 7,
+        "instruction": (
+            "Создай другой вариант этого маршрута с теми же параметрами. "
+            "Выбери другие подходящие места и активности, где это возможно."
+        ),
+    }
+    callback.answer.assert_awaited_once_with()
+    state.clear.assert_awaited_once_with()
+    callback_message.answer.assert_has_awaits(
+        [
+            call("🔄 Готовлю другой вариант маршрута..."),
+            call(
+                "Другой вариант",
+                reply_markup=history_handler.build_trip_actions_keyboard(7),
+            ),
+        ]
+    )
+    progress_message.delete.assert_awaited_once_with()

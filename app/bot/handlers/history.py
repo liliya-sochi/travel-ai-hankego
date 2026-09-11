@@ -40,6 +40,7 @@ router = Router()
 
 OPEN_TRIP_PREFIX = "trip_open:"
 EDIT_REQUEST_PREFIX = "trip_edit_request:"
+REGENERATE_REQUEST_PREFIX = "trip_regenerate_request:"
 DELETE_REQUEST_PREFIX = "trip_delete_request:"
 DELETE_CONFIRM_PREFIX = "trip_delete_confirm:"
 DELETE_CANCEL_PREFIX = "trip_delete_cancel:"
@@ -87,24 +88,32 @@ def build_trip_actions_keyboard(
     Создаёт действия для открытого маршрута.
     """
 
-    action_buttons = []
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
 
     if editable:
-        action_buttons.append(
-            InlineKeyboardButton(
-                text="✏️ Редактировать",
-                callback_data=f"{EDIT_REQUEST_PREFIX}{trip_id}",
-            )
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✏️ Подправить",
+                    callback_data=f"{EDIT_REQUEST_PREFIX}{trip_id}",
+                ),
+                InlineKeyboardButton(
+                    text="🔄 Другой вариант",
+                    callback_data=f"{REGENERATE_REQUEST_PREFIX}{trip_id}",
+                ),
+            ]
         )
 
-    action_buttons.append(
-        InlineKeyboardButton(
-            text="🗑 Удалить маршрут",
-            callback_data=f"{DELETE_REQUEST_PREFIX}{trip_id}",
-        )
+    keyboard_rows.append(
+        [
+            InlineKeyboardButton(
+                text="🗑 Удалить маршрут",
+                callback_data=f"{DELETE_REQUEST_PREFIX}{trip_id}",
+            )
+        ]
     )
 
-    return InlineKeyboardMarkup(inline_keyboard=[action_buttons])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
 
 @router.callback_query(F.data.startswith(EDIT_REQUEST_PREFIX))
@@ -163,6 +172,31 @@ async def delete_edit_progress_message(progress_message: Message) -> None:
         )
 
 
+async def send_trip_with_actions(
+    *,
+    message: Message,
+    trip: dict[str, Any],
+    trip_id: int,
+    editable: bool = True,
+) -> None:
+    """Отправляет полную версию маршрута с действиями под последней частью."""
+
+    formatted_trip = format_trip_plan(trip)
+    text_parts = split_text(formatted_trip)
+
+    for index, text_part in enumerate(text_parts):
+        is_last_part = index == len(text_parts) - 1
+        reply_markup = (
+            build_trip_actions_keyboard(trip_id, editable=editable)
+            if is_last_part
+            else None
+        )
+        await message.answer(
+            text_part,
+            reply_markup=reply_markup,
+        )
+
+
 @router.message(
     TripEditing.waiting_instruction,
     F.text,
@@ -212,20 +246,74 @@ async def trip_edit_instruction_handler(
             )
             return
 
-        formatted_trip = format_trip_plan(updated_trip)
-        text_parts = split_text(formatted_trip)
-
-        for index, text_part in enumerate(text_parts):
-            is_last_part = index == len(text_parts) - 1
-            reply_markup = (
-                build_trip_actions_keyboard(trip_id) if is_last_part else None
-            )
-            await message.answer(
-                text_part,
-                reply_markup=reply_markup,
-            )
+        await send_trip_with_actions(
+            message=message,
+            trip=updated_trip,
+            trip_id=trip_id,
+        )
 
         await state.clear()
+
+    finally:
+        await delete_edit_progress_message(progress_message)
+
+
+@router.callback_query(F.data.startswith(REGENERATE_REQUEST_PREFIX))
+async def regenerate_trip_callback_handler(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    """Создаёт другой вариант текущей поездки одним нажатием."""
+
+    trip_id = extract_callback_trip_id(
+        callback.data,
+        REGENERATE_REQUEST_PREFIX,
+    )
+
+    if trip_id is None:
+        await callback.answer(
+            "Некорректный ID маршрута.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer()
+    await state.clear()
+
+    if not isinstance(callback.message, Message):
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
+            text="Не удалось открыть маршрут для обновления.",
+        )
+        return
+
+    progress_message = await callback.message.answer(
+        "🔄 Готовлю другой вариант маршрута..."
+    )
+
+    try:
+        try:
+            updated_trip = await edit_trip(
+                telegram_id=callback.from_user.id,
+                trip_id=trip_id,
+                instruction=(
+                    "Создай другой вариант этого маршрута с теми же "
+                    "параметрами. Выбери другие подходящие места и "
+                    "активности, где это возможно."
+                ),
+            )
+
+        except BackendError as error:
+            await callback.message.answer(
+                f"Не удалось подготовить другой вариант:\n{error}"
+            )
+            return
+
+        await send_trip_with_actions(
+            message=callback.message,
+            trip=updated_trip,
+            trip_id=trip_id,
+        )
 
     finally:
         await delete_edit_progress_message(progress_message)
