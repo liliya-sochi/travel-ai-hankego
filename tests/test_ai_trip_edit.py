@@ -35,7 +35,7 @@ def build_plan() -> TripPlanResponse:
             {
                 "day": 1,
                 "title": "Токио",
-                "morning": ["Прогулка"],
+                "morning": ["三菱一号館"],
                 "afternoon": ["Парк"],
                 "evening": ["Отдых"],
             }
@@ -116,3 +116,74 @@ async def test_analyze_trip_edit_returns_full_preference_patch(
     assert user_payload["edit_instruction"] == (
         "Добавь музей Гибли (三鷹の森ジブリ美術館)"
     )
+
+
+@pytest.mark.asyncio
+async def test_analyze_trip_edit_retries_old_plan_place_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Не превращает место из старого плана в обязательное требование."""
+
+    response_places = [
+        ["三菱一号館", "目黒寄生虫館"],
+        ["目黒寄生虫館"],
+    ]
+    request_count = 0
+
+    async def fake_request_model(**_: Any) -> LLMProviderResponse:
+        nonlocal request_count
+        must_visit_places = response_places[request_count]
+        request_count += 1
+
+        return LLMProviderResponse(
+            data={
+                "model": "test-model",
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "supported": True,
+                                    "interests_changed": True,
+                                    "interests": "Архитектура, парки и музеи",
+                                    "must_visit_places_changed": True,
+                                    "must_visit_places": must_visit_places,
+                                },
+                                ensure_ascii=False,
+                            )
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {},
+            },
+            duration_ms=25,
+            header_request_id="request-id",
+        )
+
+    monkeypatch.setattr(
+        ai_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            llm_base_url="https://example.com/v1",
+            llm_api_key="private",
+            llm_model="test-model",
+        ),
+    )
+    monkeypatch.setattr(ai_service, "_request_model", fake_request_model)
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", DummyAsyncClient)
+
+    analysis = await analyze_trip_edit(
+        current_preferences=TripPreferences(
+            destination="Токио",
+            duration_days=1,
+            interests="Архитектура и парки",
+        ),
+        current_plan=build_plan(),
+        instruction=(
+            "Добавь Музей паразитологии Мэгуро (目黒寄生虫館) и сделай вечер спокойнее."
+        ),
+    )
+
+    assert request_count == 2
+    assert analysis.must_visit_places == ["目黒寄生虫館"]

@@ -17,7 +17,9 @@ Users can:
 - generate and save a structured day-by-day itinerary;
 - view previously saved trips through Telegram buttons;
 - open an itinerary through an inline button;
-- edit a newly created saved itinerary through a natural-language instruction;
+- edit a newly created itinerary directly under the Telegram result;
+- request another itinerary variant with one Telegram button;
+- restore the main menu and see concise guidance through `/help`;
 - delete an itinerary only after explicit confirmation.
 
 ## Architecture
@@ -34,7 +36,7 @@ flowchart TD
 
 The Telegram bot provides the conversational user interface. It stores the current dialogue state and unfinished trip draft in Redis, but it does not communicate with PostgreSQL or the LLM provider directly.
 
-Itineraries created after the editing migration store their original validated preferences and can be changed through the edit button. Older itineraries remain available for viewing and deletion, but are deliberately not editable because their original preferences cannot be reconstructed safely from formatted text.
+Itineraries created after the editing migration store their original validated preferences and can be changed through the actions shown immediately below a generated result. History remains available as a secondary path. Older itineraries remain available for viewing and deletion, but are deliberately not editable because their original preferences cannot be reconstructed safely from formatted text.
 
 The FastAPI backend:
 
@@ -56,6 +58,8 @@ The FastAPI backend:
 - stores the original trip preferences for safe future editing;
 - rebuilds fresh travel context and validates a complete replacement version
   before atomically saving an itinerary edit;
+- accepts a newly required place during editing only when its name is present
+  in the current user instruction;
 - enforces access rules and request limits;
 - stores users and itineraries in PostgreSQL.
 

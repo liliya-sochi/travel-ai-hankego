@@ -190,6 +190,7 @@ async def test_complete_draft_generates_and_sends_trip(
         captured_generation_arguments.update(arguments)
         return {
             "status": "ok",
+            "trip_id": 7,
         }
 
     monkeypatch.setattr(
@@ -235,8 +236,11 @@ async def test_complete_draft_generates_and_sends_trip(
     message.answer.assert_has_awaits(
         [
             call("✈️ Генерирую и сохраняю маршрут..."),
-            call("Первая часть маршрута"),
-            call("Вторая часть маршрута"),
+            call("Первая часть маршрута", reply_markup=None),
+            call(
+                "Вторая часть маршрута",
+                reply_markup=plan_handler.build_trip_actions_keyboard(7),
+            ),
         ]
     )
 

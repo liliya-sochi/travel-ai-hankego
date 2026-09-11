@@ -7,6 +7,7 @@ from app.bot.handlers.history import (
     DELETE_REQUEST_PREFIX,
     EDIT_REQUEST_PREFIX,
     OPEN_TRIP_PREFIX,
+    REGENERATE_REQUEST_PREFIX,
     build_delete_confirmation_keyboard,
     build_trip_actions_keyboard,
     build_trip_history_keyboard,
@@ -89,17 +90,20 @@ def test_build_trip_history_keyboard() -> None:
 
 def test_build_trip_actions_keyboard() -> None:
     """
-    Добавляет удаление под открытым маршрутом.
+    Добавляет быстрые действия под открытым маршрутом.
     """
 
     keyboard = build_trip_actions_keyboard(7)
 
     assert keyboard.inline_keyboard[0][0].callback_data == (f"{EDIT_REQUEST_PREFIX}7")
-    assert keyboard.inline_keyboard[0][1].callback_data == (f"{DELETE_REQUEST_PREFIX}7")
+    assert keyboard.inline_keyboard[0][1].callback_data == (
+        f"{REGENERATE_REQUEST_PREFIX}7"
+    )
+    assert keyboard.inline_keyboard[1][0].callback_data == (f"{DELETE_REQUEST_PREFIX}7")
 
     legacy_keyboard = build_trip_actions_keyboard(7, editable=False)
 
-    assert len(legacy_keyboard.inline_keyboard[0]) == 1
+    assert len(legacy_keyboard.inline_keyboard) == 1
     assert legacy_keyboard.inline_keyboard[0][0].callback_data == (
         f"{DELETE_REQUEST_PREFIX}7"
     )

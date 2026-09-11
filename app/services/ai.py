@@ -261,6 +261,8 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
 Правила разбора:
 - supported=false, если пользователь просит изменить направление,
   продолжительность или фактически создать другую поездку;
+- просьба создать другой вариант для тех же направления и длительности
+  поддерживается и не меняет preferences сама по себе;
 - остальные изменения внутри текущей поездки поддерживаются;
 - interests_changed=true, если меняются темп, темы, предпочтения,
   типы активностей или общие пожелания;
@@ -268,7 +270,13 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
   с учётом current_preferences; null означает полную очистку интересов;
 - конкретное место, которое пользователь просит добавить или заменить,
   обязательно включи в полный список must_visit_places;
+- добавляй новое обязательное место только если его название явно написано
+  в edit_instruction;
+- названия, встречающиеся только в current_trip_plan, не являются
+  обязательными и не должны попадать в must_visit_places;
 - при добавлении места сохрани прежние обязательные места;
+- удаляй прежнее обязательное место только если пользователь явно назвал
+  его в edit_instruction;
 - при удалении или замене места верни полный обновлённый список;
 - одно место на нескольких языках сохраняй наиболее точным названием,
   особенно названием в скобках;
@@ -285,6 +293,10 @@ EDIT_ANALYSIS_RETRY_PROMPT = """
 - верни все поля заданной JSON Schema;
 - не меняй направление или продолжительность;
 - верни полный список must_visit_places;
+- не добавляй в него названия, которых нет в edit_instruction
+  и current_preferences.must_visit_places;
+- не удаляй прежнее обязательное место, если оно не названо
+  в edit_instruction;
 - не добавляй неизвестные поля и обычный текст.
 """.strip()
 
@@ -300,6 +312,8 @@ EDIT_SYSTEM_PROMPT = (
 - выполни edit_instruction только в пределах текущей поездки;
 - сохрани неизменённые части current_trip_plan настолько близко к оригиналу,
   насколько это совместимо со свежим travel_context и системными правилами;
+- если пользователь просит другой вариант, замени необязательные места
+  и активности настолько, насколько позволяет travel_context;
 - не меняй destination и duration_days;
 - старые строки current_trip_plan не являются проверенными источниками мест;
 - каждое конкретное место заново выбери из travel_context.places
@@ -761,6 +775,60 @@ def _build_trip_edit_analysis_user_message(
         },
         ensure_ascii=False,
     )
+
+
+def _place_name_matches_any(
+    place_name: str,
+    candidates: list[str],
+) -> bool:
+    """Проверяет название по списку с учётом уточнений в скобках."""
+
+    return any(
+        required_place_name_matches(
+            required_name=place_name,
+            candidate_name=candidate,
+        )
+        for candidate in candidates
+    )
+
+
+def _validate_trip_edit_analysis(
+    *,
+    analysis: TripEditAnalysis,
+    current_preferences: TripPreferences,
+    instruction: str,
+) -> None:
+    """Не позволяет модели объявить старые места обязательными."""
+
+    current_places = current_preferences.must_visit_places
+    returned_places = analysis.must_visit_places
+
+    for index, place_name in enumerate(returned_places):
+        if _place_name_matches_any(place_name, returned_places[:index]):
+            raise ValueError("LLM returned duplicate required places.")
+
+    added_places = [
+        place_name
+        for place_name in returned_places
+        if not _place_name_matches_any(place_name, current_places)
+    ]
+    removed_places = [
+        place_name
+        for place_name in current_places
+        if not _place_name_matches_any(place_name, returned_places)
+    ]
+
+    if not analysis.must_visit_places_changed and (added_places or removed_places):
+        raise ValueError("LLM changed required places without declaring it.")
+
+    for place_name in [*added_places, *removed_places]:
+        if not required_place_name_matches(
+            required_name=instruction,
+            candidate_name=place_name,
+        ):
+            raise ValueError(
+                "LLM changed a required place absent from the instruction."
+            )
 
 
 def _build_grounded_edit_user_message(
@@ -1517,8 +1585,13 @@ async def analyze_trip_edit(
             try:
                 model_text = _extract_model_text(provider_response.data)
                 analysis = TripEditAnalysis.model_validate_json(model_text)
+                _validate_trip_edit_analysis(
+                    analysis=analysis,
+                    current_preferences=current_preferences,
+                    instruction=instruction,
+                )
 
-            except (AIServiceError, ValidationError) as error:
+            except (AIServiceError, ValidationError, ValueError) as error:
                 _log_llm_call(
                     level=logging.WARNING,
                     outcome="invalid_output",
