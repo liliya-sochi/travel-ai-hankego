@@ -76,6 +76,8 @@ Redis is used for:
 ### AI
 
 - OpenAI-compatible LLM API integration;
+- separate models for short Structured Output analysis and full itinerary
+  generation, preventing both workloads from competing for one model's token budget;
 - Structured Output based on JSON Schema;
 - conversational intent classification for trip planning, history, and cancellation;
 - structured extraction of destination, duration, travel period, budget, and interests;
@@ -248,6 +250,11 @@ The application requires:
 - an OpenAI-compatible LLM API key;
 - a Geoapify API key for destination geocoding and place retrieval;
 - a randomly generated `INTERNAL_API_KEY` containing at least 32 characters.
+
+`LLM_ANALYSIS_MODEL` is used for conversational intake and edit-instruction
+analysis. `LLM_MODEL` is reserved for full grounded itinerary generation. With
+Groq, the recommended values are `openai/gpt-oss-20b` and
+`openai/gpt-oss-120b`, respectively.
 
 `TRAVEL_CONTEXT_CACHE_TTL_SECONDS` controls how long validated Geoapify travel contexts remain in Redis. The default value is `21600` seconds, or six hours.
 

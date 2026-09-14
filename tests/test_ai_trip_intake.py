@@ -96,6 +96,7 @@ async def test_analyze_trip_message_returns_extraction(
         llm_base_url="https://example.com/v1",
         llm_api_key=PRIVATE_API_KEY,
         llm_model="test-model",
+        llm_analysis_model="test-analysis-model",
     )
 
     monkeypatch.setattr(
@@ -126,6 +127,8 @@ async def test_analyze_trip_message_returns_extraction(
     assert extraction.destination == "Япония"
     assert extraction.duration_days == 7
     assert extraction.must_visit_places == ["警察博物館"]
+
+    assert captured_payload["model"] == "test-analysis-model"
 
     response_format = captured_payload["response_format"]
 
@@ -158,6 +161,7 @@ async def test_analyze_trip_message_retries_invalid_output(
         llm_base_url="https://example.com/v1",
         llm_api_key=PRIVATE_API_KEY,
         llm_model="test-model",
+        llm_analysis_model="test-analysis-model",
     )
 
     monkeypatch.setattr(
