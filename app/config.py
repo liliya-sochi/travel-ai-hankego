@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # Точное название модели у AI-провайдера.
     llm_model: str
 
+    llm_analysis_model: str
+
     # Базовый адрес Geoapify API.
     geoapify_base_url: str = "https://api.geoapify.com"
 

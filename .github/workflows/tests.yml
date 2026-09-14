@@ -79,6 +79,7 @@ jobs:
       LLM_BASE_URL: https://example.invalid
       LLM_API_KEY: test-api-key
       LLM_MODEL: test-model
+      LLM_ANALYSIS_MODEL: test-analysis-model
 
       GEOAPIFY_BASE_URL: https://example.invalid
       GEOAPIFY_API_KEY: test-geoapify-api-key

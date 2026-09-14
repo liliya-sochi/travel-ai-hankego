@@ -1423,6 +1423,7 @@ async def analyze_trip_message(
     """
 
     settings = get_settings()
+    analysis_model = settings.llm_analysis_model
 
     url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
 
@@ -1458,7 +1459,7 @@ async def analyze_trip_message(
             MAX_SEMANTIC_ATTEMPTS + 1,
         ):
             payload = _build_request_payload(
-                model=settings.llm_model,
+                model=analysis_model,
                 messages=messages,
                 response_schema=TripIntakeExtraction,
                 structured_output_name=INTAKE_STRUCTURED_OUTPUT_NAME,
@@ -1469,13 +1470,13 @@ async def analyze_trip_message(
                 url=url,
                 headers=headers,
                 payload=payload,
-                model=settings.llm_model,
+                model=analysis_model,
                 attempt=attempt,
             )
 
             metadata = _extract_llm_response_metadata(
                 provider_response.data,
-                requested_model=settings.llm_model,
+                requested_model=analysis_model,
                 fallback_request_id=provider_response.header_request_id,
             )
 
@@ -1536,6 +1537,7 @@ async def analyze_trip_edit(
     """Извлекает безопасное изменение предпочтений существующей поездки."""
 
     settings = get_settings()
+    analysis_model = settings.llm_analysis_model
     url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.llm_api_key}",
@@ -1563,7 +1565,7 @@ async def analyze_trip_edit(
     async with httpx.AsyncClient(timeout=request_timeout) as client:
         for attempt in range(1, MAX_SEMANTIC_ATTEMPTS + 1):
             payload = _build_request_payload(
-                model=settings.llm_model,
+                model=analysis_model,
                 messages=messages,
                 response_schema=TripEditAnalysis,
                 structured_output_name=(EDIT_ANALYSIS_STRUCTURED_OUTPUT_NAME),
@@ -1573,12 +1575,12 @@ async def analyze_trip_edit(
                 url=url,
                 headers=headers,
                 payload=payload,
-                model=settings.llm_model,
+                model=analysis_model,
                 attempt=attempt,
             )
             metadata = _extract_llm_response_metadata(
                 provider_response.data,
-                requested_model=settings.llm_model,
+                requested_model=analysis_model,
                 fallback_request_id=provider_response.header_request_id,
             )
 

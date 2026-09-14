@@ -87,6 +87,7 @@ async def test_analyze_trip_edit_returns_full_preference_patch(
             llm_base_url="https://example.com/v1",
             llm_api_key="private",
             llm_model="test-model",
+            llm_analysis_model="test-analysis-model",
         ),
     )
     monkeypatch.setattr(ai_service, "_request_model", fake_request_model)
@@ -106,6 +107,8 @@ async def test_analyze_trip_edit_returns_full_preference_patch(
     assert analysis.supported is True
     assert analysis.interests == "Архитектура и музеи"
     assert analysis.must_visit_places == ["三鷹の森ジブリ美術館"]
+
+    assert captured_payload["model"] == "test-analysis-model"
 
     response_format = captured_payload["response_format"]
     assert response_format["json_schema"]["name"] == "trip_edit_analysis"
@@ -168,6 +171,7 @@ async def test_analyze_trip_edit_retries_old_plan_place_promotion(
             llm_base_url="https://example.com/v1",
             llm_api_key="private",
             llm_model="test-model",
+            llm_analysis_model="test-analysis-model",
         ),
     )
     monkeypatch.setattr(ai_service, "_request_model", fake_request_model)
