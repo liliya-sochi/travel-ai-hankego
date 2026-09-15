@@ -151,6 +151,10 @@ def test_builds_grounded_user_message() -> None:
         "area_group_size_meters": 2000,
         "target_area_count": 1,
     }
+    assert message["travel_context"]["grounding_requirements"] == {
+        "minimum_places_per_day": 1,
+        "minimum_unique_places": 1,
+    }
 
 
 def test_builds_grounded_edit_message_with_fresh_context() -> None:
@@ -252,6 +256,134 @@ def test_validates_and_converts_grounded_plan() -> None:
         ),
         ("Powered by Geoapify; data © OpenStreetMap contributors"),
     ]
+
+
+def test_requires_two_grounded_places_for_one_day_when_available() -> None:
+    """Не принимает однодневный маршрут из одного места и общих фраз."""
+
+    context = build_travel_context()
+    context.places.append(
+        PlaceCandidate(
+            name="Дворец Топкапы",
+            formatted_address="Фатих, Стамбул",
+            latitude=41.0115,
+            longitude=28.9834,
+            categories=["tourism.sights"],
+            source_place_id="topkapi-palace-id",
+            opening_hours="Mo-Su 09:00-18:00",
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="too few grounded places in a day",
+    ):
+        _validate_grounded_trip_plan(
+            json.dumps(
+                build_grounded_plan(),
+                ensure_ascii=False,
+            ),
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+
+
+def test_does_not_count_closed_place_towards_grounding_minimum() -> None:
+    """Не требует использовать место, которое отмечено как закрытое."""
+
+    context = build_travel_context()
+    context.places.append(
+        PlaceCandidate(
+            name="Закрытый музей",
+            formatted_address="Стамбул, Турция",
+            latitude=41.012,
+            longitude=28.984,
+            categories=["entertainment.museum"],
+            source_place_id="closed-museum-id",
+            opening_hours="off",
+        )
+    )
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+    )
+
+    assert message["travel_context"]["grounding_requirements"] == {
+        "minimum_places_per_day": 1,
+        "minimum_unique_places": 1,
+    }
+
+
+def test_rejects_reusing_too_few_unique_places_across_days() -> None:
+    """Не разрешает заполнять разные дни одной парой мест."""
+
+    context = build_travel_context()
+
+    for index, name in enumerate(
+        [
+            "Дворец Топкапы",
+            "Археологический музей",
+            "Галатская башня",
+        ],
+        start=1,
+    ):
+        context.places.append(
+            PlaceCandidate(
+                name=name,
+                formatted_address="Стамбул, Турция",
+                latitude=41.01 + index / 1000,
+                longitude=28.98 + index / 1000,
+                categories=["tourism.sights"],
+                source_place_id=f"place-{index}-id",
+                opening_hours="Mo-Su 09:00-18:00",
+            )
+        )
+
+    repeated_day = {
+        "title": "Исторический Стамбул",
+        "morning": [
+            {
+                "source_place_id": "hagia-sophia-id",
+                "place_name": "Айя-София",
+                "description": "Посетить музей.",
+            }
+        ],
+        "afternoon": [
+            {
+                "source_place_id": "place-1-id",
+                "place_name": "Дворец Топкапы",
+                "description": "Осмотреть дворец.",
+            }
+        ],
+        "evening": [
+            {
+                "source_place_id": None,
+                "place_name": None,
+                "description": "Отдохнуть в кафе.",
+            }
+        ],
+    }
+    plan = {
+        "destination": "Стамбул",
+        "duration_days": 2,
+        "summary": "Два дня в Стамбуле.",
+        "days": [
+            {"day": 1, **repeated_day},
+            {"day": 2, **repeated_day},
+        ],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="too few unique grounded places",
+    ):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(duration_days=2),
+            travel_context=context,
+        )
 
 
 def test_labels_google_opening_hours_and_adds_provider_tip() -> None:
