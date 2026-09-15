@@ -58,6 +58,7 @@ EDIT_ANALYSIS_STRUCTURED_OUTPUT_NAME = "trip_edit_analysis"
 UNKNOWN_OBSERVABILITY_VALUE = "unknown"
 MAX_LOG_TEXT_LENGTH = 200
 MAX_LLM_AREA_GROUPS = 3
+TARGET_GROUNDED_PLACES_PER_DAY = 2
 FORBIDDEN_GROUNDED_DESCRIPTION_MARKERS = (
     "http://",
     "https://",
@@ -109,6 +110,10 @@ SYSTEM_PROMPT = """
 Правила использования мест:
 - каждый идентификатор из must_visit_place_ids обязательно используй
   хотя бы один раз в маршруте;
+- каждый день используй не менее
+  grounding_requirements.minimum_places_per_day конкретных мест;
+- во всём маршруте используй не менее
+  grounding_requirements.minimum_unique_places разных конкретных мест;
 - не заменяй обязательное место похожим или альтернативным местом;
 - конкретные места можно выбирать только из travel_context.places;
 - для конкретного места верни его точные source_place_id и name;
@@ -180,6 +185,9 @@ SEMANTIC_RETRY_PROMPT = """
 - не используй места вне travel_context.places;
 - включи каждый идентификатор из must_visit_place_ids
   хотя бы в одну конкретную активность;
+- выполни grounding_requirements.minimum_places_per_day для каждого дня;
+- используй не менее grounding_requirements.minimum_unique_places
+  разных конкретных мест во всём маршруте;
 - morning, afternoon и evening каждого дня содержат
   от одной до двух активностей;
 - выполни geographic_planning.target_area_count,
@@ -673,6 +681,43 @@ def _resolve_must_visit_place_ids(
     return resolved_place_ids
 
 
+def _build_grounding_requirements(
+    *,
+    preferences: TripPreferences,
+    travel_context: TravelContext,
+) -> dict[str, int]:
+    """Рассчитывает достижимый минимум конкретных мест в маршруте."""
+
+    available_place_ids = {
+        place.source_place_id
+        for place in travel_context.places
+        if infer_available_periods(place.opening_hours) != ()
+    }
+    available_place_count = len(available_place_ids)
+    duration_days = preferences.duration_days
+
+    if available_place_count >= TARGET_GROUNDED_PLACES_PER_DAY * duration_days:
+        minimum_places_per_day = TARGET_GROUNDED_PLACES_PER_DAY
+    elif available_place_count >= duration_days:
+        minimum_places_per_day = 1
+    else:
+        minimum_places_per_day = 0
+
+    target_unique_places = max(
+        TARGET_GROUNDED_PLACES_PER_DAY,
+        minimum_places_per_day * duration_days,
+        duration_days,
+    )
+
+    return {
+        "minimum_places_per_day": minimum_places_per_day,
+        "minimum_unique_places": min(
+            available_place_count,
+            target_unique_places,
+        ),
+    }
+
+
 def _build_grounded_user_message(
     *,
     preferences: TripPreferences,
@@ -730,6 +775,10 @@ def _build_grounded_user_message(
         "area_group_size_meters": GEOGRAPHIC_CELL_SIZE_METERS,
         "target_area_count": target_area_count,
     }
+    llm_travel_context["grounding_requirements"] = _build_grounding_requirements(
+        preferences=preferences,
+        travel_context=travel_context,
+    )
     llm_travel_context["must_visit_place_ids"] = must_visit_place_ids
 
     return json.dumps(
@@ -987,6 +1036,10 @@ def _validate_grounded_trip_plan(
         raise ValueError("LLM destination does not match trip preferences.")
 
     places_by_id = {place.source_place_id: place for place in travel_context.places}
+    grounding_requirements = _build_grounding_requirements(
+        preferences=preferences,
+        travel_context=travel_context,
+    )
     must_visit_place_ids = set(
         _resolve_must_visit_place_ids(
             preferences=preferences,
@@ -994,8 +1047,10 @@ def _validate_grounded_trip_plan(
         )
     )
     selected_place_ids: set[str] = set()
+    day_place_ids_collection: list[set[str]] = []
 
     for day in grounded_plan.days:
+        day_place_ids: set[str] = set()
         period_activities: tuple[
             tuple[DayPeriod, list[GroundedActivity]],
             ...,
@@ -1015,11 +1070,23 @@ def _validate_grounded_trip_plan(
 
                 if activity.source_place_id is not None:
                     selected_place_ids.add(activity.source_place_id)
+                    day_place_ids.add(activity.source_place_id)
+
+        day_place_ids_collection.append(day_place_ids)
 
     missing_must_visit_place_ids = must_visit_place_ids - selected_place_ids
 
     if missing_must_visit_place_ids:
         raise ValueError("LLM omitted a required place.")
+
+    if any(
+        len(day_place_ids) < grounding_requirements["minimum_places_per_day"]
+        for day_place_ids in day_place_ids_collection
+    ):
+        raise ValueError("LLM used too few grounded places in a day.")
+
+    if len(selected_place_ids) < grounding_requirements["minimum_unique_places"]:
+        raise ValueError("LLM used too few unique grounded places.")
 
     return grounded_plan.to_trip_plan_response(
         practical_tips=_build_grounded_practical_tips(travel_context),
