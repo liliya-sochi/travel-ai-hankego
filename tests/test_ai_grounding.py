@@ -221,6 +221,247 @@ def test_builds_multiday_geographic_planning_target() -> None:
     assert message["travel_context"]["geographic_planning"]["target_area_count"] == 3
 
 
+def test_prefers_documented_places_over_low_evidence_memorial() -> None:
+    """Не передаёт LLM слабый мемориал при достаточном контексте."""
+
+    context = build_travel_context()
+    context.places = [
+        PlaceCandidate(
+            name="Памятный знак",
+            formatted_address="Стамбул, Турция",
+            latitude=41.0083,
+            longitude=28.9785,
+            categories=[
+                "tourism.sights",
+                "tourism.sights.memorial",
+            ],
+            distance_meters=50.0,
+            available_details=["details.historic"],
+            source_place_id="minor-memorial-id",
+        ),
+        PlaceCandidate(
+            name="Археологический музей",
+            formatted_address="Стамбул, Турция",
+            latitude=41.009,
+            longitude=28.979,
+            categories=["entertainment.museum"],
+            distance_meters=500.0,
+            available_details=[
+                "details.contact",
+                "details.wiki_and_media",
+            ],
+            wiki_reference_count=3,
+            source_place_id="museum-id",
+        ),
+        PlaceCandidate(
+            name="Парк Гюльхане",
+            formatted_address="Стамбул, Турция",
+            latitude=41.013,
+            longitude=28.981,
+            categories=["leisure.park"],
+            distance_meters=700.0,
+            available_details=["details.wiki_and_media"],
+            wiki_reference_count=2,
+            source_place_id="park-id",
+        ),
+    ]
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+    )
+    place_ids = [
+        place["source_place_id"] for place in message["travel_context"]["places"]
+    ]
+
+    assert place_ids == [
+        "museum-id",
+        "park-id",
+    ]
+
+
+def test_keeps_low_evidence_places_when_context_is_sparse() -> None:
+    """Сохраняет достижимый минимум при бедном внешнем контексте."""
+
+    context = build_travel_context()
+    context.places = [
+        PlaceCandidate(
+            name="Небольшой музей",
+            formatted_address="Стамбул, Турция",
+            latitude=41.0083,
+            longitude=28.9785,
+            categories=["entertainment.museum"],
+            source_place_id="small-museum-id",
+        ),
+        PlaceCandidate(
+            name="Небольшой парк",
+            formatted_address="Стамбул, Турция",
+            latitude=41.0084,
+            longitude=28.9786,
+            categories=["leisure.park"],
+            source_place_id="small-park-id",
+        ),
+    ]
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+    )
+
+    assert {
+        place["source_place_id"] for place in message["travel_context"]["places"]
+    } == {
+        "small-museum-id",
+        "small-park-id",
+    }
+
+
+def test_keeps_best_candidate_for_duplicate_place_name() -> None:
+    """Не считает два provider ID одного места разными посещениями."""
+
+    context = build_travel_context()
+    context.places = [
+        PlaceCandidate(
+            name="Городской музей",
+            formatted_address="Старый адрес",
+            latitude=41.0083,
+            longitude=28.9785,
+            categories=["entertainment.museum"],
+            source_place_id="weak-duplicate-id",
+        ),
+        PlaceCandidate(
+            name="Городской музей",
+            formatted_address="Актуальный адрес",
+            latitude=41.0084,
+            longitude=28.9786,
+            categories=["entertainment.museum"],
+            available_details=["details.wiki_and_media"],
+            wiki_reference_count=3,
+            source_place_id="documented-duplicate-id",
+        ),
+        PlaceCandidate(
+            name="Городской парк",
+            formatted_address="Стамбул, Турция",
+            latitude=41.0085,
+            longitude=28.9787,
+            categories=["leisure.park"],
+            available_details=["details.wiki_and_media"],
+            wiki_reference_count=2,
+            source_place_id="park-id",
+        ),
+    ]
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+    )
+    place_ids = {
+        place["source_place_id"] for place in message["travel_context"]["places"]
+    }
+
+    assert place_ids == {
+        "documented-duplicate-id",
+        "park-id",
+    }
+
+
+def test_keeps_required_low_evidence_place() -> None:
+    """Не фильтрует явно обязательное место пользователя."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Обязательный памятный знак",
+                formatted_address="Стамбул, Турция",
+                latitude=41.0083,
+                longitude=28.9785,
+                categories=["tourism.sights.memorial"],
+                source_place_id="required-memorial-id",
+            ),
+            PlaceCandidate(
+                name="Археологический музей",
+                formatted_address="Стамбул, Турция",
+                latitude=41.009,
+                longitude=28.979,
+                categories=["entertainment.museum"],
+                wiki_reference_count=3,
+                source_place_id="museum-id",
+            ),
+        ]
+    )
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(
+                must_visit_places=["Обязательный памятный знак"],
+            ),
+            travel_context=context,
+        )
+    )
+    place_ids = [
+        place["source_place_id"] for place in message["travel_context"]["places"]
+    ]
+
+    assert place_ids[0] == "required-memorial-id"
+
+
+def test_rejects_filtered_low_evidence_place() -> None:
+    """Не принимает слабое место, скрытое из planning-контекста."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Памятный знак",
+                formatted_address="Стамбул, Турция",
+                latitude=41.0083,
+                longitude=28.9785,
+                categories=["tourism.sights.memorial"],
+                source_place_id="minor-memorial-id",
+            ),
+            PlaceCandidate(
+                name="Археологический музей",
+                formatted_address="Стамбул, Турция",
+                latitude=41.009,
+                longitude=28.979,
+                categories=["entertainment.museum"],
+                wiki_reference_count=3,
+                source_place_id="museum-id",
+            ),
+        ]
+    )
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    days[0]["afternoon"] = [
+        {
+            "source_place_id": "minor-memorial-id",
+            "place_name": "Памятный знак",
+            "description": "Осмотреть памятный знак.",
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="outside travel context",
+    ):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+
+
 def test_validates_and_converts_grounded_plan() -> None:
     """Проверяет валидный ID и преобразование в старый контракт."""
 

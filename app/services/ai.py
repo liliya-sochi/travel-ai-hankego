@@ -66,6 +66,10 @@ FORBIDDEN_GROUNDED_DESCRIPTION_MARKERS = (
     "часы по данным",
     "сайт из данных",
 )
+PLANNING_EVIDENCE_DETAILS = (
+    "details.contact",
+    "details.wiki_and_media",
+)
 
 
 SYSTEM_PROMPT = """
@@ -74,7 +78,8 @@ SYSTEM_PROMPT = """
 Во входном JSON находятся:
 - trip_preferences — параметры поездки пользователя;
 - travel_context — проверенные туристические данные
-  с разрешённым списком places;
+  с разрешённым списком places, упорядоченным по полноте
+  проверяемых справочных данных;
 - travel_context.must_visit_place_ids — идентификаторы мест,
   которые обязательно должны присутствовать в маршруте.
 
@@ -115,6 +120,8 @@ SYSTEM_PROMPT = """
 - во всём маршруте используй не менее
   grounding_requirements.minimum_unique_places разных конкретных мест;
 - не заменяй обязательное место похожим или альтернативным местом;
+- места с более полными справочными данными расположены раньше;
+- при прочих равных предпочитай места в начале списка places;
 - конкретные места можно выбирать только из travel_context.places;
 - для конкретного места верни его точные source_place_id и name;
 - не изменяй source_place_id;
@@ -718,6 +725,112 @@ def _build_grounding_requirements(
     }
 
 
+def _has_planning_evidence(place: PlaceCandidate) -> bool:
+    """Определяет наличие проверяемых справочных признаков места."""
+
+    return (
+        place.wiki_reference_count > 0
+        or place.website is not None
+        or place.opening_hours is not None
+        or any(
+            detail in PLANNING_EVIDENCE_DETAILS for detail in place.available_details
+        )
+    )
+
+
+def _planning_place_sort_key(
+    place: PlaceCandidate,
+) -> tuple[int, bool, bool, bool, bool, int, bool, float, str, str]:
+    """Ставит выше места с проверяемыми справочными признаками."""
+
+    distance = place.distance_meters
+
+    return (
+        -place.wiki_reference_count,
+        "details.wiki_and_media" not in place.available_details,
+        "details.contact" not in place.available_details,
+        place.website is None,
+        place.opening_hours is None,
+        -len(place.available_details),
+        distance is None,
+        distance if distance is not None else 0.0,
+        place.name.casefold(),
+        place.source_place_id,
+    )
+
+
+def _select_planning_places(
+    *,
+    preferences: TripPreferences,
+    travel_context: TravelContext,
+    must_visit_place_ids: list[str],
+) -> list[PlaceCandidate]:
+    """Убирает кандидаты без справочных признаков, когда их достаточно."""
+
+    must_visit_place_id_set = set(must_visit_place_ids)
+    available_places = [
+        place
+        for place in travel_context.places
+        if infer_available_periods(place.opening_hours) != ()
+    ]
+
+    if not available_places:
+        return sorted(
+            travel_context.places,
+            key=_planning_place_sort_key,
+        )
+
+    best_places_by_name: dict[str, PlaceCandidate] = {}
+
+    for place in sorted(
+        available_places,
+        key=lambda place: (
+            place.source_place_id not in must_visit_place_id_set,
+            *_planning_place_sort_key(place),
+        ),
+    ):
+        normalized_name = " ".join(place.name.casefold().split())
+        best_places_by_name.setdefault(normalized_name, place)
+
+    deduplicated_place_ids = {
+        place.source_place_id for place in best_places_by_name.values()
+    }
+    available_places = [
+        place
+        for place in available_places
+        if place.source_place_id in deduplicated_place_ids
+    ]
+    selected_places = [
+        place
+        for place in available_places
+        if _has_planning_evidence(place)
+        or place.source_place_id in must_visit_place_id_set
+    ]
+    selected_place_ids = {place.source_place_id for place in selected_places}
+    minimum_unique_places = _build_grounding_requirements(
+        preferences=preferences,
+        travel_context=travel_context,
+    )["minimum_unique_places"]
+
+    for place in available_places:
+        if len(selected_places) >= minimum_unique_places:
+            break
+
+        if place.source_place_id in selected_place_ids:
+            continue
+
+        selected_places.append(place)
+        selected_place_ids.add(place.source_place_id)
+
+    return sorted(
+        selected_places,
+        key=lambda place: (
+            place.source_place_id not in must_visit_place_id_set,
+            *_planning_place_sort_key(place),
+        ),
+    )
+
+
 def _build_grounded_user_message(
     *,
     preferences: TripPreferences,
@@ -735,8 +848,16 @@ def _build_grounded_user_message(
         preferences=preferences,
         travel_context=travel_context,
     )
+    planning_places = _select_planning_places(
+        preferences=preferences,
+        travel_context=travel_context,
+        must_visit_place_ids=must_visit_place_ids,
+    )
+    planning_context = travel_context.model_copy(
+        update={"places": planning_places},
+    )
 
-    llm_travel_context = travel_context.model_dump(
+    llm_travel_context = planning_context.model_dump(
         mode="json",
         exclude={
             "places": {
@@ -754,7 +875,7 @@ def _build_grounded_user_message(
 
     for place_data, place in zip(
         llm_places,
-        travel_context.places,
+        planning_places,
         strict=True,
     ):
         area_group = format_place_area_group(
@@ -777,7 +898,7 @@ def _build_grounded_user_message(
     }
     llm_travel_context["grounding_requirements"] = _build_grounding_requirements(
         preferences=preferences,
-        travel_context=travel_context,
+        travel_context=planning_context,
     )
     llm_travel_context["must_visit_place_ids"] = must_visit_place_ids
 
@@ -1035,17 +1156,24 @@ def _validate_grounded_trip_plan(
     if grounded_plan.destination.casefold() != preferences.destination.casefold():
         raise ValueError("LLM destination does not match trip preferences.")
 
-    places_by_id = {place.source_place_id: place for place in travel_context.places}
-    grounding_requirements = _build_grounding_requirements(
+    resolved_must_visit_place_ids = _resolve_must_visit_place_ids(
         preferences=preferences,
         travel_context=travel_context,
     )
-    must_visit_place_ids = set(
-        _resolve_must_visit_place_ids(
-            preferences=preferences,
-            travel_context=travel_context,
-        )
+    planning_places = _select_planning_places(
+        preferences=preferences,
+        travel_context=travel_context,
+        must_visit_place_ids=resolved_must_visit_place_ids,
     )
+    planning_context = travel_context.model_copy(
+        update={"places": planning_places},
+    )
+    places_by_id = {place.source_place_id: place for place in planning_places}
+    grounding_requirements = _build_grounding_requirements(
+        preferences=preferences,
+        travel_context=planning_context,
+    )
+    must_visit_place_ids = set(resolved_must_visit_place_ids)
     selected_place_ids: set[str] = set()
     day_place_ids_collection: list[set[str]] = []
 
