@@ -23,13 +23,14 @@ def build_preferences(
     *,
     duration_days: int = 1,
     must_visit_places: list[str] | None = None,
+    interests: str = "История",
 ) -> TripPreferences:
     """Создаёт тестовые параметры поездки."""
 
     return TripPreferences(
         destination="Стамбул",
         duration_days=duration_days,
-        interests="История",
+        interests=interests,
         must_visit_places=must_visit_places or [],
     )
 
@@ -175,6 +176,214 @@ def test_builds_grounded_edit_message_with_fresh_context() -> None:
     assert message["travel_context"]["places"][0]["source_place_id"] == (
         "hagia-sophia-id"
     )
+
+
+def test_passes_explicit_interest_category_requirements_to_llm() -> None:
+    """Передаёт допустимые ID для архитектуры и парков."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Архитектурный музей",
+                formatted_address="Стамбул, Турция",
+                latitude=41.01,
+                longitude=28.98,
+                categories=["building.tourism", "entertainment.museum"],
+                source_place_id="architecture-id",
+                website="https://architecture.example/",
+            ),
+            PlaceCandidate(
+                name="Городской парк",
+                formatted_address="Стамбул, Турция",
+                latitude=41.02,
+                longitude=28.99,
+                categories=["leisure.park"],
+                source_place_id="park-id",
+                website="https://park.example/",
+            ),
+        ]
+    )
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(
+                interests="Архитектура и парки",
+            ),
+            travel_context=context,
+        )
+    )
+
+    assert message["travel_context"]["interest_category_requirements"] == {
+        "building.tourism": ["architecture-id"],
+        "leisure.park": ["park-id"],
+    }
+
+
+def test_keeps_undocumented_place_for_explicit_interest() -> None:
+    """Не удаляет единственный подходящий объект явно названной темы."""
+
+    context = build_travel_context()
+    context.places.append(
+        PlaceCandidate(
+            name="Неизвестное архитектурное здание",
+            formatted_address="Стамбул, Турция",
+            latitude=41.01,
+            longitude=28.98,
+            categories=["building.tourism"],
+            source_place_id="weak-architecture-id",
+        )
+    )
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(interests="Архитектура"),
+            travel_context=context,
+        )
+    )
+
+    assert {
+        place["source_place_id"] for place in message["travel_context"]["places"]
+    } == {
+        "hagia-sophia-id",
+        "weak-architecture-id",
+    }
+    assert message["travel_context"]["interest_category_requirements"] == {
+        "building.tourism": ["weak-architecture-id"],
+    }
+
+
+def test_rejects_plan_without_explicit_interest_category() -> None:
+    """Отклоняет маршрут, который пропустил доступную архитектуру."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Архитектурный музей",
+                formatted_address="Стамбул, Турция",
+                latitude=41.01,
+                longitude=28.98,
+                categories=["building.tourism"],
+                source_place_id="architecture-id",
+                website="https://architecture.example/",
+            ),
+            PlaceCandidate(
+                name="Городской парк",
+                formatted_address="Стамбул, Турция",
+                latitude=41.02,
+                longitude=28.99,
+                categories=["leisure.park"],
+                source_place_id="park-id",
+                website="https://park.example/",
+            ),
+        ]
+    )
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    days[0]["afternoon"] = [
+        {
+            "source_place_id": "park-id",
+            "place_name": "Городской парк",
+            "description": "Прогуляться по парку.",
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="explicitly requested interest category",
+    ):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(
+                interests="Архитектура и парки",
+            ),
+            travel_context=context,
+        )
+
+
+def test_accepts_plan_covering_explicit_interest_categories() -> None:
+    """Принимает маршрут, который покрывает архитектуру и парки."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Архитектурный музей",
+                formatted_address="Стамбул, Турция",
+                latitude=41.01,
+                longitude=28.98,
+                categories=["building.tourism"],
+                source_place_id="architecture-id",
+                website="https://architecture.example/",
+            ),
+            PlaceCandidate(
+                name="Городской парк",
+                formatted_address="Стамбул, Турция",
+                latitude=41.02,
+                longitude=28.99,
+                categories=["leisure.park"],
+                source_place_id="park-id",
+                website="https://park.example/",
+            ),
+        ]
+    )
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+
+    days[0]["morning"] = [
+        {
+            "source_place_id": "architecture-id",
+            "place_name": "Архитектурный музей",
+            "description": "Осмотреть архитектуру здания.",
+        }
+    ]
+    days[0]["afternoon"] = [
+        {
+            "source_place_id": "park-id",
+            "place_name": "Городской парк",
+            "description": "Прогуляться по парку.",
+        }
+    ]
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(
+            interests="Архитектура и парки",
+        ),
+        travel_context=context,
+    )
+
+    assert result.days[0].morning[0].startswith("Архитектурный музей:")
+    assert result.days[0].afternoon[0].startswith("Городской парк:")
+
+
+def test_does_not_require_unavailable_interest_category() -> None:
+    """Не требует явно названную тему без доступных мест."""
+
+    context = build_travel_context()
+    context.places[0] = context.places[0].model_copy(
+        update={
+            "categories": ["building.tourism"],
+            "opening_hours": "off",
+        }
+    )
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=build_preferences(interests="Архитектура"),
+            travel_context=context,
+        )
+    )
+
+    assert message["travel_context"]["interest_category_requirements"] == {}
 
 
 def test_builds_multiday_geographic_planning_target() -> None:

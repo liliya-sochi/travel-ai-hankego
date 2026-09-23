@@ -17,6 +17,7 @@ from app.services.trip_enrichment import (
     TripEnrichmentError,
     TripEnrichmentService,
     requires_opening_hours_fallback,
+    select_interest_categories,
     select_place_candidates,
     select_place_categories,
 )
@@ -289,6 +290,29 @@ def test_selects_categories_from_interests() -> None:
         "catering.restaurant",
         "leisure.park",
         "entertainment",
+    ]
+
+
+def test_selects_architecture_and_park_as_explicit_interests() -> None:
+    """Отделяет явно запрошенные темы от базовых категорий поиска."""
+
+    interest_categories = select_interest_categories(
+        "Интересуют архитектура, парки и музеи",
+    )
+    search_categories = select_place_categories(
+        "Интересуют архитектура, парки и музеи",
+    )
+
+    assert interest_categories == [
+        "building.tourism",
+        "entertainment.museum",
+        "leisure.park",
+    ]
+    assert search_categories == [
+        "tourism.sights",
+        "entertainment.museum",
+        "building.tourism",
+        "leisure.park",
     ]
 
 
