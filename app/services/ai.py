@@ -43,6 +43,10 @@ from app.services.place_geography import (
     format_place_area_group,
 )
 from app.services.place_matching import required_place_name_matches
+from app.services.trip_enrichment import (
+    place_matches_category,
+    select_interest_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,7 @@ UNKNOWN_OBSERVABILITY_VALUE = "unknown"
 MAX_LOG_TEXT_LENGTH = 200
 MAX_LLM_AREA_GROUPS = 3
 TARGET_GROUNDED_PLACES_PER_DAY = 2
+MAX_GROUNDED_ACTIVITIES_PER_DAY = 6
 FORBIDDEN_GROUNDED_DESCRIPTION_MARKERS = (
     "http://",
     "https://",
@@ -81,7 +86,9 @@ SYSTEM_PROMPT = """
   с разрешённым списком places, упорядоченным по полноте
   проверяемых справочных данных;
 - travel_context.must_visit_place_ids — идентификаторы мест,
-  которые обязательно должны присутствовать в маршруте.
+  которые обязательно должны присутствовать в маршруте;
+- travel_context.interest_category_requirements — категории явно
+  указанных интересов и допустимые идентификаторы мест для каждой из них.
 
 Создай реалистичный и практичный план поездки.
 
@@ -115,6 +122,8 @@ SYSTEM_PROMPT = """
 Правила использования мест:
 - каждый идентификатор из must_visit_place_ids обязательно используй
   хотя бы один раз в маршруте;
+- для каждой категории из interest_category_requirements используй
+  хотя бы один source_place_id из её списка;
 - каждый день используй не менее
   grounding_requirements.minimum_places_per_day конкретных мест;
 - во всём маршруте используй не менее
@@ -192,6 +201,8 @@ SEMANTIC_RETRY_PROMPT = """
 - не используй места вне travel_context.places;
 - включи каждый идентификатор из must_visit_place_ids
   хотя бы в одну конкретную активность;
+- для каждой категории из interest_category_requirements выбери
+  хотя бы один source_place_id из её списка;
 - выполни grounding_requirements.minimum_places_per_day для каждого дня;
 - используй не менее grounding_requirements.minimum_unique_places
   разных конкретных мест во всём маршруте;
@@ -725,6 +736,50 @@ def _build_grounding_requirements(
     }
 
 
+def _build_interest_category_requirements(
+    *,
+    preferences: TripPreferences,
+    places: list[PlaceCandidate],
+    must_visit_place_ids: list[str],
+) -> dict[str, list[str]]:
+    """Формирует достижимые требования явно названных интересов."""
+
+    available_places = [
+        place for place in places if infer_available_periods(place.opening_hours) != ()
+    ]
+    must_visit_place_id_set = set(must_visit_place_ids)
+    remaining_activity_slots = max(
+        0,
+        MAX_GROUNDED_ACTIVITIES_PER_DAY * preferences.duration_days
+        - len(must_visit_place_id_set),
+    )
+    requirements: dict[str, list[str]] = {}
+
+    for category in select_interest_categories(preferences.interests):
+        matching_place_ids = [
+            place.source_place_id
+            for place in available_places
+            if place_matches_category(place, category)
+        ]
+
+        if not matching_place_ids:
+            continue
+
+        covered_by_must_visit = bool(
+            must_visit_place_id_set.intersection(matching_place_ids)
+        )
+
+        if not covered_by_must_visit and remaining_activity_slots == 0:
+            continue
+
+        requirements[category] = matching_place_ids
+
+        if not covered_by_must_visit:
+            remaining_activity_slots -= 1
+
+    return requirements
+
+
 def _has_planning_evidence(place: PlaceCandidate) -> bool:
     """Определяет наличие проверяемых справочных признаков места."""
 
@@ -807,6 +862,29 @@ def _select_planning_places(
         or place.source_place_id in must_visit_place_id_set
     ]
     selected_place_ids = {place.source_place_id for place in selected_places}
+    interest_categories = select_interest_categories(preferences.interests)
+
+    for category in interest_categories:
+        if any(place_matches_category(place, category) for place in selected_places):
+            continue
+
+        category_candidate = next(
+            (
+                place
+                for place in sorted(
+                    available_places,
+                    key=_planning_place_sort_key,
+                )
+                if place_matches_category(place, category)
+            ),
+            None,
+        )
+
+        if category_candidate is None:
+            continue
+
+        selected_places.append(category_candidate)
+        selected_place_ids.add(category_candidate.source_place_id)
     minimum_unique_places = _build_grounding_requirements(
         preferences=preferences,
         travel_context=travel_context,
@@ -901,6 +979,13 @@ def _build_grounded_user_message(
         travel_context=planning_context,
     )
     llm_travel_context["must_visit_place_ids"] = must_visit_place_ids
+    llm_travel_context["interest_category_requirements"] = (
+        _build_interest_category_requirements(
+            preferences=preferences,
+            places=planning_places,
+            must_visit_place_ids=must_visit_place_ids,
+        )
+    )
 
     return json.dumps(
         {
@@ -1174,6 +1259,11 @@ def _validate_grounded_trip_plan(
         travel_context=planning_context,
     )
     must_visit_place_ids = set(resolved_must_visit_place_ids)
+    interest_category_requirements = _build_interest_category_requirements(
+        preferences=preferences,
+        places=planning_places,
+        must_visit_place_ids=resolved_must_visit_place_ids,
+    )
     selected_place_ids: set[str] = set()
     day_place_ids_collection: list[set[str]] = []
 
@@ -1206,6 +1296,12 @@ def _validate_grounded_trip_plan(
 
     if missing_must_visit_place_ids:
         raise ValueError("LLM omitted a required place.")
+
+    if any(
+        selected_place_ids.isdisjoint(required_place_ids)
+        for required_place_ids in interest_category_requirements.values()
+    ):
+        raise ValueError("LLM omitted an explicitly requested interest category.")
 
     if any(
         len(day_place_ids) < grounding_requirements["minimum_places_per_day"]

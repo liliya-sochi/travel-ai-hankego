@@ -52,6 +52,26 @@ INTEREST_CATEGORY_RULES: tuple[
 ] = (
     (
         (
+            "архитект",
+            "здани",
+            "небоскр",
+            "дворц",
+            "architecture",
+            "building",
+            "skyscraper",
+            "palace",
+        ),
+        "building.tourism",
+    ),
+    (
+        (
+            "музе",
+            "museum",
+        ),
+        "entertainment.museum",
+    ),
+    (
+        (
             "еда",
             "кухн",
             "гастроном",
@@ -181,6 +201,27 @@ class TripEnrichmentError(Exception):
     """Безопасная ошибка обогащения маршрута."""
 
 
+def select_interest_categories(
+    interests: str | None,
+) -> list[str]:
+    """Выбирает категории, явно названные в интересах пользователя."""
+
+    if interests is None:
+        return []
+
+    normalized_interests = interests.casefold()
+    categories: list[str] = []
+
+    for keywords, category in INTEREST_CATEGORY_RULES:
+        if (
+            any(keyword in normalized_interests for keyword in keywords)
+            and category not in categories
+        ):
+            categories.append(category)
+
+    return categories
+
+
 def select_place_categories(
     interests: str | None,
 ) -> list[str]:
@@ -194,19 +235,14 @@ def select_place_categories(
 
     categories = DEFAULT_PLACE_CATEGORIES.copy()
 
-    if interests is None:
-        return categories
-
-    normalized_interests = interests.casefold()
-
-    for keywords, category in INTEREST_CATEGORY_RULES:
-        if any(keyword in normalized_interests for keyword in keywords):
+    for category in select_interest_categories(interests):
+        if category not in categories:
             categories.append(category)
 
     return categories
 
 
-def _matches_requested_category(
+def place_matches_category(
     place: PlaceCandidate,
     requested_category: str,
 ) -> bool:
@@ -274,7 +310,7 @@ def _select_nearby_by_category(
                     place
                     for place in ordered_places
                     if place.source_place_id not in selected_ids
-                    and _matches_requested_category(
+                    and place_matches_category(
                         place,
                         requested_category,
                     )
