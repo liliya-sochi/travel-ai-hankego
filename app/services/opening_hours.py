@@ -30,8 +30,58 @@ _DAY_NAMES = {
     "PH": "праздничные дни",
 }
 
+_FULL_DAY_NAMES = {
+    "Mo": "понедельник",
+    "Tu": "вторник",
+    "We": "среда",
+    "Th": "четверг",
+    "Fr": "пятница",
+    "Sa": "суббота",
+    "Su": "воскресенье",
+}
+
+_DAY_GENDER_INDEXES = {
+    "Mo": 0,
+    "Tu": 0,
+    "We": 1,
+    "Th": 0,
+    "Fr": 1,
+    "Sa": 1,
+    "Su": 2,
+}
+
+_ORDINAL_FORMS = {
+    -1: ("последний", "последняя", "последнее"),
+    1: ("первый", "первая", "первое"),
+    2: ("второй", "вторая", "второе"),
+    3: ("третий", "третья", "третье"),
+    4: ("четвёртый", "четвёртая", "четвёртое"),
+    5: ("пятый", "пятая", "пятое"),
+}
+
+_MONTH_DATA = {
+    "Jan": ("января", 31),
+    "Feb": ("февраля", 29),
+    "Mar": ("марта", 31),
+    "Apr": ("апреля", 30),
+    "May": ("мая", 31),
+    "Jun": ("июня", 30),
+    "Jul": ("июля", 31),
+    "Aug": ("августа", 31),
+    "Sep": ("сентября", 30),
+    "Oct": ("октября", 31),
+    "Nov": ("ноября", 30),
+    "Dec": ("декабря", 31),
+}
+
 _DAY_CODE_PATTERN = r"(?:Mo|Tu|We|Th|Fr|Sa|Su|PH)"
-_DAY_GROUP_PATTERN = rf"{_DAY_CODE_PATTERN}(?:-{_DAY_CODE_PATTERN})?"
+_WEEKDAY_CODE_PATTERN = r"(?:Mo|Tu|We|Th|Fr|Sa|Su)"
+_ORDINAL_VALUE_PATTERN = r"(?:-1|[1-5])"
+_ORDINAL_DAY_PATTERN_TEXT = rf"{_WEEKDAY_CODE_PATTERN}\[{_ORDINAL_VALUE_PATTERN}\]"
+_DAY_GROUP_PATTERN = (
+    rf"(?:{_ORDINAL_DAY_PATTERN_TEXT}|"
+    rf"{_DAY_CODE_PATTERN}(?:-{_DAY_CODE_PATTERN})?)"
+)
 _DAY_LIST_PATTERN = (
     rf"{_DAY_GROUP_PATTERN}"
     rf"(?:\s*,\s*{_DAY_GROUP_PATTERN})*"
@@ -46,6 +96,19 @@ _TIME_LIST_PATTERN = (
 _DAY_SCHEDULE_PATTERN = re.compile(
     rf"^(?P<days>{_DAY_LIST_PATTERN})\s+"
     rf"(?P<schedule>off|{_TIME_LIST_PATTERN})$"
+)
+
+_MONTH_CODE_PATTERN = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+_MONTH_DATE_LIST_PATTERN = r"\d{1,2}(?:\s*,\s*\d{1,2})*"
+_DATE_SCHEDULE_PATTERN = re.compile(
+    rf"^(?P<month>{_MONTH_CODE_PATTERN})\s+"
+    rf"(?P<dates>{_MONTH_DATE_LIST_PATTERN})\s+"
+    rf"(?P<schedule>off|{_TIME_LIST_PATTERN})$"
+)
+
+_ORDINAL_DAY_PATTERN = re.compile(
+    rf"^(?P<day>{_WEEKDAY_CODE_PATTERN})"
+    rf"\[(?P<ordinal>{_ORDINAL_VALUE_PATTERN})\]$"
 )
 
 _TIME_ONLY_PATTERN = re.compile(rf"^{_TIME_LIST_PATTERN}$")
@@ -64,6 +127,16 @@ def _format_days(days: str) -> str:
 
     for group in days.split(","):
         normalized_group = group.strip()
+
+        ordinal_match = _ORDINAL_DAY_PATTERN.fullmatch(normalized_group)
+
+        if ordinal_match is not None:
+            day = ordinal_match.group("day")
+            ordinal = int(ordinal_match.group("ordinal"))
+            gender_index = _DAY_GENDER_INDEXES[day]
+            ordinal_name = _ORDINAL_FORMS[ordinal][gender_index]
+            formatted_groups.append(f"{ordinal_name} {_FULL_DAY_NAMES[day]} месяца")
+            continue
 
         if "-" in normalized_group:
             start_day, end_day = normalized_group.split(
@@ -86,6 +159,48 @@ def _format_schedule(schedule: str) -> str:
     return schedule.replace("-", "–")
 
 
+def _format_month_dates(
+    month: str,
+    dates: str,
+) -> str | None:
+    """Переводит однозначный список календарных дат OSM."""
+
+    day_numbers = [int(value.strip()) for value in dates.split(",")]
+    month_name, max_day = _MONTH_DATA[month]
+
+    if any(day < 1 or day > max_day for day in day_numbers):
+        return None
+
+    if len(day_numbers) == 1:
+        formatted_days = str(day_numbers[0])
+    else:
+        formatted_days = (
+            ", ".join(str(day) for day in day_numbers[:-1]) + f" и {day_numbers[-1]}"
+        )
+
+    return f"{formatted_days} {month_name}"
+
+
+def _is_valid_schedule(schedule: str) -> bool:
+    """Проверяет время перед пользовательским форматированием."""
+
+    if schedule == "off":
+        return True
+
+    for time_range in schedule.split(","):
+        start_text, end_text = time_range.strip().split(
+            "-",
+            maxsplit=1,
+        )
+        start_minutes = _parse_clock_minutes(start_text)
+        end_minutes = _parse_clock_minutes(end_text)
+
+        if start_minutes is None or end_minutes is None or start_minutes == end_minutes:
+            return False
+
+    return True
+
+
 def format_opening_hours(opening_hours: str) -> str:
     """
     Переводит только простые и однозначные часы работы.
@@ -105,18 +220,41 @@ def format_opening_hours(opening_hours: str) -> str:
         normalized_segment = segment.strip()
 
         if _TIME_ONLY_PATTERN.fullmatch(normalized_segment):
+            if not _is_valid_schedule(normalized_segment):
+                return normalized_hours
+
             formatted_segments.append(_format_schedule(normalized_segment))
             continue
 
         schedule_match = _DAY_SCHEDULE_PATTERN.fullmatch(normalized_segment)
 
-        if schedule_match is None:
+        if schedule_match is not None:
+            schedule = schedule_match.group("schedule")
+
+            if not _is_valid_schedule(schedule):
+                return normalized_hours
+
+            formatted_days = _format_days(schedule_match.group("days"))
+            formatted_schedule = _format_schedule(schedule)
+
+            formatted_segments.append(f"{formatted_days}: {formatted_schedule}")
+            continue
+
+        date_match = _DATE_SCHEDULE_PATTERN.fullmatch(normalized_segment)
+
+        if date_match is None:
             return normalized_hours
 
-        formatted_days = _format_days(schedule_match.group("days"))
-        formatted_schedule = _format_schedule(schedule_match.group("schedule"))
+        schedule = date_match.group("schedule")
+        formatted_dates = _format_month_dates(
+            date_match.group("month"),
+            date_match.group("dates"),
+        )
 
-        formatted_segments.append(f"{formatted_days}: {formatted_schedule}")
+        if formatted_dates is None or not _is_valid_schedule(schedule):
+            return normalized_hours
+
+        formatted_segments.append(f"{formatted_dates}: {_format_schedule(schedule)}")
 
     return "; ".join(formatted_segments)
 
