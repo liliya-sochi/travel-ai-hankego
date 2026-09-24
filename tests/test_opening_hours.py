@@ -33,6 +33,24 @@ from app.services.opening_hours import (
             "24/7",
             "круглосуточно",
         ),
+        (
+            "Sa-Su, Tu-Th 10:00-18:00; Fr,We[2] 10:00-20:00; Mo off",
+            "сб–вс, вт–чт: 10:00–18:00; "
+            "пт, вторая среда месяца: 10:00–20:00; пн: закрыто",
+        ),
+        (
+            "Mo-Su,PH 10:00-19:00; Dec 31 10:00-17:30; Jan 01 off",
+            "пн–вс, праздничные дни: 10:00–19:00; "
+            "31 декабря: 10:00–17:30; 1 января: закрыто",
+        ),
+        (
+            "Mo-Su 09:30-19:30; Dec 24,31 09:30-14:00",
+            "пн–вс: 09:30–19:30; 24 и 31 декабря: 09:30–14:00",
+        ),
+        (
+            "Su[-1] 10:00-14:00",
+            "последнее воскресенье месяца: 10:00–14:00",
+        ),
     ],
 )
 def test_format_opening_hours_translates_simple_osm_syntax(
@@ -48,6 +66,10 @@ def test_format_opening_hours_translates_simple_osm_syntax(
         "sunrise-sunset",
         "Mo-Fr sunrise-sunset",
         "week 01-10",
+        "We[0] 10:00-18:00",
+        "We[6] 10:00-18:00",
+        "Feb 30 10:00-18:00",
+        "Mo-Su 25:00-26:00",
     ],
 )
 def test_format_opening_hours_keeps_unknown_syntax(
