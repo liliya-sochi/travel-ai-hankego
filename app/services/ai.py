@@ -24,8 +24,10 @@ from pydantic import BaseModel, ValidationError
 from app.config import get_settings
 from app.schemas.geoapify import PlaceCandidate, TravelContext
 from app.schemas.grounded_trip import (
+    INTEREST_CATEGORY_ACTIVITY_FOCUSES,
     GroundedActivity,
     GroundedTripPlanResponse,
+    get_supported_activity_focuses,
 )
 from app.schemas.trip import (
     TripDraft,
@@ -138,10 +140,19 @@ SYSTEM_PROMPT = """
 - не придумывай факты, историю или особенности конкретного места;
 - не указывай транспортные маршруты, правила входа и дресс-код,
   если этих данных нет в travel_context;
-- description должна содержать нейтральное действие:
-  посетить, осмотреть, прогуляться или отдохнуть;
+- для конкретного места description должен быть null;
+- для конкретного места выбери activity_focus, совместимый с categories:
+  architecture для building.tourism,
+  museum для entertainment.museum,
+  food для catering.restaurant,
+  park для leisure.park,
+  entertainment для entertainment,
+  sight для tourism.sights;
+- activity_focus=place разрешён только для места, у которого нет
+  ни одной из перечисленных категорий;
 - для общей активности без конкретного места верни
-  source_place_id=null и place_name=null;
+  source_place_id=null, place_name=null и activity_focus=null;
+- description общей активности должна содержать только нейтральное действие;
 - если source_place_id задан, place_name тоже должен быть задан;
 - если place_name задан, source_place_id тоже должен быть задан;
 - не называй конкретное место в description общей активности.
@@ -202,7 +213,8 @@ SEMANTIC_RETRY_PROMPT = """
 - включи каждый идентификатор из must_visit_place_ids
   хотя бы в одну конкретную активность;
 - для каждой категории из interest_category_requirements выбери
-  хотя бы один source_place_id из её списка;
+  хотя бы один source_place_id из её списка и используй соответствующий
+  activity_focus;
 - выполни grounding_requirements.minimum_places_per_day для каждого дня;
 - используй не менее grounding_requirements.minimum_unique_places
   разных конкретных мест во всём маршруте;
@@ -1265,6 +1277,7 @@ def _validate_grounded_trip_plan(
         must_visit_place_ids=resolved_must_visit_place_ids,
     )
     selected_place_ids: set[str] = set()
+    selected_place_ids_by_focus: dict[str, set[str]] = {}
     day_place_ids_collection: list[set[str]] = []
 
     for day in grounded_plan.days:
@@ -1290,6 +1303,12 @@ def _validate_grounded_trip_plan(
                     selected_place_ids.add(activity.source_place_id)
                     day_place_ids.add(activity.source_place_id)
 
+                    if activity.activity_focus is not None:
+                        selected_place_ids_by_focus.setdefault(
+                            activity.activity_focus,
+                            set(),
+                        ).add(activity.source_place_id)
+
         day_place_ids_collection.append(day_place_ids)
 
     missing_must_visit_place_ids = must_visit_place_ids - selected_place_ids
@@ -1297,11 +1316,15 @@ def _validate_grounded_trip_plan(
     if missing_must_visit_place_ids:
         raise ValueError("LLM omitted a required place.")
 
-    if any(
-        selected_place_ids.isdisjoint(required_place_ids)
-        for required_place_ids in interest_category_requirements.values()
-    ):
-        raise ValueError("LLM omitted an explicitly requested interest category.")
+    for category, required_place_ids in interest_category_requirements.items():
+        required_focus = INTEREST_CATEGORY_ACTIVITY_FOCUSES[category]
+        selected_for_focus = selected_place_ids_by_focus.get(
+            required_focus,
+            set(),
+        )
+
+        if selected_for_focus.isdisjoint(required_place_ids):
+            raise ValueError("LLM omitted an explicitly requested interest category.")
 
     if any(
         len(day_place_ids) < grounding_requirements["minimum_places_per_day"]
@@ -1326,13 +1349,14 @@ def _validate_grounded_activity(
 ) -> None:
     """Проверяет ID, имя и допустимый период конкретного места."""
 
-    normalized_description = activity.description.casefold()
+    if activity.description is not None:
+        normalized_description = activity.description.casefold()
 
-    if any(
-        marker in normalized_description
-        for marker in FORBIDDEN_GROUNDED_DESCRIPTION_MARKERS
-    ):
-        raise ValueError("LLM copied provider details into a description.")
+        if any(
+            marker in normalized_description
+            for marker in FORBIDDEN_GROUNDED_DESCRIPTION_MARKERS
+        ):
+            raise ValueError("LLM copied provider details into a description.")
 
     if activity.source_place_id is None:
         return
@@ -1344,6 +1368,11 @@ def _validate_grounded_activity(
 
     if activity.place_name != place.name:
         raise ValueError("LLM place name does not match its place ID.")
+
+    supported_focuses = get_supported_activity_focuses(place)
+
+    if activity.activity_focus not in supported_focuses:
+        raise ValueError("LLM used an activity focus unsupported by place categories.")
 
     available_periods = infer_available_periods(place.opening_hours)
 

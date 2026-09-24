@@ -80,13 +80,15 @@ def build_grounded_plan() -> dict[str, object]:
                     {
                         "source_place_id": ("hagia-sophia-id"),
                         "place_name": "Айя-София",
-                        "description": ("Осмотреть здание и его интерьеры."),
+                        "activity_focus": "sight",
+                        "description": None,
                     }
                 ],
                 "afternoon": [
                     {
                         "source_place_id": None,
                         "place_name": None,
+                        "activity_focus": None,
                         "description": ("Прогуляться по историческому центру."),
                     }
                 ],
@@ -94,6 +96,7 @@ def build_grounded_plan() -> dict[str, object]:
                     {
                         "source_place_id": None,
                         "place_name": None,
+                        "activity_focus": None,
                         "description": "Отдохнуть в местном кафе.",
                     }
                 ],
@@ -289,7 +292,8 @@ def test_rejects_plan_without_explicit_interest_category() -> None:
         {
             "source_place_id": "park-id",
             "place_name": "Городской парк",
-            "description": "Прогуляться по парку.",
+            "activity_focus": "park",
+            "description": None,
         }
     ]
 
@@ -342,14 +346,16 @@ def test_accepts_plan_covering_explicit_interest_categories() -> None:
         {
             "source_place_id": "architecture-id",
             "place_name": "Архитектурный музей",
-            "description": "Осмотреть архитектуру здания.",
+            "activity_focus": "architecture",
+            "description": None,
         }
     ]
     days[0]["afternoon"] = [
         {
             "source_place_id": "park-id",
             "place_name": "Городской парк",
-            "description": "Прогуляться по парку.",
+            "activity_focus": "park",
+            "description": None,
         }
     ]
 
@@ -361,8 +367,72 @@ def test_accepts_plan_covering_explicit_interest_categories() -> None:
         travel_context=context,
     )
 
-    assert result.days[0].morning[0].startswith("Архитектурный музей:")
-    assert result.days[0].afternoon[0].startswith("Городской парк:")
+    assert (
+        result.days[0]
+        .morning[0]
+        .startswith("Архитектурный музей: осмотреть архитектурный объект.")
+    )
+    assert (
+        result.days[0].afternoon[0].startswith("Городской парк: прогуляться по парку.")
+    )
+
+
+def test_rejects_wrong_focus_for_explicit_interest_category() -> None:
+    """Не засчитывает музейный фокус как интерес к архитектуре."""
+
+    context = build_travel_context()
+    context.places[0] = context.places[0].model_copy(
+        update={
+            "categories": [
+                "building.tourism",
+                "entertainment.museum",
+            ],
+        }
+    )
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+    morning = days[0]["morning"]
+
+    assert isinstance(morning, list)
+    assert isinstance(morning[0], dict)
+
+    morning[0]["activity_focus"] = "museum"
+
+    with pytest.raises(
+        ValueError,
+        match="explicitly requested interest category",
+    ):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(interests="Архитектура"),
+            travel_context=context,
+        )
+
+
+def test_rejects_free_text_description_for_grounded_place() -> None:
+    """Не принимает свободное описание для конкретного места."""
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+
+    assert isinstance(days, list)
+    assert isinstance(days[0], dict)
+    morning = days[0]["morning"]
+
+    assert isinstance(morning, list)
+    assert isinstance(morning[0], dict)
+
+    morning[0]["description"] = "Осмотреть исторические интерьеры."
+
+    with pytest.raises(ValueError):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(),
+            travel_context=build_travel_context(),
+        )
 
 
 def test_does_not_require_unavailable_interest_category() -> None:
@@ -656,7 +726,8 @@ def test_rejects_filtered_low_evidence_place() -> None:
         {
             "source_place_id": "minor-memorial-id",
             "place_name": "Памятный знак",
-            "description": "Осмотреть памятный знак.",
+            "activity_focus": "sight",
+            "description": None,
         }
     ]
 
@@ -687,7 +758,7 @@ def test_validates_and_converts_grounded_plan() -> None:
     assert result.duration_days == 1
     assert result.days[0].morning == [
         (
-            "Айя-София: Осмотреть здание и его интерьеры. "
+            "Айя-София: осмотреть достопримечательность. "
             "Часы по данным Geoapify: пн–вс: 09:00–18:00. "
             "Сайт из данных Geoapify: https://museum.example/"
         )
@@ -797,20 +868,23 @@ def test_rejects_reusing_too_few_unique_places_across_days() -> None:
             {
                 "source_place_id": "hagia-sophia-id",
                 "place_name": "Айя-София",
-                "description": "Посетить музей.",
+                "activity_focus": "sight",
+                "description": None,
             }
         ],
         "afternoon": [
             {
                 "source_place_id": "place-1-id",
                 "place_name": "Дворец Топкапы",
-                "description": "Осмотреть дворец.",
+                "activity_focus": "sight",
+                "description": None,
             }
         ],
         "evening": [
             {
                 "source_place_id": None,
                 "place_name": None,
+                "activity_focus": None,
                 "description": "Отдохнуть в кафе.",
             }
         ],
@@ -874,7 +948,7 @@ def test_formats_verified_google_relocation_address() -> None:
 
     assert result.days[0].morning == [
         (
-            "Айя-София: Осмотреть здание и его интерьеры. "
+            "Айя-София: осмотреть достопримечательность. "
             "Актуальный адрес по данным Google Maps: "
             "Новый адрес музея, Стамбул. "
             "Часы по данным Geoapify: пн–вс: 09:00–18:00. "
@@ -954,6 +1028,7 @@ def test_adds_warning_for_google_closed_place() -> None:
         {
             "source_place_id": None,
             "place_name": None,
+            "activity_focus": None,
             "description": "Прогуляться по историческому центру.",
         }
     ]
@@ -1000,6 +1075,7 @@ def test_rejects_plan_without_must_visit_place() -> None:
         {
             "source_place_id": None,
             "place_name": None,
+            "activity_focus": None,
             "description": "Прогуляться по историческому центру.",
         }
     ]
@@ -1041,19 +1117,19 @@ def test_rejects_unknown_must_visit_place_before_llm() -> None:
         )
 
 
-def test_rejects_provider_details_copied_into_edited_description() -> None:
-    """Не допускает повторного добавления старых часов и сайтов."""
+def test_rejects_provider_details_copied_into_general_description() -> None:
+    """Не допускает добавления часов и сайтов в общую активность."""
 
     plan = build_grounded_plan()
     days = plan["days"]
 
     assert isinstance(days, list)
     assert isinstance(days[0], dict)
-    morning = days[0]["morning"]
+    afternoon = days[0]["afternoon"]
 
-    assert isinstance(morning, list)
-    assert isinstance(morning[0], dict)
-    morning[0]["description"] = (
+    assert isinstance(afternoon, list)
+    assert isinstance(afternoon[0], dict)
+    afternoon[0]["description"] = (
         "Посетить музей. Сайт из данных Google Maps: https://example.com/"
     )
 
@@ -1132,7 +1208,8 @@ def test_rejects_place_outside_available_periods() -> None:
         {
             "source_place_id": "hagia-sophia-id",
             "place_name": "Айя-София",
-            "description": "Посетить музей.",
+            "activity_focus": "sight",
+            "description": None,
         }
     ]
 
@@ -1163,7 +1240,8 @@ def test_allows_any_period_when_schedule_is_unknown() -> None:
         {
             "source_place_id": "hagia-sophia-id",
             "place_name": "Айя-София",
-            "description": "Посетить музей.",
+            "activity_focus": "sight",
+            "description": None,
         }
     ]
 
@@ -1175,7 +1253,7 @@ def test_allows_any_period_when_schedule_is_unknown() -> None:
 
     assert result.days[0].evening == [
         (
-            "Айя-София: Посетить музей. "
+            "Айя-София: осмотреть достопримечательность. "
             "Часы по данным Geoapify: sunrise-sunset. "
             "Сайт из данных Geoapify: https://museum.example/"
         )
@@ -1246,11 +1324,13 @@ def test_rejects_more_than_two_activities_per_period() -> None:
             {
                 "source_place_id": None,
                 "place_name": None,
+                "activity_focus": None,
                 "description": "Прогуляться по площади.",
             },
             {
                 "source_place_id": None,
                 "place_name": None,
+                "activity_focus": None,
                 "description": "Осмотреть архитектуру района.",
             },
         ]
@@ -1282,8 +1362,8 @@ def test_does_not_add_details_to_general_activity() -> None:
     assert result.days[0].afternoon == ["Прогуляться по историческому центру."]
 
 
-def test_adds_separator_before_place_details() -> None:
-    """Отделяет описание LLM от проверенных сведений Python."""
+def test_builds_place_description_from_verified_focus() -> None:
+    """Формирует описание места без свободного текста LLM."""
 
     plan = build_grounded_plan()
     days = plan["days"]
@@ -1296,8 +1376,6 @@ def test_adds_separator_before_place_details() -> None:
     assert isinstance(morning, list)
     assert isinstance(morning[0], dict)
 
-    morning[0]["description"] = "Посетить музей"
-
     result = _validate_grounded_trip_plan(
         json.dumps(
             plan,
@@ -1309,7 +1387,7 @@ def test_adds_separator_before_place_details() -> None:
 
     assert result.days[0].morning == [
         (
-            "Айя-София: Посетить музей. "
+            "Айя-София: осмотреть достопримечательность. "
             "Часы по данным Geoapify: пн–вс: 09:00–18:00. "
             "Сайт из данных Geoapify: https://museum.example/"
         )
