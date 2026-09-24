@@ -102,6 +102,7 @@ def build_response_data(
                     {
                         "source_place_id": None,
                         "place_name": None,
+                        "activity_focus": None,
                         "description": "Прогулка.",
                     }
                 ],
@@ -109,13 +110,15 @@ def build_response_data(
                     {
                         "source_place_id": ("private-place-id"),
                         "place_name": ("PRIVATE_PLACE_DO_NOT_LOG"),
-                        "description": "Осмотреть место.",
+                        "activity_focus": "sight",
+                        "description": None,
                     }
                 ],
                 "evening": [
                     {
                         "source_place_id": None,
                         "place_name": None,
+                        "activity_focus": None,
                         "description": "Ужин.",
                     }
                 ],

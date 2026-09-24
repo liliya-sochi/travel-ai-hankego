@@ -6,7 +6,7 @@ LLM связывает конкретные места с идентификат
 в существующий публичный TripPlanResponse.
 """
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -17,6 +17,54 @@ from app.schemas.trip import (
     TripPlanResponse,
 )
 from app.services.opening_hours import format_opening_hours
+
+GroundedActivityFocus = Literal[
+    "architecture",
+    "museum",
+    "food",
+    "park",
+    "entertainment",
+    "sight",
+    "place",
+]
+
+
+ACTIVITY_FOCUS_CATEGORY_PREFIXES: dict[
+    GroundedActivityFocus,
+    str | None,
+] = {
+    "architecture": "building.tourism",
+    "museum": "entertainment.museum",
+    "food": "catering.restaurant",
+    "park": "leisure.park",
+    "entertainment": "entertainment",
+    "sight": "tourism.sights",
+    "place": None,
+}
+
+
+ACTIVITY_FOCUS_DESCRIPTIONS: dict[
+    GroundedActivityFocus,
+    str,
+] = {
+    "architecture": "осмотреть архитектурный объект",
+    "museum": "посетить музей",
+    "food": "познакомиться с местной кухней",
+    "park": "прогуляться по парку",
+    "entertainment": "посетить развлекательное место",
+    "sight": "осмотреть достопримечательность",
+    "place": "посетить место",
+}
+
+
+INTEREST_CATEGORY_ACTIVITY_FOCUSES: dict[
+    str,
+    GroundedActivityFocus,
+] = {
+    category: focus
+    for focus, category in ACTIVITY_FOCUS_CATEGORY_PREFIXES.items()
+    if category is not None
+}
 
 
 class GroundedActivity(StrictSchema):
@@ -41,10 +89,15 @@ class GroundedActivity(StrictSchema):
             "Точное название места из travel_context или null для общей активности."
         ),
     )
-    description: str = Field(
+    activity_focus: GroundedActivityFocus | None = Field(
+        description=(
+            "Проверяемый вид конкретной активности или null для общей активности."
+        ),
+    )
+    description: str | None = Field(
         min_length=1,
         max_length=1000,
-        description="Что путешественнику предлагается сделать.",
+        description=("Описание общей активности или null для конкретного места."),
     )
 
     @model_validator(mode="after")
@@ -58,6 +111,18 @@ class GroundedActivity(StrictSchema):
             raise ValueError(
                 "source_place_id и place_name должны быть "
                 "заполнены вместе или одновременно равны null."
+            )
+
+        if has_place_id:
+            if self.activity_focus is None or self.description is not None:
+                raise ValueError(
+                    "Для конкретного места activity_focus должен быть задан, "
+                    "а description должен быть null."
+                )
+        elif self.activity_focus is not None or self.description is None:
+            raise ValueError(
+                "Для общей активности activity_focus должен быть null, "
+                "а description должен быть задан."
             )
 
         return self
@@ -182,6 +247,9 @@ def _format_activity(
     """Добавляет к активности только проверенные сведения о месте."""
 
     if activity.source_place_id is None:
+        if activity.description is None:
+            raise ValueError("General activity is missing a description.")
+
         return activity.description
 
     place = places_by_id.get(activity.source_place_id)
@@ -189,7 +257,10 @@ def _format_activity(
     if place is None:
         raise ValueError("Grounded activity refers to an unknown place ID.")
 
-    formatted_description = activity.description
+    if activity.activity_focus is None:
+        raise ValueError("Grounded place activity is missing a focus.")
+
+    formatted_description = ACTIVITY_FOCUS_DESCRIPTIONS[activity.activity_focus]
 
     if not formatted_description.endswith((".", "!", "?")):
         formatted_description = f"{formatted_description}."
@@ -220,3 +291,28 @@ def _format_activity(
         activity_parts.append(f"Сайт из данных {website_source}: {place.website}")
 
     return " ".join(activity_parts)
+
+
+def get_supported_activity_focuses(
+    place: PlaceCandidate,
+) -> set[GroundedActivityFocus]:
+    """Возвращает проверяемые виды активности для категорий места."""
+
+    supported_focuses: set[GroundedActivityFocus] = set()
+
+    for focus, category in ACTIVITY_FOCUS_CATEGORY_PREFIXES.items():
+        if category is None:
+            continue
+
+        category_prefix = f"{category}."
+
+        if any(
+            place_category == category or place_category.startswith(category_prefix)
+            for place_category in place.categories
+        ):
+            supported_focuses.add(focus)
+
+    if not supported_focuses:
+        supported_focuses.add("place")
+
+    return supported_focuses
