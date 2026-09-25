@@ -542,7 +542,7 @@ class TripEnrichmentService:
             if not any(
                 required_place_name_matches(
                     required_name=required_name,
-                    candidate_name=place.name,
+                    candidate_name=place.display_name,
                 )
                 for place in places
             )
@@ -563,7 +563,7 @@ class TripEnrichmentService:
             if any(
                 required_place_name_matches(
                     required_name=required_name,
-                    candidate_name=place.name,
+                    candidate_name=place.display_name,
                 )
                 for place in places
             ):
@@ -610,7 +610,7 @@ class TripEnrichmentService:
             or any(
                 required_place_name_matches(
                     required_name=required_name,
-                    candidate_name=place.name,
+                    candidate_name=place.display_name,
                 )
                 for required_name in required_names
             )
