@@ -9,7 +9,7 @@ Pydantic-схемы интеграции с Geoapify.
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class GeoapifyResponseSchema(BaseModel):
@@ -83,6 +83,23 @@ class GeoapifyPlaceProperties(GeoapifyLocationProperties):
         default_factory=list,
     )
     wiki_and_media: GeoapifyWikiAndMedia | None = None
+
+    name_international: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("name_international", mode="before")
+    @classmethod
+    def normalize_international_names(cls, value: object) -> dict[str, str]:
+        """Сохраняет только пригодные русские и английские названия."""
+
+        if not isinstance(value, dict):
+            return {}
+
+        return {
+            language: name.strip()
+            for language in ("ru", "en")
+            if isinstance(name := value.get(language), str)
+            and 0 < len(name.strip()) <= 500
+        }
 
 
 class GeoapifyPlaceDetailsProperties(GeoapifyPlaceProperties):
@@ -182,6 +199,11 @@ class PlaceCandidate(HankeGoGeoSchema):
         min_length=1,
         max_length=500,
     )
+    localized_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+    )
     formatted_address: str = Field(
         min_length=1,
         max_length=1000,
@@ -224,6 +246,20 @@ class PlaceCandidate(HankeGoGeoSchema):
         max_length=500,
     )
     source: Literal["geoapify", "google"] = "geoapify"
+
+    @property
+    def display_name(self) -> str:
+        """Дополняет подтверждённое название оригиналом без повторений."""
+
+        if self.localized_name is None:
+            return self.name
+
+        if " ".join(self.localized_name.split()).casefold() == (
+            " ".join(self.name.split()).casefold()
+        ):
+            return self.name
+
+        return f"{self.localized_name} ({self.name})"
 
 
 class PlaceDetails(HankeGoGeoSchema):

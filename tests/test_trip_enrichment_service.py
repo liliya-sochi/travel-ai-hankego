@@ -677,6 +677,36 @@ async def test_adds_missing_required_place_without_changing_cache() -> None:
 
 
 @pytest.mark.asyncio
+async def test_localized_required_name_does_not_trigger_google_lookup() -> None:
+    """Не расходует Google-бюджет, если пользователь назвал известный перевод."""
+
+    cached_context = build_context()
+    cached_context.places[0].name = "Ayasofya"
+    cached_context.places[0].localized_name = "Айя-София"
+    fallback = FakeOpeningHoursFallbackProvider()
+    budget = FakeOpeningHoursBudget()
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=FakeTravelContextCache(cached_context=cached_context),
+        opening_hours_fallback_provider=fallback,
+        opening_hours_budget=budget,
+    )
+
+    context = await service.enrich(
+        TripPreferences(
+            destination="Стамбул",
+            duration_days=1,
+            must_visit_places=["Айя-София"],
+        )
+    )
+
+    assert context.places[0].name == "Ayasofya"
+    assert context.places[0].display_name == "Айя-София (Ayasofya)"
+    assert fallback.received_required_names == []
+    assert budget.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_required_place_replaces_non_required_candidate_at_limit() -> None:
     """Сохраняет ограничение в 20 мест и не удаляет обязательное."""
 
@@ -829,6 +859,8 @@ async def test_enriches_best_candidates_with_place_details() -> None:
         for index in range(1, 7)
     ]
 
+    places[0].localized_name = "Музей №1"
+
     details = {
         f"museum-{index}": PlaceDetails(
             source_place_id=f"museum-{index}",
@@ -863,6 +895,7 @@ async def test_enriches_best_candidates_with_place_details() -> None:
     places_by_id = {place.source_place_id: place for place in context.places}
 
     assert places_by_id["museum-1"].website == ("https://museum-1.example/")
+    assert places_by_id["museum-1"].localized_name == "Музей №1"
     assert places_by_id["museum-1"].opening_hours == ("Mo-Su 09:00-18:00")
     assert places_by_id["museum-6"].website is None
     assert places_by_id["museum-6"].opening_hours is None

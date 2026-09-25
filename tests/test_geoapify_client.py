@@ -18,6 +18,92 @@ TEST_API_KEY = "test-geoapify-api-key"
 TEST_BASE_URL = "https://geoapify.example"
 
 
+@pytest.mark.parametrize(
+    ("name", "translations", "expected_name", "expected_display"),
+    [
+        (
+            "三菱一号館",
+            {"en": "Mitsubishi Ichigokan Museum", "ja": "三菱一号館"},
+            "Mitsubishi Ichigokan Museum",
+            "Mitsubishi Ichigokan Museum (三菱一号館)",
+        ),
+        (
+            "Ayasofya",
+            {"ru": "  Айя-София  ", "en": "Hagia Sophia"},
+            "Айя-София",
+            "Айя-София (Ayasofya)",
+        ),
+        ("Айя-София", {"en": "Hagia Sophia"}, None, "Айя-София"),
+        ("Museum", {"en": " museum "}, "museum", "Museum"),
+        ("三菱一号館", None, None, "三菱一号館"),
+        ("三菱一号館", ["Wrong shape"], None, "三菱一号館"),
+        ("三菱一号館", {"ru": 123, "en": None}, None, "三菱一号館"),
+        ("三菱一号館", {"ru": "   ", "en": ""}, None, "三菱一号館"),
+        (
+            "三菱一号館",
+            {"ru": "x" * 501, "en": "Museum"},
+            "Museum",
+            "Museum (三菱一号館)",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_preserves_original_and_uses_provider_names(
+    name: str,
+    translations: object,
+    expected_name: str | None,
+    expected_display: str,
+) -> None:
+    """Использует названия из поиска и переживает неверные необязательные поля."""
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/v2/places"
+        assert request.url.params["lang"] == "ru"
+        return httpx.Response(
+            200,
+            json={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "name": name,
+                            "name_international": translations,
+                            "formatted": "Tokyo, Japan",
+                            "lat": 35.678,
+                            "lon": 139.763,
+                            "place_id": "museum-id",
+                            "categories": ["entertainment.museum"],
+                        },
+                    }
+                ],
+            },
+        )
+
+    http_client, provider = build_client(handler)
+    async with http_client:
+        places = await provider.search_places(
+            location=DestinationLocation(
+                formatted_name="Tokyo, Japan",
+                latitude=35.678,
+                longitude=139.763,
+                source_place_id="tokyo-id",
+            ),
+            categories=["entertainment.museum"],
+            limit=1,
+        )
+
+    assert len(requests) == 1
+    assert len(places) == 1
+    assert places[0].name == name
+    assert places[0].source_place_id == "museum-id"
+    assert places[0].localized_name == expected_name
+    assert places[0].display_name == expected_display
+
+
 def build_client(
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> tuple[httpx.AsyncClient, GeoapifyClient]:

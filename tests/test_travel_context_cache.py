@@ -133,7 +133,8 @@ def test_cache_key_is_normalized_and_private() -> None:
 
 
 @pytest.mark.asyncio
-async def test_saves_and_restores_context_with_ttl() -> None:
+@pytest.mark.parametrize("localized_name", [None, "Собор Святой Софии"])
+async def test_saves_and_restores_context_with_ttl(localized_name: str | None) -> None:
     """Проверяет сериализацию, чтение и TTL."""
 
     redis_client = FakeRedisCacheClient()
@@ -142,6 +143,7 @@ async def test_saves_and_restores_context_with_ttl() -> None:
         ttl_seconds=21_600,
     )
     expected_context = build_context()
+    expected_context.places[0].localized_name = localized_name
 
     await cache.set(
         destination="Стамбул",

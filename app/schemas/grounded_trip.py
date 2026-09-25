@@ -265,7 +265,7 @@ def _format_activity(
     if not formatted_description.endswith((".", "!", "?")):
         formatted_description = f"{formatted_description}."
 
-    activity_parts = [f"{place.name}: {formatted_description}"]
+    activity_parts = [f"{place.display_name}: {formatted_description}"]
 
     if place.location_source == "google":
         formatted_address = place.formatted_address

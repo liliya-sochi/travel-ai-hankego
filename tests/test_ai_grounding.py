@@ -125,6 +125,85 @@ def build_public_plan() -> TripPlanResponse:
     )
 
 
+@pytest.mark.parametrize(
+    "required_name",
+    ["Ayasofya", "Айя-София", "Айя-София (Ayasofya)"],
+)
+def test_localized_output_preserves_grounding_and_required_names(
+    required_name: str,
+) -> None:
+    """Сопоставляет оба названия, проверяя ответ LLM по исходному имени и ID."""
+
+    context = build_travel_context()
+    context.places[0].name = "Ayasofya"
+    context.places[0].localized_name = "Айя-София"
+    preferences = build_preferences(must_visit_places=[required_name])
+    plan = build_grounded_plan()
+    days = plan["days"]
+    assert isinstance(days, list)
+    days[0]["morning"][0]["place_name"] = "Ayasofya"
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=preferences,
+            travel_context=context,
+        )
+    )
+    llm_place = message["travel_context"]["places"][0]
+    assert llm_place["name"] == "Ayasofya"
+    assert "localized_name" not in llm_place
+    assert "display_name" not in llm_place
+    assert message["travel_context"]["must_visit_place_ids"] == ["hagia-sophia-id"]
+
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=preferences,
+        travel_context=context,
+    )
+    assert (
+        result.days[0]
+        .morning[0]
+        .startswith("Айя-София (Ayasofya): осмотреть достопримечательность.")
+    )
+    assert context.places[0].name == "Ayasofya"
+
+
+def test_localized_name_does_not_replace_exact_llm_name_check() -> None:
+    """Отображаемое имя не ослабляет контракт ответа модели."""
+
+    context = build_travel_context()
+    context.places[0].name = "Ayasofya"
+    context.places[0].localized_name = "Айя-София"
+
+    with pytest.raises(ValueError, match="name does not match"):
+        _validate_grounded_trip_plan(
+            json.dumps(build_grounded_plan(), ensure_ascii=False),
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+
+
+def test_rejects_ambiguous_localized_required_name() -> None:
+    """Одинаковый перевод разных объектов не делает выбор однозначным."""
+
+    context = build_travel_context()
+    context.places[0].localized_name = "Shared museum"
+    context.places.append(
+        context.places[0].model_copy(
+            update={
+                "name": "Another museum",
+                "source_place_id": "another-id",
+            }
+        )
+    )
+
+    with pytest.raises(AIServiceError, match="однозначно"):
+        _build_grounded_user_message(
+            preferences=build_preferences(must_visit_places=["Shared museum"]),
+            travel_context=context,
+        )
+
+
 def test_builds_grounded_user_message() -> None:
     """Не передаёт LLM сайты и часы работы."""
 

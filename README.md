@@ -51,6 +51,8 @@ The FastAPI backend:
 - gives the LLM an explicit geographic target for multi-day itineraries;
 - retrieves detailed data for no more than five well-documented place candidates;
 - deterministically adds validated opening hours and provider websites after LLM generation;
+- displays provider-supplied Russian names, with English fallback for non-Cyrillic names, alongside the original; uses existing Geoapify search responses without extra lookups;
+- retains original names and IDs for grounding and accepts displayed names when matching explicitly required places;
 - caches validated travel contexts in Redis to avoid repeated Geoapify requests;
 - provides the LLM with a trusted travel context containing real place identifiers;
 - rejects itinerary places whose identifiers or names are absent from that context;

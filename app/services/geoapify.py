@@ -136,6 +136,21 @@ def _normalize_optional_text(
     return normalized_value or None
 
 
+def _select_localized_place_name(
+    original_name: str,
+    names: dict[str, str],
+) -> str | None:
+    """Выбирает перевод провайдера, сохраняя исходное имя кириллицей."""
+
+    if "ru" in names:
+        return names["ru"]
+
+    if any("\u0400" <= character <= "\u052f" for character in original_name):
+        return None
+
+    return names.get("en")
+
+
 def _normalize_website(
     value: str | None,
 ) -> str | None:
@@ -463,6 +478,10 @@ class GeoapifyClient:
             places.append(
                 PlaceCandidate(
                     name=properties.name,
+                    localized_name=_select_localized_place_name(
+                        properties.name,
+                        properties.name_international,
+                    ),
                     formatted_address=properties.formatted,
                     latitude=properties.lat,
                     longitude=properties.lon,

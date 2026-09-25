@@ -684,7 +684,7 @@ def _resolve_must_visit_place_ids(
             for place in travel_context.places
             if required_place_name_matches(
                 required_name=required_name,
-                candidate_name=place.name,
+                candidate_name=place.display_name,
             )
         }
 
@@ -955,6 +955,7 @@ def _build_grounded_user_message(
                     "website",
                     "opening_hours",
                     "opening_hours_source",
+                    "localized_name",
                 }
             }
         },
@@ -1214,7 +1215,7 @@ def _build_grounded_practical_tips(
 
     closed_place_tips = [
         (
-            f"По данным Google Maps, место «{place.name}» отмечено "
+            f"По данным Google Maps, место «{place.display_name}» отмечено "
             "как закрыто; не планируйте посещение без дополнительной проверки."
         )
         for place in closed_google_places
