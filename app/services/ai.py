@@ -13,6 +13,7 @@
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from math import isfinite
 from time import perf_counter
@@ -66,6 +67,11 @@ MAX_LOG_TEXT_LENGTH = 200
 MAX_LLM_AREA_GROUPS = 3
 TARGET_GROUNDED_PLACES_PER_DAY = 2
 MAX_GROUNDED_ACTIVITIES_PER_DAY = 6
+EVENING_PLACE_CATEGORIES = ("leisure.park", "catering.restaurant")
+FALSE_REQUIRED_PLACES_PATTERN = re.compile(
+    r"\bобязательн\w*\s+(?:мест\w*|посещен\w*|точ\w*|достопримечательност\w*)",
+    re.IGNORECASE,
+)
 FORBIDDEN_GROUNDED_DESCRIPTION_MARKERS = (
     "http://",
     "https://",
@@ -104,6 +110,8 @@ SYSTEM_PROMPT = """
 - available_details перечисляет только доступные группы данных
   и не содержит самих часов работы, цен или контактов;
 - не указывай сайты и часы работы в summary, title или description;
+- если must_visit_place_ids пуст, не называй места обязательными
+  в summary; интересы пользователя означают предпочтения, а не обязательные места;
 - проверенные часы и ссылки при наличии добавит приложение
   после проверки ответа;
 - wiki_reference_count отражает полноту справочных ссылок,
@@ -194,6 +202,9 @@ SYSTEM_PROMPT = """
   от одной до двух активностей;
 - если для периода нет подходящего конкретного места,
   добавь уместную общую активность без source_place_id;
+- если evening_place_required=true, включи вечером конкретное место,
+  не использованное утром или днём этого дня; общая прогулка
+  может быть дополнительной активностью, но не единственной;
 """.strip()
 
 
@@ -227,6 +238,10 @@ SEMANTIC_RETRY_PROMPT = """
 - не копируй адреса, часы, сайты или URL в description;
 - используй конкретное место только в периоде,
   разрешённом его available_periods;
+- если must_visit_place_ids пуст, не называй места обязательными
+  в summary;
+- если evening_place_required=true, вечером должно быть
+  новое для этого дня конкретное место с допустимым периодом evening;
 - available_periods=null означает отсутствие ограничения,
   а пустой список запрещает выбирать место.
 """.strip()
@@ -748,6 +763,41 @@ def _build_grounding_requirements(
     }
 
 
+def _requires_grounded_evening(
+    *,
+    preferences: TripPreferences,
+    places: list[PlaceCandidate],
+) -> bool:
+    """Требует новое вечернее место, если однодневный маршрут это позволяет."""
+
+    if preferences.duration_days != 1:
+        return False
+
+    requested_evening_categories = set(
+        select_interest_categories(preferences.interests)
+    ).intersection(EVENING_PLACE_CATEGORIES)
+    if not requested_evening_categories:
+        return False
+
+    available_places = [
+        place for place in places if infer_available_periods(place.opening_hours) != ()
+    ]
+    if len({place.source_place_id for place in available_places}) < 3:
+        return False
+
+    return any(
+        any(
+            place_matches_category(place, category)
+            for category in requested_evening_categories
+        )
+        and (
+            (periods := infer_available_periods(place.opening_hours)) is None
+            or "evening" in periods
+        )
+        for place in available_places
+    )
+
+
 def _build_interest_category_requirements(
     *,
     preferences: TripPreferences,
@@ -992,6 +1042,10 @@ def _build_grounded_user_message(
         travel_context=planning_context,
     )
     llm_travel_context["must_visit_place_ids"] = must_visit_place_ids
+    llm_travel_context["evening_place_required"] = _requires_grounded_evening(
+        preferences=preferences,
+        places=planning_places,
+    )
     llm_travel_context["interest_category_requirements"] = (
         _build_interest_category_requirements(
             preferences=preferences,
@@ -1254,6 +1308,11 @@ def _validate_grounded_trip_plan(
     if grounded_plan.destination.casefold() != preferences.destination.casefold():
         raise ValueError("LLM destination does not match trip preferences.")
 
+    if not preferences.must_visit_places and FALSE_REQUIRED_PLACES_PATTERN.search(
+        grounded_plan.summary
+    ):
+        raise ValueError("LLM described optional places as required in summary.")
+
     resolved_must_visit_place_ids = _resolve_must_visit_place_ids(
         preferences=preferences,
         travel_context=travel_context,
@@ -1276,6 +1335,10 @@ def _validate_grounded_trip_plan(
         preferences=preferences,
         places=planning_places,
         must_visit_place_ids=resolved_must_visit_place_ids,
+    )
+    evening_place_required = _requires_grounded_evening(
+        preferences=preferences,
+        places=planning_places,
     )
     selected_place_ids: set[str] = set()
     selected_place_ids_by_focus: dict[str, set[str]] = {}
@@ -1335,6 +1398,20 @@ def _validate_grounded_trip_plan(
 
     if len(selected_place_ids) < grounding_requirements["minimum_unique_places"]:
         raise ValueError("LLM used too few unique grounded places.")
+
+    if evening_place_required:
+        day = grounded_plan.days[0]
+        earlier_place_ids = {
+            activity.source_place_id
+            for activity in (*day.morning, *day.afternoon)
+            if activity.source_place_id is not None
+        }
+        if not any(
+            activity.source_place_id is not None
+            and activity.source_place_id not in earlier_place_ids
+            for activity in day.evening
+        ):
+            raise ValueError("LLM omitted an available new evening place.")
 
     return grounded_plan.to_trip_plan_response(
         practical_tips=_build_grounded_practical_tips(travel_context),
