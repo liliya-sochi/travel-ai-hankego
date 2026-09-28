@@ -68,6 +68,21 @@ MAX_LLM_AREA_GROUPS = 3
 TARGET_GROUNDED_PLACES_PER_DAY = 2
 MAX_GROUNDED_ACTIVITIES_PER_DAY = 6
 EVENING_PLACE_CATEGORIES = ("leisure.park", "catering.restaurant")
+SUMMARY_PARK_COUNT_WORDS = {
+    "один": 1,
+    "одного": 1,
+    "одна": 1,
+    "два": 2,
+    "две": 2,
+    "двух": 2,
+    "три": 3,
+    "четыре": 4,
+    "пять": 5,
+}
+SUMMARY_PARK_COUNT_PATTERN = re.compile(
+    r"\b(?P<count>\d+|один|одного|одна|два|две|двух|три|четыре|пять)\s+парк\w*\b",
+    re.IGNORECASE,
+)
 FALSE_REQUIRED_PLACES_PATTERN = re.compile(
     r"\bобязательн\w*\s+(?:мест\w*|посещен\w*|точ\w*|достопримечательност\w*)",
     re.IGNORECASE,
@@ -97,6 +112,8 @@ SYSTEM_PROMPT = """
   которые обязательно должны присутствовать в маршруте;
 - travel_context.interest_category_requirements — категории явно
   указанных интересов и допустимые идентификаторы мест для каждой из них.
+- travel_context.evening_place_ids — парки или рестораны, подходящие
+  для запрошенного вечернего занятия.
 
 Создай реалистичный и практичный план поездки.
 
@@ -112,6 +129,8 @@ SYSTEM_PROMPT = """
 - не указывай сайты и часы работы в summary, title или description;
 - если must_visit_place_ids пуст, не называй места обязательными
   в summary; интересы пользователя означают предпочтения, а не обязательные места;
+- если в summary указываешь число парков, оно должно совпадать с числом
+  разных выбранных мест с activity_focus=park;
 - проверенные часы и ссылки при наличии добавит приложение
   после проверки ответа;
 - wiki_reference_count отражает полноту справочных ссылок,
@@ -123,8 +142,8 @@ SYSTEM_PROMPT = """
 - available_periods содержит допустимые периоды для места,
   вычисленные приложением из проверенных часов работы;
 - если available_periods является null, расписание неизвестно
-  или слишком сложно для безопасного анализа — такое место
-  разрешено использовать в любом периоде;
+  или слишком сложно для безопасного анализа; музей, ресторан
+  или развлекательное заведение нельзя выбирать вечером без часов работы;
 - если available_periods является пустым списком,
   не выбирай это место;
 - не показывай available_periods пользователю.
@@ -182,7 +201,8 @@ SYSTEM_PROMPT = """
   указанного в его available_periods;
 - morning соответствует значению morning, afternoon — afternoon,
   evening — evening;
-- available_periods=null не создаёт ограничений;
+- available_periods=null не подтверждает работу вечером музея,
+  ресторана или развлекательного заведения;
 - не переноси конкретное место в запрещённый период;
 - общие активности без source_place_id можно использовать
   в любом периоде.
@@ -197,12 +217,15 @@ SYSTEM_PROMPT = """
 - не выдумывай билеты, правила посещения и транспортные номера;
 - предупреждай, что цены и расписания нужно проверять отдельно;
 - не добавляй чрезмерное количество мест на один день;
+- в summary не перечисляй периоды дня и не обещай посещений,
+  которых нет в выбранных активностях;
 - учитывай интересы пользователя при выборе разрешённых мест;
 - каждый из списков morning, afternoon и evening должен содержать
   от одной до двух активностей;
 - если для периода нет подходящего конкретного места,
   добавь уместную общую активность без source_place_id;
-- если evening_place_required=true, включи вечером конкретное место,
+- если evening_place_required=true, включи вечером место из
+  evening_place_ids с activity_focus=park или food,
   не использованное утром или днём этого дня; общая прогулка
   может быть дополнительной активностью, но не единственной;
 """.strip()
@@ -240,10 +263,14 @@ SEMANTIC_RETRY_PROMPT = """
   разрешённом его available_periods;
 - если must_visit_place_ids пуст, не называй места обязательными
   в summary;
+- указанное в summary число парков должно совпадать с числом
+  разных конкретных парков в активностях;
 - если evening_place_required=true, вечером должно быть
-  новое для этого дня конкретное место с допустимым периодом evening;
-- available_periods=null означает отсутствие ограничения,
-  а пустой список запрещает выбирать место.
+  новое для этого дня место из evening_place_ids
+  с activity_focus=park или food;
+- available_periods=null не подтверждает вечернюю работу
+  музея, ресторана или развлекательного заведения;
+  пустой список запрещает выбирать место.
 """.strip()
 
 
@@ -763,39 +790,50 @@ def _build_grounding_requirements(
     }
 
 
-def _requires_grounded_evening(
+def _evening_interest_place_ids(
     *,
     preferences: TripPreferences,
     places: list[PlaceCandidate],
-) -> bool:
-    """Требует новое вечернее место, если однодневный маршрут это позволяет."""
+) -> list[str]:
+    """Находит места нужной категории для вечера однодневного маршрута."""
 
     if preferences.duration_days != 1:
-        return False
+        return []
 
     requested_evening_categories = set(
         select_interest_categories(preferences.interests)
     ).intersection(EVENING_PLACE_CATEGORIES)
     if not requested_evening_categories:
-        return False
+        return []
 
     available_places = [
         place for place in places if infer_available_periods(place.opening_hours) != ()
     ]
     if len({place.source_place_id for place in available_places}) < 3:
-        return False
+        return []
 
-    return any(
-        any(
-            place_matches_category(place, category)
+    evening_place_ids: list[str] = []
+
+    for place in available_places:
+        matching_categories = {
+            category
             for category in requested_evening_categories
-        )
-        and (
-            (periods := infer_available_periods(place.opening_hours)) is None
-            or "evening" in periods
-        )
-        for place in available_places
-    )
+            if place_matches_category(place, category)
+        }
+        if not matching_categories:
+            continue
+
+        periods = infer_available_periods(place.opening_hours)
+        if periods is None:
+            if "leisure.park" not in matching_categories:
+                continue
+        elif "evening" not in periods:
+            continue
+
+        if place.source_place_id not in evening_place_ids:
+            evening_place_ids.append(place.source_place_id)
+
+    return evening_place_ids
 
 
 def _build_interest_category_requirements(
@@ -1042,10 +1080,12 @@ def _build_grounded_user_message(
         travel_context=planning_context,
     )
     llm_travel_context["must_visit_place_ids"] = must_visit_place_ids
-    llm_travel_context["evening_place_required"] = _requires_grounded_evening(
+    evening_place_ids = _evening_interest_place_ids(
         preferences=preferences,
         places=planning_places,
     )
+    llm_travel_context["evening_place_ids"] = evening_place_ids
+    llm_travel_context["evening_place_required"] = bool(evening_place_ids)
     llm_travel_context["interest_category_requirements"] = (
         _build_interest_category_requirements(
             preferences=preferences,
@@ -1336,10 +1376,17 @@ def _validate_grounded_trip_plan(
         places=planning_places,
         must_visit_place_ids=resolved_must_visit_place_ids,
     )
-    evening_place_required = _requires_grounded_evening(
-        preferences=preferences,
-        places=planning_places,
+    evening_place_ids = set(
+        _evening_interest_place_ids(
+            preferences=preferences,
+            places=planning_places,
+        )
     )
+    requested_evening_focuses = {
+        INTEREST_CATEGORY_ACTIVITY_FOCUSES[category]
+        for category in select_interest_categories(preferences.interests)
+        if category in EVENING_PLACE_CATEGORIES
+    }
     selected_place_ids: set[str] = set()
     selected_place_ids_by_focus: dict[str, set[str]] = {}
     day_place_ids_collection: list[set[str]] = []
@@ -1399,7 +1446,23 @@ def _validate_grounded_trip_plan(
     if len(selected_place_ids) < grounding_requirements["minimum_unique_places"]:
         raise ValueError("LLM used too few unique grounded places.")
 
-    if evening_place_required:
+    selected_park_ids = {
+        activity.source_place_id
+        for day in grounded_plan.days
+        for activity in (*day.morning, *day.afternoon, *day.evening)
+        if activity.source_place_id is not None and activity.activity_focus == "park"
+    }
+    for match in SUMMARY_PARK_COUNT_PATTERN.finditer(grounded_plan.summary):
+        count_text = match.group("count").casefold()
+        claimed_count = (
+            int(count_text)
+            if count_text.isdecimal()
+            else SUMMARY_PARK_COUNT_WORDS[count_text]
+        )
+        if claimed_count != len(selected_park_ids):
+            raise ValueError("LLM summary misstates the number of parks.")
+
+    if evening_place_ids:
         day = grounded_plan.days[0]
         earlier_place_ids = {
             activity.source_place_id
@@ -1407,11 +1470,12 @@ def _validate_grounded_trip_plan(
             if activity.source_place_id is not None
         }
         if not any(
-            activity.source_place_id is not None
+            activity.source_place_id in evening_place_ids
             and activity.source_place_id not in earlier_place_ids
+            and activity.activity_focus in requested_evening_focuses
             for activity in day.evening
         ):
-            raise ValueError("LLM omitted an available new evening place.")
+            raise ValueError("LLM omitted a new evening place matching user interests.")
 
     return grounded_plan.to_trip_plan_response(
         practical_tips=_build_grounded_practical_tips(travel_context),
@@ -1453,6 +1517,13 @@ def _validate_grounded_activity(
         raise ValueError("LLM used an activity focus unsupported by place categories.")
 
     available_periods = infer_available_periods(place.opening_hours)
+
+    if (
+        period == "evening"
+        and available_periods is None
+        and activity.activity_focus in {"museum", "food", "entertainment"}
+    ):
+        raise ValueError("LLM used an evening venue with unknown opening hours.")
 
     if available_periods is not None and period not in available_periods:
         raise ValueError("LLM used a place outside its available periods.")
