@@ -892,6 +892,51 @@ def test_rejects_false_required_places_in_summary() -> None:
     )
 
 
+def test_summary_park_count_matches_selected_places() -> None:
+    """Не обещает два парка, если в маршруте выбран только один."""
+
+    context = build_travel_context()
+    context.places.append(
+        PlaceCandidate(
+            name="Городской парк",
+            formatted_address="Стамбул, Турция",
+            latitude=41.01,
+            longitude=28.98,
+            categories=["leisure.park"],
+            source_place_id="park-id",
+            opening_hours="24/7",
+        )
+    )
+    plan = build_grounded_plan()
+    days = plan["days"]
+    assert isinstance(days, list)
+    day = days[0]
+    assert isinstance(day, dict)
+    day["afternoon"] = [
+        {
+            "source_place_id": "park-id",
+            "place_name": "Городской парк",
+            "activity_focus": "park",
+            "description": None,
+        }
+    ]
+    plan["summary"] = "Маршрут включает два парка."
+
+    with pytest.raises(ValueError, match="number of parks"):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(),
+            travel_context=context,
+        )
+
+    plan["summary"] = "Маршрут включает один парк."
+    _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(),
+        travel_context=context,
+    )
+
+
 def test_requires_new_evening_place_when_safe_candidates_exist() -> None:
     """Выбирает вечером отдельный парк, когда три места доступны."""
 
@@ -926,6 +971,7 @@ def test_requires_new_evening_place_when_safe_candidates_exist() -> None:
         )
     )
     assert message["travel_context"]["evening_place_required"] is True
+    assert message["travel_context"]["evening_place_ids"] == ["park-id"]
 
     plan = build_grounded_plan()
     days = plan["days"]
@@ -995,6 +1041,96 @@ def test_requires_new_evening_place_when_safe_candidates_exist() -> None:
         )
 
 
+def test_gallery_does_not_replace_requested_evening_park() -> None:
+    """Галерея без часов недоступна вечером, с часами не заменяет парк."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Городской парк",
+                formatted_address="Стамбул, Турция",
+                latitude=41.01,
+                longitude=28.981,
+                categories=["leisure.park"],
+                source_place_id="park-id",
+                opening_hours="24/7",
+            ),
+            PlaceCandidate(
+                name="Галерея",
+                formatted_address="Стамбул, Турция",
+                latitude=41.011,
+                longitude=28.981,
+                categories=["entertainment.museum"],
+                source_place_id="gallery-id",
+                website="https://gallery.example/",
+            ),
+        ]
+    )
+    preferences = build_preferences(interests="История и парки")
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=preferences,
+            travel_context=context,
+        )
+    )
+    assert message["travel_context"]["evening_place_ids"] == ["park-id"]
+
+    plan = build_grounded_plan()
+    days = plan["days"]
+    assert isinstance(days, list)
+    day = days[0]
+    assert isinstance(day, dict)
+    day["afternoon"] = [
+        {
+            "source_place_id": "park-id",
+            "place_name": "Городской парк",
+            "activity_focus": "park",
+            "description": None,
+        }
+    ]
+    day["evening"] = [
+        {
+            "source_place_id": "gallery-id",
+            "place_name": "Галерея",
+            "activity_focus": "museum",
+            "description": None,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="unknown opening hours"):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=preferences,
+            travel_context=context,
+        )
+
+    context.places[-1] = context.places[-1].model_copy(
+        update={"opening_hours": "Mo-Su 09:00-21:00"}
+    )
+    with pytest.raises(ValueError, match="new evening place"):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=preferences,
+            travel_context=context,
+        )
+
+    day["afternoon"] = day["evening"]
+    day["evening"] = [
+        {
+            "source_place_id": "park-id",
+            "place_name": "Городской парк",
+            "activity_focus": "park",
+            "description": None,
+        }
+    ]
+    _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=preferences,
+        travel_context=context,
+    )
+
+
 def test_allows_general_evening_without_a_safe_evening_place() -> None:
     """Не требует посещать закрытое вечером место."""
 
@@ -1021,6 +1157,7 @@ def test_allows_general_evening_without_a_safe_evening_place() -> None:
         )
     )
     assert message["travel_context"]["evening_place_required"] is False
+    assert message["travel_context"]["evening_place_ids"] == []
 
     plan = build_grounded_plan()
     days = plan["days"]
