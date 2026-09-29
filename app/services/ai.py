@@ -224,6 +224,10 @@ SYSTEM_PROMPT = """
   от одной до двух активностей;
 - если для периода нет подходящего конкретного места,
   добавь уместную общую активность без source_place_id;
+- для однодневного маршрута выбирай конкретное место днём,
+  если в той же area_group, что уже выбранное место дня, есть
+  ещё неиспользованное место, доступное в afternoon
+  (или с available_periods=null);
 - если evening_place_required=true, включи вечером место из
   evening_place_ids с activity_focus=park или food,
   не использованное утром или днём этого дня; общая прогулка
@@ -268,6 +272,9 @@ SEMANTIC_RETRY_PROMPT = """
 - если evening_place_required=true, вечером должно быть
   новое для этого дня место из evening_place_ids
   с activity_focus=park или food;
+- для однодневного маршрута не оставляй afternoon только с общей
+  активностью, если рядом есть неиспользованное место,
+  доступное в afternoon или с неизвестным расписанием;
 - available_periods=null не подтверждает вечернюю работу
   музея, ресторана или развлекательного заведения;
   пустой список запрещает выбирать место.
@@ -788,6 +795,43 @@ def _build_grounding_requirements(
             target_unique_places,
         ),
     }
+
+
+def _has_unselected_nearby_afternoon_place(
+    *,
+    places: list[PlaceCandidate],
+    selected_place_ids: set[str],
+    travel_context: TravelContext,
+) -> bool:
+    """Ищет доступное днём место в зоне уже выбранных мест."""
+
+    selected_areas = {
+        format_place_area_group(
+            place=place,
+            location=travel_context.location,
+        )
+        for place in places
+        if place.source_place_id in selected_place_ids
+    }
+
+    for place in places:
+        if place.source_place_id in selected_place_ids:
+            continue
+
+        available_periods = infer_available_periods(place.opening_hours)
+        if available_periods is not None and "afternoon" not in available_periods:
+            continue
+
+        if (
+            format_place_area_group(
+                place=place,
+                location=travel_context.location,
+            )
+            in selected_areas
+        ):
+            return True
+
+    return False
 
 
 def _evening_interest_place_ids(
@@ -1445,6 +1489,20 @@ def _validate_grounded_trip_plan(
 
     if len(selected_place_ids) < grounding_requirements["minimum_unique_places"]:
         raise ValueError("LLM used too few unique grounded places.")
+
+    if (
+        preferences.duration_days == 1
+        and not any(
+            activity.source_place_id is not None
+            for activity in grounded_plan.days[0].afternoon
+        )
+        and _has_unselected_nearby_afternoon_place(
+            places=planning_places,
+            selected_place_ids=selected_place_ids,
+            travel_context=travel_context,
+        )
+    ):
+        raise ValueError("LLM omitted an available nearby afternoon place.")
 
     selected_park_ids = {
         activity.source_place_id
