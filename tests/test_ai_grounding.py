@@ -1180,6 +1180,126 @@ def test_allows_general_evening_without_a_safe_evening_place() -> None:
     assert result.days[0].evening == ["Отдохнуть в местном кафе."]
 
 
+def test_requires_nearby_afternoon_place_when_available() -> None:
+    """Не заменяет конкретное дневное место общей прогулкой."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Городской музей",
+                formatted_address="Стамбул, Турция",
+                latitude=41.009,
+                longitude=28.98,
+                categories=["entertainment.museum"],
+                source_place_id="museum-id",
+                opening_hours="Mo-Su 09:00-18:00",
+            ),
+            PlaceCandidate(
+                name="Городской парк",
+                formatted_address="Стамбул, Турция",
+                latitude=41.009,
+                longitude=28.981,
+                categories=["leisure.park"],
+                source_place_id="park-id",
+                opening_hours="24/7",
+            ),
+        ]
+    )
+    preferences = build_preferences(interests="История и парки")
+    plan = build_grounded_plan()
+    days = plan["days"]
+    assert isinstance(days, list)
+    day = days[0]
+    assert isinstance(day, dict)
+    day["evening"] = [
+        {
+            "source_place_id": "park-id",
+            "place_name": "Городской парк",
+            "activity_focus": "park",
+            "description": None,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="available nearby afternoon place"):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=preferences,
+            travel_context=context,
+        )
+
+    day["afternoon"] = [
+        {
+            "source_place_id": "museum-id",
+            "place_name": "Городской музей",
+            "activity_focus": "museum",
+            "description": None,
+        }
+    ]
+    _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=preferences,
+        travel_context=context,
+    )
+
+
+def test_allows_general_afternoon_without_nearby_open_place() -> None:
+    """Не отправляет пользователя к далёкому или закрытому месту."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name="Городской парк",
+                formatted_address="Стамбул, Турция",
+                latitude=41.009,
+                longitude=28.981,
+                categories=["leisure.park"],
+                source_place_id="park-id",
+                opening_hours="24/7",
+            ),
+            PlaceCandidate(
+                name="Далёкий музей",
+                formatted_address="Стамбул, Турция",
+                latitude=41.2,
+                longitude=29.3,
+                categories=["entertainment.museum"],
+                source_place_id="far-museum-id",
+                opening_hours="Mo-Su 09:00-18:00",
+            ),
+            PlaceCandidate(
+                name="Закрытый музей",
+                formatted_address="Стамбул, Турция",
+                latitude=41.009,
+                longitude=28.98,
+                categories=["entertainment.museum"],
+                source_place_id="closed-museum-id",
+                opening_hours="off",
+            ),
+        ]
+    )
+    plan = build_grounded_plan()
+    days = plan["days"]
+    assert isinstance(days, list)
+    day = days[0]
+    assert isinstance(day, dict)
+    day["evening"] = [
+        {
+            "source_place_id": "park-id",
+            "place_name": "Городской парк",
+            "activity_focus": "park",
+            "description": None,
+        }
+    ]
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(interests="История и парки"),
+        travel_context=context,
+    )
+
+    assert result.days[0].afternoon == ["Прогуляться по историческому центру."]
+
+
 def test_requires_two_grounded_places_for_one_day_when_available() -> None:
     """Не принимает однодневный маршрут из одного места и общих фраз."""
 
