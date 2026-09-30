@@ -95,6 +95,8 @@ Redis is used for:
 - an afternoon visit matching explicit interests on one-day trips when an
   unused suitable place is available near a morning or evening visit; otherwise
   the afternoon may remain a general activity;
+- an explicit shortlist of afternoon places by planning area, and bounded
+  provider Retry-After handling when a grounded plan needs a semantic retry;
 - preference for well-documented places while preserving sparse and explicitly
   required candidates;
 - deterministic coverage of explicitly requested interest categories whenever

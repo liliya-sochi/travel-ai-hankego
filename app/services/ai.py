@@ -59,6 +59,7 @@ MAX_SEMANTIC_ATTEMPTS = 2
 MAX_PROVIDER_ATTEMPTS = 2
 DEFAULT_PROVIDER_RETRY_DELAY_SECONDS = 2.0
 MAX_PROVIDER_RETRY_DELAY_SECONDS = 20.0
+MAX_GROUNDED_SEMANTIC_RETRY_DELAY_SECONDS = 65.0
 STRUCTURED_OUTPUT_NAME = "trip_plan"
 INTAKE_STRUCTURED_OUTPUT_NAME = "trip_intake"
 EDIT_ANALYSIS_STRUCTURED_OUTPUT_NAME = "trip_edit_analysis"
@@ -112,6 +113,8 @@ SYSTEM_PROMPT = """
   которые обязательно должны присутствовать в маршруте;
 - travel_context.interest_category_requirements — категории явно
   указанных интересов и допустимые идентификаторы мест для каждой из них.
+- travel_context.afternoon_interest_place_ids_by_area — доступные днём
+  места по интересам, сгруппированные по area_group;
 - travel_context.evening_place_ids — парки или рестораны, подходящие
   для запрошенного вечернего занятия.
 
@@ -222,7 +225,8 @@ SYSTEM_PROMPT = """
   если в той же area_group, что место утром или вечером, есть
   ещё неиспользованное место, доступное в afternoon
   (или с available_periods=null) и соответствующее явно
-  указанным интересам пользователя;
+  указанным интересам пользователя; проверь для этого
+  afternoon_interest_place_ids_by_area до выбора общей активности;
 - если подходящего места рядом нет, оставь днём общую активность;
   обязательное место или ресторан для обеда можно включить отдельно;
 - если явных категорий интересов нет, достаточно любого доступного
@@ -1129,6 +1133,28 @@ def _build_grounded_user_message(
             must_visit_place_ids=must_visit_place_ids,
         )
     )
+    afternoon_interest_place_ids_by_area: dict[str, list[str]] = {}
+
+    if preferences.duration_days == 1:
+        interest_categories = select_interest_categories(preferences.interests)
+
+        for place_data, place in zip(llm_places, planning_places, strict=True):
+            available_periods = infer_available_periods(place.opening_hours)
+            if available_periods is not None and "afternoon" not in available_periods:
+                continue
+
+            if any(
+                place_matches_category(place, category)
+                for category in interest_categories
+            ):
+                area_group = place_data["area_group"]
+                afternoon_interest_place_ids_by_area.setdefault(area_group, []).append(
+                    place.source_place_id
+                )
+
+    llm_travel_context["afternoon_interest_place_ids_by_area"] = (
+        afternoon_interest_place_ids_by_area
+    )
 
     return json.dumps(
         {
@@ -1750,6 +1776,7 @@ async def _request_model_with_retry(
     payload: dict[str, Any],
     model: str,
     attempt: int,
+    max_retry_delay_seconds: float = MAX_PROVIDER_RETRY_DELAY_SECONDS,
 ) -> LLMProviderResponse:
     """Повторяет запрос один раз после кратковременного provider 429."""
 
@@ -1777,7 +1804,7 @@ async def _request_model_with_retry(
             if delay_seconds is None:
                 delay_seconds = DEFAULT_PROVIDER_RETRY_DELAY_SECONDS
 
-            if delay_seconds > MAX_PROVIDER_RETRY_DELAY_SECONDS:
+            if delay_seconds > max_retry_delay_seconds:
                 raise
 
             _log_llm_retry(
@@ -1838,6 +1865,11 @@ async def _generate_grounded_plan(
                 payload=payload,
                 model=settings.llm_model,
                 attempt=attempt,
+                max_retry_delay_seconds=(
+                    MAX_GROUNDED_SEMANTIC_RETRY_DELAY_SECONDS
+                    if attempt > 1
+                    else MAX_PROVIDER_RETRY_DELAY_SECONDS
+                ),
             )
 
             metadata = _extract_llm_response_metadata(
