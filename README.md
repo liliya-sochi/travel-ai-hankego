@@ -86,6 +86,8 @@ Redis is used for:
 - deterministic merging of extracted values with an existing trip draft;
 - strict response validation with Pydantic;
 - grounded itinerary generation using externally retrieved place candidates;
+- compact, verified place data in LLM requests and short semantic retries with
+  safe validation reason codes in logs;
 - one or two required activities for every morning, afternoon, and evening period;
 - strict validation of every referenced place identifier and name;
 - a deterministic minimum of concrete verified places whenever the available
