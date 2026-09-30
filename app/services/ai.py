@@ -224,10 +224,15 @@ SYSTEM_PROMPT = """
   от одной до двух активностей;
 - если для периода нет подходящего конкретного места,
   добавь уместную общую активность без source_place_id;
-- для однодневного маршрута выбирай конкретное место днём,
-  если в той же area_group, что уже выбранное место дня, есть
+- для однодневного маршрута выбирай дополнительное место днём,
+  если в той же area_group, что место утром или вечером, есть
   ещё неиспользованное место, доступное в afternoon
-  (или с available_periods=null);
+  (или с available_periods=null) и соответствующее явно
+  указанным интересам пользователя;
+- если подходящего места рядом нет, оставь днём общую активность;
+  обязательное место или ресторан для обеда можно включить отдельно;
+- если явных категорий интересов нет, достаточно любого доступного
+  места рядом;
 - если evening_place_required=true, включи вечером место из
   evening_place_ids с activity_focus=park или food,
   не использованное утром или днём этого дня; общая прогулка
@@ -272,9 +277,14 @@ SEMANTIC_RETRY_PROMPT = """
 - если evening_place_required=true, вечером должно быть
   новое для этого дня место из evening_place_ids
   с activity_focus=park или food;
-- для однодневного маршрута не оставляй afternoon только с общей
-  активностью, если рядом есть неиспользованное место,
-  доступное в afternoon или с неизвестным расписанием;
+- для однодневного маршрута выбери днём неиспользованное место
+  рядом с утренним или вечерним, если оно доступно в afternoon
+  (или расписание неизвестно) и соответствует явно указанным
+  интересам; если такого места нет, оставь общую активность;
+- не выбирай днём место вне интересов только ради заполнения
+  маршрута; обязательное место и ресторан для обеда допустимы;
+- если явных категорий интересов нет, выбирай любое доступное
+  место рядом вместо общей активности;
 - available_periods=null не подтверждает вечернюю работу
   музея, ресторана или развлекательного заведения;
   пустой список запрещает выбирать место.
@@ -797,13 +807,13 @@ def _build_grounding_requirements(
     }
 
 
-def _has_unselected_nearby_afternoon_place(
+def _nearby_afternoon_place_ids(
     *,
     places: list[PlaceCandidate],
     selected_place_ids: set[str],
     travel_context: TravelContext,
-) -> bool:
-    """Ищет доступное днём место в зоне уже выбранных мест."""
+) -> set[str]:
+    """Возвращает доступные днём места рядом с утренними и вечерними."""
 
     selected_areas = {
         format_place_area_group(
@@ -814,6 +824,7 @@ def _has_unselected_nearby_afternoon_place(
         if place.source_place_id in selected_place_ids
     }
 
+    nearby_place_ids: set[str] = set()
     for place in places:
         if place.source_place_id in selected_place_ids:
             continue
@@ -829,9 +840,9 @@ def _has_unselected_nearby_afternoon_place(
             )
             in selected_areas
         ):
-            return True
+            nearby_place_ids.add(place.source_place_id)
 
-    return False
+    return nearby_place_ids
 
 
 def _evening_interest_place_ids(
@@ -1490,19 +1501,66 @@ def _validate_grounded_trip_plan(
     if len(selected_place_ids) < grounding_requirements["minimum_unique_places"]:
         raise ValueError("LLM used too few unique grounded places.")
 
-    if (
-        preferences.duration_days == 1
-        and not any(
-            activity.source_place_id is not None
-            for activity in grounded_plan.days[0].afternoon
-        )
-        and _has_unselected_nearby_afternoon_place(
+    if preferences.duration_days == 1:
+        day = grounded_plan.days[0]
+        afternoon_place_ids = {
+            activity.source_place_id
+            for activity in day.afternoon
+            if activity.source_place_id is not None
+        }
+        other_period_place_ids = {
+            activity.source_place_id
+            for activity in (*day.morning, *day.evening)
+            if activity.source_place_id is not None
+        }
+        nearby_place_ids = _nearby_afternoon_place_ids(
             places=planning_places,
-            selected_place_ids=selected_place_ids,
+            selected_place_ids=other_period_place_ids,
             travel_context=travel_context,
         )
-    ):
-        raise ValueError("LLM omitted an available nearby afternoon place.")
+        interest_categories = select_interest_categories(preferences.interests)
+
+        if interest_categories:
+            matching_place_ids = {
+                place.source_place_id
+                for place in planning_places
+                if place.source_place_id in nearby_place_ids
+                and any(
+                    place_matches_category(place, category)
+                    for category in interest_categories
+                )
+            }
+            if (
+                matching_place_ids
+                and afternoon_place_ids.isdisjoint(matching_place_ids)
+                and not (
+                    afternoon_place_ids
+                    and afternoon_place_ids.issubset(must_visit_place_ids)
+                )
+            ):
+                raise ValueError(
+                    "LLM omitted a nearby afternoon place matching user interests."
+                )
+
+            if (
+                not matching_place_ids
+                and any(
+                    activity.source_place_id not in must_visit_place_ids
+                    and activity.activity_focus != "food"
+                    for activity in day.afternoon
+                    if activity.source_place_id is not None
+                )
+                and not any(
+                    any(
+                        place_matches_category(places_by_id[place_id], category)
+                        for category in interest_categories
+                    )
+                    for place_id in afternoon_place_ids
+                )
+            ):
+                raise ValueError("LLM chose an unrelated afternoon place.")
+        elif not afternoon_place_ids and nearby_place_ids:
+            raise ValueError("LLM omitted an available nearby afternoon place.")
 
     selected_park_ids = {
         activity.source_place_id
