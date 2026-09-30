@@ -602,6 +602,9 @@ class GooglePlacesClient:
         if is_verified_relocation:
             updates.update(
                 {
+                    # Категории Geoapify относятся к старому адресу. После
+                    # подтверждённого переезда используем типы нового места.
+                    "categories": _google_place_categories(matched_place),
                     "formatted_address": (matched_place.formatted_address),
                     "latitude": matched_place.location.latitude,
                     "longitude": matched_place.location.longitude,

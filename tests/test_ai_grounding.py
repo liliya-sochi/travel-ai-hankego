@@ -353,6 +353,69 @@ def test_keeps_undocumented_place_for_explicit_interest() -> None:
     }
 
 
+@pytest.mark.parametrize("must_visit_museum", [False, True])
+def test_one_day_omits_unrelated_relocated_museum_unless_required(
+    must_visit_museum: bool,
+) -> None:
+    """Не подставляет переехавший музей вместо запрошенных мест."""
+
+    context = build_travel_context()
+    context.places = [
+        PlaceCandidate(
+            name="Полицейский музей",
+            formatted_address="Другой район, Стамбул",
+            latitude=41.06,
+            longitude=28.93,
+            categories=["entertainment.museum"],
+            location_source="google",
+            source_place_id="police-museum-id",
+            website="https://museum.example/",
+        ),
+        PlaceCandidate(
+            name="Архитектурный объект",
+            formatted_address="Центр, Стамбул",
+            latitude=41.01,
+            longitude=28.98,
+            categories=["building.tourism"],
+            source_place_id="architecture-id",
+            website="https://building.example/",
+        ),
+        PlaceCandidate(
+            name="Городской парк",
+            formatted_address="Центр, Стамбул",
+            latitude=41.011,
+            longitude=28.981,
+            categories=["leisure.park"],
+            source_place_id="park-id",
+            website="https://park.example/",
+        ),
+    ]
+    preferences = build_preferences(
+        interests="Архитектура и парки",
+        must_visit_places=["Полицейский музей"] if must_visit_museum else [],
+    )
+
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=preferences,
+            travel_context=context,
+        )
+    )
+    place_ids = {
+        place["source_place_id"] for place in message["travel_context"]["places"]
+    }
+
+    assert place_ids == {
+        "architecture-id",
+        "park-id",
+        *(["police-museum-id"] if must_visit_museum else []),
+    }
+    assert (
+        message["travel_context"]["grounding_requirements"]["minimum_unique_places"]
+        == 2
+    )
+
+
 def test_rejects_plan_without_explicit_interest_category() -> None:
     """Отклоняет маршрут, который пропустил доступную архитектуру."""
 

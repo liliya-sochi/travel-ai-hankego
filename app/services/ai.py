@@ -1001,6 +1001,24 @@ def _select_planning_places(
         for place in available_places
         if place.source_place_id in deduplicated_place_ids
     ]
+    interest_categories = select_interest_categories(preferences.interests)
+
+    if preferences.duration_days == 1 and interest_categories:
+        # Перенесённый объект может оказаться далеко от остальных мест дня.
+        # Не предлагаем его вместо мест по интересам, если он не обязателен.
+        preferred_places = [
+            place
+            for place in available_places
+            if place.location_source != "google"
+            or place.source_place_id in must_visit_place_id_set
+            or any(
+                place_matches_category(place, category)
+                for category in interest_categories
+            )
+        ]
+        if preferred_places:
+            available_places = preferred_places
+
     selected_places = [
         place
         for place in available_places
@@ -1008,8 +1026,6 @@ def _select_planning_places(
         or place.source_place_id in must_visit_place_id_set
     ]
     selected_place_ids = {place.source_place_id for place in selected_places}
-    interest_categories = select_interest_categories(preferences.interests)
-
     for category in interest_categories:
         if any(place_matches_category(place, category) for place in selected_places):
             continue

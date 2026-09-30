@@ -119,6 +119,7 @@ async def test_enrich_place_matches_and_formats_schedule() -> None:
     )
     assert enriched_place.opening_hours_source == "google"
     assert enriched_place.location_source == "geoapify"
+    assert enriched_place.categories == ["entertainment.museum"]
 
 
 @pytest.mark.asyncio
@@ -460,7 +461,7 @@ async def test_enrich_place_accepts_verified_relocation() -> None:
         formatted_address="京橋三丁目, Токио, Япония",
         latitude=35.6751234,
         longitude=139.769582,
-        categories=["entertainment.museum"],
+        categories=["building.tourism", "entertainment.museum"],
         available_details=["details", "details.contact"],
         website=website,
         source_place_id="geoapify-police-museum",
@@ -520,6 +521,8 @@ async def test_enrich_place_accepts_verified_relocation() -> None:
     assert enriched_place.opening_hours == "Tu 09:30-16:00"
     assert enriched_place.opening_hours_source == "google"
     assert enriched_place.source_place_id == ("geoapify-police-museum")
+    assert enriched_place.categories == ["entertainment.museum"]
+    assert source_place.categories == ["building.tourism", "entertainment.museum"]
 
 
 @pytest.mark.asyncio
