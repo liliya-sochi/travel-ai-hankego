@@ -134,6 +134,7 @@ Redis is used for:
 - opt-in Google Places fallback only for schedule-sensitive venues whose Geoapify opening hours are missing;
 - rejection of places marked temporarily or permanently closed by a matched Google result;
 - safe handling of verified place relocations when Google and Geoapify reference the same specific provider page;
+- reconciles a relocated place's categories with Google types and avoids unrelated relocated venues in one-day plans with explicit interests;
 - deterministic enforcement of explicitly required places in generated itineraries;
 - category-validated activity focuses with deterministic descriptions for concrete places;
 - safe Russian formatting for common OSM weekday and calendar-date schedules;
