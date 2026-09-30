@@ -245,7 +245,9 @@ def test_builds_grounded_user_message() -> None:
         "evening_place_ids",
         "evening_place_required",
         "interest_category_requirements",
+        "afternoon_interest_place_ids_by_area",
     }
+    assert message["travel_context"]["afternoon_interest_place_ids_by_area"] == {}
     assert message["travel_context"]["geographic_planning"] == {
         "area_group_size_meters": 2000,
         "target_area_count": 1,
@@ -1305,6 +1307,19 @@ def test_afternoon_prefers_nearby_place_matching_architecture_or_parks() -> None
         ]
     )
     preferences = build_preferences(interests="Архитектура и парки")
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=preferences,
+            travel_context=context,
+        )
+    )
+    afternoon_ids = message["travel_context"]["afternoon_interest_place_ids_by_area"]
+    assert set(afternoon_ids["area:0:0"]) == {
+        "building-1",
+        "building-2",
+        "park-id",
+    }
+    assert "aquarium-id" not in afternoon_ids["area:0:0"]
     plan = build_grounded_plan()
     day = plan["days"][0]
     day["morning"] = [

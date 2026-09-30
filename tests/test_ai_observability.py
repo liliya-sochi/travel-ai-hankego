@@ -418,6 +418,53 @@ async def test_retries_provider_request_after_short_rate_limit(
 
 
 @pytest.mark.asyncio
+async def test_grounded_semantic_retry_respects_longer_provider_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ждёт Retry-After при второй попытке grounded-плана."""
+
+    provider_attempts: list[int] = []
+    sleep_delays: list[float] = []
+
+    async def fake_request_model(**kwargs: Any) -> LLMProviderResponse:
+        provider_attempt = int(kwargs["provider_attempt"])
+        provider_attempts.append(provider_attempt)
+
+        if provider_attempt == 1:
+            raise AIProviderRateLimitError(retry_after_seconds=45.0)
+
+        return LLMProviderResponse(
+            data={"result": "success"},
+            duration_ms=10,
+            header_request_id="req_after_wait",
+            provider_attempt=provider_attempt,
+        )
+
+    async def fake_sleep(delay_seconds: float) -> None:
+        sleep_delays.append(delay_seconds)
+
+    monkeypatch.setattr(ai_service, "_request_model", fake_request_model)
+    monkeypatch.setattr(ai_service.asyncio, "sleep", fake_sleep)
+
+    async with httpx.AsyncClient() as client:
+        response = await _request_model_with_retry(
+            client=client,
+            url="https://example.test/chat/completions",
+            headers={},
+            payload={},
+            model="test-model",
+            attempt=2,
+            max_retry_delay_seconds=(
+                ai_service.MAX_GROUNDED_SEMANTIC_RETRY_DELAY_SECONDS
+            ),
+        )
+
+    assert provider_attempts == [1, 2]
+    assert sleep_delays == [45.0]
+    assert response.provider_attempt == 2
+
+
+@pytest.mark.asyncio
 async def test_does_not_retry_after_long_provider_delay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
