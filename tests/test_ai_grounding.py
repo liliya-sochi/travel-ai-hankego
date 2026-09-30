@@ -209,6 +209,7 @@ def test_builds_grounded_user_message() -> None:
 
     preferences = build_preferences()
     context = build_travel_context()
+    context.places[0].categories = ["tourism.sights.memorial", "heritage"]
 
     message = json.loads(
         _build_grounded_user_message(
@@ -223,13 +224,28 @@ def test_builds_grounded_user_message() -> None:
 
     assert len(llm_places) == 1
     assert llm_places[0]["source_place_id"] == ("hagia-sophia-id")
+    assert llm_places[0]["categories"] == ["tourism.sights"]
     assert llm_places[0]["area_group"] == "area:0:0"
     assert llm_places[0]["available_periods"] == [
         "morning",
         "afternoon",
     ]
-    assert "website" not in llm_places[0]
-    assert "opening_hours" not in llm_places[0]
+    assert set(llm_places[0]) == {
+        "name",
+        "source_place_id",
+        "categories",
+        "area_group",
+        "available_periods",
+    }
+    assert set(message["travel_context"]) == {
+        "places",
+        "geographic_planning",
+        "grounding_requirements",
+        "must_visit_place_ids",
+        "evening_place_ids",
+        "evening_place_required",
+        "interest_category_requirements",
+    }
     assert message["travel_context"]["geographic_planning"] == {
         "area_group_size_meters": 2000,
         "target_area_count": 1,

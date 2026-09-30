@@ -20,6 +20,7 @@ from app.services.ai import (
     AIProviderRateLimitError,
     LLMProviderResponse,
     _extract_llm_response_metadata,
+    _grounded_validation_hint,
     _request_model,
     _request_model_with_retry,
     generate_trip_plan,
@@ -29,6 +30,20 @@ PRIVATE_INTERESTS = "PRIVATE_INTERESTS_DO_NOT_LOG"
 PRIVATE_ROUTE = "PRIVATE_ROUTE_DO_NOT_LOG"
 PRIVATE_BUDGET = "PRIVATE_BUDGET_DO_NOT_LOG"
 PRIVATE_API_KEY = "PRIVATE_API_KEY_DO_NOT_LOG"
+
+
+def test_grounded_retry_hint_uses_only_known_validation_errors() -> None:
+    """Не передаёт произвольный текст исключения в лог или новый запрос."""
+
+    reason, hint = _grounded_validation_hint(
+        ValueError("LLM chose an unrelated afternoon place.")
+    )
+    assert reason == "unrelated_afternoon"
+    assert "общую активность" in hint
+
+    reason, hint = _grounded_validation_hint(ValueError(PRIVATE_INTERESTS))
+    assert reason == "other_validation"
+    assert PRIVATE_INTERESTS not in hint
 
 
 class DummyAsyncClient:
@@ -211,8 +226,12 @@ async def test_logs_attempts_and_success_without_private_data(
             prompt_tokens=30,
         ),
     ]
+    request_messages: list[list[dict[str, str]]] = []
 
-    async def fake_request_model(**_: object) -> LLMProviderResponse:
+    async def fake_request_model(**kwargs: object) -> LLMProviderResponse:
+        payload = kwargs["payload"]
+        assert isinstance(payload, dict)
+        request_messages.append(json.loads(json.dumps(payload["messages"])))
         return LLMProviderResponse(
             data=responses.pop(0),
             duration_ms=125,
@@ -241,6 +260,14 @@ async def test_logs_attempts_and_success_without_private_data(
         "semantic_validation_failed",
         "success",
     ]
+    assert events[0]["validation_reason"] == "schema_validation"
+    assert [message["role"] for message in request_messages[1]] == [
+        "system",
+        "user",
+        "user",
+    ]
+    assert "Соблюдай JSON Schema" in request_messages[1][-1]["content"]
+    assert not any(message["role"] == "assistant" for message in request_messages[1])
     assert events[1]["model"] == "openai/gpt-oss-120b"
     assert events[1]["request_id"] == "req_attempt_2"
     assert events[1]["prompt_tokens"] == 30
