@@ -90,8 +90,9 @@ Redis is used for:
 - strict validation of every referenced place identifier and name;
 - a deterministic minimum of concrete verified places whenever the available
   travel context can support it;
-- a concrete afternoon visit on one-day trips when an unused place is available
-  in the same planning area as another selected visit;
+- an afternoon visit matching explicit interests on one-day trips when an
+  unused suitable place is available near a morning or evening visit; otherwise
+  the afternoon may remain a general activity;
 - preference for well-documented places while preserving sparse and explicitly
   required candidates;
 - deterministic coverage of explicitly requested interest categories whenever
