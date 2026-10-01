@@ -531,6 +531,7 @@ def _log_llm_call(
     error_type: str | None = None,
     http_status: int | None = None,
     validation_reason: str | None = None,
+    provider_error_code: str | None = None,
 ) -> None:
     """Записывает одно событие вызова LLM по белому списку полей."""
 
@@ -558,6 +559,9 @@ def _log_llm_call(
 
     if validation_reason is not None:
         event["validation_reason"] = validation_reason
+
+    if provider_error_code is not None:
+        event["provider_error_code"] = provider_error_code
 
     # JSON экранирует управляющие символы и защищает формат строки лога.
     logger.log(
@@ -589,6 +593,7 @@ def _log_llm_error(
     provider_attempt: int = 1,
     request_id: str | None = None,
     http_status: int | None = None,
+    provider_error_code: str | None = None,
 ) -> None:
     """Логирует ошибку вызова без payload и текста исключения."""
 
@@ -606,7 +611,37 @@ def _log_llm_error(
         duration_ms=_elapsed_milliseconds(started_at),
         error_type=type(error).__name__,
         http_status=http_status,
+        provider_error_code=provider_error_code,
     )
+
+
+def _classify_provider_error(response: httpx.Response) -> str:
+    """Классифицирует ошибку без сохранения текста ответа провайдера."""
+
+    try:
+        body = response.json()
+    except ValueError:
+        return "unparseable_error"
+
+    if not isinstance(body, dict) or not isinstance(body.get("error"), dict):
+        return "unknown_error"
+
+    error = body["error"]
+    code = error.get("code")
+    if not isinstance(code, str):
+        code = None
+    if code in {"json_validate_failed", "json_schema_validation_failed"}:
+        return "structured_output_validation"
+    if code in {"model_not_found", "invalid_model"}:
+        return "invalid_model"
+    if code in {"context_length_exceeded", "tokens_limit_reached"}:
+        return "context_limit"
+
+    error_type = error.get("type")
+    if error_type == "invalid_request_error":
+        return "invalid_request"
+
+    return "other_error"
 
 
 def _parse_retry_after_seconds(
@@ -1750,6 +1785,7 @@ async def _request_model(
             error=error,
             request_id=request_id,
             http_status=status_code,
+            provider_error_code=_classify_provider_error(error.response),
         )
         raise AIServiceError(
             "AI-сервис временно недоступен. Попробуйте позже."
