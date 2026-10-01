@@ -359,6 +359,56 @@ async def test_logs_rate_limit_without_sensitive_payload(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_code", "expected_classification"),
+    [
+        ("json_validate_failed", "structured_output_validation"),
+        ("unrecognized_private_code", "invalid_request"),
+    ],
+)
+async def test_classifies_provider_400_without_logging_response_body(
+    caplog: pytest.LogCaptureFixture,
+    provider_code: str,
+    expected_classification: str,
+) -> None:
+    """Логирует только известную категорию ошибки, не текст провайдера."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=400,
+            json={
+                "error": {
+                    "code": provider_code,
+                    "type": "invalid_request_error",
+                    "message": "PRIVATE_ERROR_BODY_DO_NOT_LOG",
+                }
+            },
+        )
+
+    with caplog.at_level(logging.ERROR, logger=ai_service.__name__):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(ai_service.AIServiceError):
+                await _request_model(
+                    client=client,
+                    url="https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {PRIVATE_API_KEY}"},
+                    payload={
+                        "messages": [{"role": "user", "content": PRIVATE_INTERESTS}]
+                    },
+                    model="openai/gpt-oss-120b",
+                    attempt=1,
+                )
+
+    events = read_llm_events(caplog)
+    assert events[0]["provider_error_code"] == expected_classification
+    service_logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "PRIVATE_ERROR_BODY_DO_NOT_LOG" not in service_logs
+    assert provider_code not in service_logs
+    assert PRIVATE_INTERESTS not in service_logs
+    assert PRIVATE_API_KEY not in service_logs
+
+
+@pytest.mark.asyncio
 async def test_retries_provider_request_after_short_rate_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
