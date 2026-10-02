@@ -123,6 +123,7 @@ Redis is used for:
 - Geoapify geocoding for destination resolution;
 - Geoapify Places API for nearby sights, museums, restaurants, parks, and entertainment;
 - deterministic mapping of user interests to place categories;
+- explicit history interests use Geoapify's historic-building category when matching places are available;
 - parallel retrieval of up to 120 candidates from the destination center and four shifted geographic anchors;
 - deduplication of candidates returned by overlapping geographic searches;
 - partial fail-open handling when only some geographic searches are unavailable;

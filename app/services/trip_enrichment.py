@@ -52,6 +52,14 @@ INTEREST_CATEGORY_RULES: tuple[
 ] = (
     (
         (
+            "истор",
+            "history",
+            "historic",
+        ),
+        "building.historic",
+    ),
+    (
+        (
             "архитект",
             "здани",
             "небоскр",

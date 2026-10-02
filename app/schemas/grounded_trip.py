@@ -19,6 +19,7 @@ from app.schemas.trip import (
 from app.services.opening_hours import format_opening_hours
 
 GroundedActivityFocus = Literal[
+    "history",
     "architecture",
     "museum",
     "food",
@@ -33,6 +34,7 @@ ACTIVITY_FOCUS_CATEGORY_PREFIXES: dict[
     GroundedActivityFocus,
     str | None,
 ] = {
+    "history": "building.historic",
     "architecture": "building.tourism",
     "museum": "entertainment.museum",
     "food": "catering.restaurant",
@@ -47,6 +49,7 @@ ACTIVITY_FOCUS_DESCRIPTIONS: dict[
     GroundedActivityFocus,
     str,
 ] = {
+    "history": "осмотреть историческое здание",
     "architecture": "осмотреть архитектурный объект",
     "museum": "посетить музей",
     "food": "познакомиться с местной кухней",
