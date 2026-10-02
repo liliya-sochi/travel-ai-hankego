@@ -659,6 +659,70 @@ def test_builds_multiday_geographic_planning_target() -> None:
     assert message["travel_context"]["geographic_planning"]["target_area_count"] == 3
 
 
+def test_history_interest_requires_historic_building_when_available() -> None:
+    """Историческое место становится проверяемым требованием LLM."""
+
+    context = build_travel_context()
+    context.places.append(
+        PlaceCandidate(
+            name="Историческое здание",
+            formatted_address="Фатих, Стамбул",
+            latitude=41.0090,
+            longitude=28.9800,
+            categories=["building.historic", "tourism.sights"],
+            source_place_id="historic-building-id",
+            opening_hours="Mo-Su 09:00-18:00",
+        )
+    )
+    preferences = build_preferences(interests="История")
+    message = json.loads(
+        _build_grounded_user_message(
+            preferences=preferences,
+            travel_context=context,
+        )
+    )
+
+    assert message["travel_context"]["interest_category_requirements"] == {
+        "building.historic": ["historic-building-id"],
+    }
+    plan = build_grounded_plan()
+    days = plan["days"]
+    assert isinstance(days, list) and isinstance(days[0], dict)
+    days[0]["afternoon"] = [
+        {
+            "source_place_id": "historic-building-id",
+            "place_name": "Историческое здание",
+            "activity_focus": "sight",
+            "description": None,
+        }
+    ]
+    with pytest.raises(ValueError, match="explicitly requested interest category"):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=preferences,
+            travel_context=context,
+        )
+
+    days[0]["afternoon"] = [
+        {
+            "source_place_id": "historic-building-id",
+            "place_name": "Историческое здание",
+            "activity_focus": "history",
+            "description": None,
+        }
+    ]
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=preferences,
+        travel_context=context,
+    )
+    assert (
+        result.days[0]
+        .afternoon[0]
+        .startswith("Историческое здание: осмотреть историческое здание.")
+    )
+
+
 def test_prefers_documented_places_over_low_evidence_memorial() -> None:
     """Не передаёт LLM слабый мемориал при достаточном контексте."""
 
@@ -999,14 +1063,14 @@ def test_summary_park_count_matches_selected_places() -> None:
     with pytest.raises(ValueError, match="number of parks"):
         _validate_grounded_trip_plan(
             json.dumps(plan, ensure_ascii=False),
-            preferences=build_preferences(),
+            preferences=build_preferences(interests="Прогулка"),
             travel_context=context,
         )
 
     plan["summary"] = "Маршрут включает один парк."
     _validate_grounded_trip_plan(
         json.dumps(plan, ensure_ascii=False),
-        preferences=build_preferences(),
+        preferences=build_preferences(interests="Прогулка"),
         travel_context=context,
     )
 
@@ -1288,7 +1352,7 @@ def test_requires_nearby_afternoon_place_when_available() -> None:
             ),
         ]
     )
-    preferences = build_preferences(interests="История")
+    preferences = build_preferences(interests="Прогулка")
     plan = build_grounded_plan()
     days = plan["days"]
     assert isinstance(days, list)

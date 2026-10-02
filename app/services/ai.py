@@ -166,6 +166,7 @@ SYSTEM_PROMPT = """
   если этих данных нет в travel_context;
 - для конкретного места description должен быть null;
 - для конкретного места выбери activity_focus, совместимый с categories:
+  history для building.historic,
   architecture для building.tourism,
   museum для entertainment.museum,
   food для catering.restaurant,

@@ -316,6 +316,23 @@ def test_selects_architecture_and_park_as_explicit_interests() -> None:
     ]
 
 
+def test_selects_historic_buildings_for_history_interest() -> None:
+    """История добавляет отдельную категорию, сохраняя архитектуру."""
+
+    interests = "Интересуют история и архитектура"
+
+    assert select_interest_categories(interests) == [
+        "building.historic",
+        "building.tourism",
+    ]
+    assert select_place_categories(interests) == [
+        "tourism.sights",
+        "entertainment.museum",
+        "building.historic",
+        "building.tourism",
+    ]
+
+
 def test_selects_nearby_categories_and_documented_places() -> None:
     """Проверяет баланс близости, категорий и полноты данных."""
 
@@ -513,6 +530,7 @@ async def test_enriches_trip_preferences() -> None:
     assert provider.received_categories == [
         "tourism.sights",
         "entertainment.museum",
+        "building.historic",
         "catering.restaurant",
     ]
     assert context.location.formatted_name == "Стамбул, Турция"
