@@ -47,6 +47,38 @@ def test_grounded_retry_hint_uses_only_known_validation_errors() -> None:
     assert PRIVATE_INTERESTS not in hint
 
 
+@pytest.mark.parametrize(
+    ("message", "reason", "hint_fragment"),
+    [
+        (
+            "LLM used too few grounded places in a day.",
+            "too_few_places_per_day",
+            "minimum_places_per_day",
+        ),
+        (
+            "LLM used an activity focus unsupported by place categories.",
+            "unsupported_activity_focus",
+            "activity_focus",
+        ),
+        (
+            "LLM used a place outside its available periods.",
+            "unavailable_period",
+            "available_periods",
+        ),
+    ],
+)
+def test_grounded_retry_identifies_static_validation_failures(
+    message: str,
+    reason: str,
+    hint_fragment: str,
+) -> None:
+    """Код причины и подсказка известны заранее, без текста модели."""
+
+    actual_reason, hint = _grounded_validation_hint(ValueError(message))
+    assert actual_reason == reason
+    assert hint_fragment in hint
+
+
 class DummyAsyncClient:
     """Подменяет AsyncClient, когда HTTP-вызов мокируется отдельно."""
 

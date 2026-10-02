@@ -118,6 +118,7 @@ Redis is used for:
 - prompt injection risk reduction;
 - user input length limits;
 - safe LLM observability without logging prompts or personal data.
+- explicit validation reason codes for grounded-plan failures without logging model output.
 
 ### External Travel Data
 
