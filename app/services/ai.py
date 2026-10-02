@@ -247,6 +247,62 @@ SEMANTIC_RETRY_PROMPT = """
 """.strip()
 
 GROUNDED_VALIDATION_HINTS: dict[str, tuple[str, str]] = {
+    "LLM duration_days does not match trip preferences.": (
+        "wrong_duration",
+        "Число дней должно совпадать с trip_preferences.duration_days.",
+    ),
+    "LLM destination does not match trip preferences.": (
+        "wrong_destination",
+        "Укажи destination точно как в trip_preferences.",
+    ),
+    "LLM described optional places as required in summary.": (
+        "false_required_summary",
+        "Не называй места обязательными, если must_visit_place_ids пуст.",
+    ),
+    "LLM omitted a required place.": (
+        "missing_required_place",
+        "Включи все идентификаторы из must_visit_place_ids.",
+    ),
+    "LLM used too few grounded places in a day.": (
+        "too_few_places_per_day",
+        "Каждый день включи минимум grounding_requirements.minimum_places_per_day разных мест.",
+    ),
+    "LLM used too few unique grounded places.": (
+        "too_few_unique_places",
+        "Во всём маршруте включи минимум grounding_requirements.minimum_unique_places разных мест.",
+    ),
+    "LLM used a place ID outside travel context.": (
+        "unknown_place_id",
+        "Используй только source_place_id из travel_context.places.",
+    ),
+    "LLM place name does not match its place ID.": (
+        "place_name_mismatch",
+        "Для каждого source_place_id скопируй точное name из travel_context.places.",
+    ),
+    "LLM used an activity focus unsupported by place categories.": (
+        "unsupported_activity_focus",
+        "Выбирай activity_focus только из категорий выбранного места.",
+    ),
+    "LLM used an evening venue with unknown opening hours.": (
+        "unknown_evening_hours",
+        "Вечером не выбирай музей, ресторан или развлечение без известных часов.",
+    ),
+    "LLM used a place outside its available periods.": (
+        "unavailable_period",
+        "Размести место только в периоде из available_periods.",
+    ),
+    "LLM copied provider details into a description.": (
+        "provider_details_in_description",
+        "Для конкретного места оставь description=null; проверенные данные добавит приложение.",
+    ),
+    "LLM omitted an available nearby afternoon place.": (
+        "missing_afternoon_place",
+        "Днём выбери доступное место рядом с утренним или вечерним.",
+    ),
+    "LLM summary misstates the number of parks.": (
+        "park_count_mismatch",
+        "Число парков в summary должно совпадать с количеством разных выбранных парков.",
+    ),
     "LLM omitted a nearby afternoon place matching user interests.": (
         "missing_afternoon_interest",
         "Днём выбери доступное место рядом с утренним или вечерним, "
