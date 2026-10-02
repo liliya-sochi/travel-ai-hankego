@@ -113,6 +113,7 @@ Redis is used for:
 - validation of the number and sequence of itinerary days;
 - semantic retry when the model returns a logically inconsistent response;
 - bounded provider retry for HTTP 429 with `Retry-After` support;
+- one bounded grounded-plan retry when Groq rejects generated JSON against the strict schema;
 - separation of system instructions and user-provided data;
 - prompt injection risk reduction;
 - user input length limits;
