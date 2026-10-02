@@ -18,6 +18,7 @@ from app.schemas.geoapify import (
 from app.schemas.trip import TripPreferences
 from app.services.ai import (
     AIProviderRateLimitError,
+    AIProviderStructuredOutputError,
     LLMProviderResponse,
     _extract_llm_response_metadata,
     _grounded_validation_hint,
@@ -385,7 +386,7 @@ async def test_classifies_provider_400_without_logging_response_body(
             },
         )
 
-    with caplog.at_level(logging.ERROR, logger=ai_service.__name__):
+    with caplog.at_level(logging.WARNING, logger=ai_service.__name__):
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             with pytest.raises(ai_service.AIServiceError):
                 await _request_model(
@@ -406,6 +407,73 @@ async def test_classifies_provider_400_without_logging_response_body(
     assert provider_code not in service_logs
     assert PRIVATE_INTERESTS not in service_logs
     assert PRIVATE_API_KEY not in service_logs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("valid_on_retry", [True, False])
+async def test_grounded_plan_retries_only_one_provider_schema_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    valid_on_retry: bool,
+) -> None:
+    """Повторяет 400 со схемой один раз и не сохраняет текст ответа."""
+
+    attempts: list[int] = []
+    delays: list[float] = []
+
+    async def fake_request_model(**kwargs: Any) -> LLMProviderResponse:
+        attempts.append(int(kwargs["attempt"]))
+        if len(attempts) == 1 or not valid_on_retry:
+            raise AIProviderStructuredOutputError("PRIVATE_ERROR_BODY_DO_NOT_LOG")
+        return LLMProviderResponse(
+            data=build_response_data(
+                day_number=1,
+                request_id="req_schema_retry_success",
+                prompt_tokens=20,
+            ),
+            duration_ms=15,
+            header_request_id=None,
+        )
+
+    async def fake_sleep(delay_seconds: float) -> None:
+        delays.append(delay_seconds)
+
+    settings = SimpleNamespace(
+        llm_base_url="https://api.groq.com/openai/v1",
+        llm_api_key=PRIVATE_API_KEY,
+        llm_model="openai/gpt-oss-120b",
+    )
+    monkeypatch.setattr(ai_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(ai_service, "_request_model", fake_request_model)
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", DummyAsyncClient)
+    monkeypatch.setattr(ai_service.asyncio, "sleep", fake_sleep)
+
+    with caplog.at_level(logging.INFO, logger=ai_service.__name__):
+        if valid_on_retry:
+            await generate_trip_plan(
+                preferences=build_private_preferences(),
+                travel_context=build_private_travel_context(),
+            )
+        else:
+            with pytest.raises(AIProviderStructuredOutputError):
+                await generate_trip_plan(
+                    preferences=build_private_preferences(),
+                    travel_context=build_private_travel_context(),
+                )
+
+    assert attempts == [1, 2]
+    assert delays == [ai_service.GROUNDED_SCHEMA_RETRY_DELAY_SECONDS]
+    retry_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("LLM retry | ")
+    ]
+    assert len(retry_logs) == 1
+    assert json.loads(retry_logs[0].removeprefix("LLM retry | "))["reason"] == (
+        "structured_output_validation"
+    )
+    assert PRIVATE_API_KEY not in "\n".join(retry_logs)
+    assert "PRIVATE_ERROR_BODY_DO_NOT_LOG" not in "\n".join(retry_logs)
 
 
 @pytest.mark.asyncio

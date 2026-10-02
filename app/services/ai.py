@@ -60,6 +60,7 @@ MAX_PROVIDER_ATTEMPTS = 2
 DEFAULT_PROVIDER_RETRY_DELAY_SECONDS = 2.0
 MAX_PROVIDER_RETRY_DELAY_SECONDS = 20.0
 MAX_GROUNDED_SEMANTIC_RETRY_DELAY_SECONDS = 65.0
+GROUNDED_SCHEMA_RETRY_DELAY_SECONDS = 2.0
 STRUCTURED_OUTPUT_NAME = "trip_plan"
 INTAKE_STRUCTURED_OUTPUT_NAME = "trip_intake"
 EDIT_ANALYSIS_STRUCTURED_OUTPUT_NAME = "trip_edit_analysis"
@@ -432,6 +433,10 @@ class AIProviderRateLimitError(AIServiceError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class AIProviderStructuredOutputError(AIServiceError):
+    """Провайдер отклонил сгенерированный JSON по строгой схеме."""
+
+
 @dataclass(frozen=True, slots=True)
 class LLMProviderResponse:
     """Внутренний результат одного HTTP-вызова LLM."""
@@ -689,6 +694,25 @@ def _log_llm_retry(
         json.dumps(
             event,
             ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+
+def _log_grounded_schema_retry(*, attempt: int) -> None:
+    """Логирует ограниченный повтор без текста ответа провайдера."""
+
+    logger.warning(
+        "LLM retry | %s",
+        json.dumps(
+            {
+                "event": "llm_retry",
+                "reason": "structured_output_validation",
+                "semantic_attempt": attempt,
+                "max_attempts": MAX_SEMANTIC_ATTEMPTS,
+                "delay_ms": round(GROUNDED_SCHEMA_RETRY_DELAY_SECONDS * 1000),
+            },
             separators=(",", ":"),
             sort_keys=True,
         ),
@@ -1776,6 +1800,24 @@ async def _request_model(
                 retry_after_seconds=retry_after_seconds,
             ) from error
 
+        provider_error_code = _classify_provider_error(error.response)
+        if status_code == 400 and provider_error_code == "structured_output_validation":
+            _log_llm_error(
+                level=logging.WARNING,
+                outcome="http_error",
+                model=model,
+                attempt=attempt,
+                provider_attempt=provider_attempt,
+                started_at=started_at,
+                error=error,
+                request_id=request_id,
+                http_status=status_code,
+                provider_error_code=provider_error_code,
+            )
+            raise AIProviderStructuredOutputError(
+                "AI-сервис не смог сформировать корректный ответ. Попробуйте позже."
+            ) from error
+
         _log_llm_error(
             level=logging.ERROR,
             outcome="http_error",
@@ -1786,7 +1828,7 @@ async def _request_model(
             error=error,
             request_id=request_id,
             http_status=status_code,
-            provider_error_code=_classify_provider_error(error.response),
+            provider_error_code=provider_error_code,
         )
         raise AIServiceError(
             "AI-сервис временно недоступен. Попробуйте позже."
@@ -1911,19 +1953,27 @@ async def _generate_grounded_plan(
                 response_schema=GroundedTripPlanResponse,
             )
 
-            provider_response = await _request_model_with_retry(
-                client=client,
-                url=url,
-                headers=headers,
-                payload=payload,
-                model=settings.llm_model,
-                attempt=attempt,
-                max_retry_delay_seconds=(
-                    MAX_GROUNDED_SEMANTIC_RETRY_DELAY_SECONDS
-                    if attempt > 1
-                    else MAX_PROVIDER_RETRY_DELAY_SECONDS
-                ),
-            )
+            try:
+                provider_response = await _request_model_with_retry(
+                    client=client,
+                    url=url,
+                    headers=headers,
+                    payload=payload,
+                    model=settings.llm_model,
+                    attempt=attempt,
+                    max_retry_delay_seconds=(
+                        MAX_GROUNDED_SEMANTIC_RETRY_DELAY_SECONDS
+                        if attempt > 1
+                        else MAX_PROVIDER_RETRY_DELAY_SECONDS
+                    ),
+                )
+            except AIProviderStructuredOutputError:
+                if attempt == MAX_SEMANTIC_ATTEMPTS:
+                    raise
+                _log_grounded_schema_retry(attempt=attempt)
+                await asyncio.sleep(GROUNDED_SCHEMA_RETRY_DELAY_SECONDS)
+                messages.append({"role": "user", "content": SEMANTIC_RETRY_PROMPT})
+                continue
 
             metadata = _extract_llm_response_metadata(
                 provider_response.data,
