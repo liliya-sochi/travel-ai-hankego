@@ -43,7 +43,6 @@ from app.services.opening_hours import (
 )
 from app.services.place_geography import (
     GEOGRAPHIC_CELL_SIZE_METERS,
-    calculate_distance_meters,
     format_place_area_group,
 )
 from app.services.place_matching import required_place_name_matches
@@ -68,7 +67,6 @@ EDIT_ANALYSIS_STRUCTURED_OUTPUT_NAME = "trip_edit_analysis"
 UNKNOWN_OBSERVABILITY_VALUE = "unknown"
 MAX_LOG_TEXT_LENGTH = 200
 MAX_LLM_AREA_GROUPS = 3
-MAX_DAILY_PLACE_DISTANCE_METERS = 4_000
 TARGET_GROUNDED_PLACES_PER_DAY = 2
 MAX_GROUNDED_ACTIVITIES_PER_DAY = 6
 EVENING_PLACE_CATEGORIES = ("leisure.park", "catering.restaurant")
@@ -324,11 +322,6 @@ GROUNDED_VALIDATION_HINTS: dict[str, tuple[str, str]] = {
     "LLM omitted an explicitly requested interest category.": (
         "missing_interest_category",
         "Включи места по всем категориям interest_category_requirements.",
-    ),
-    "LLM placed distant sites in one day despite a nearby alternative.": (
-        "distant_daily_places",
-        "Сгруппируй места каждого дня ближе друг к другу; "
-        "замени дальнее место доступным соседним из travel_context.places.",
     ),
 }
 
@@ -1741,105 +1734,10 @@ def _validate_grounded_trip_plan(
         ):
             raise ValueError("LLM omitted a new evening place matching user interests.")
 
-    _validate_compact_days(
-        grounded_plan=grounded_plan,
-        planning_places=planning_places,
-        selected_place_ids=selected_place_ids,
-        must_visit_place_ids=must_visit_place_ids,
-        interest_categories=select_interest_categories(preferences.interests),
-    )
-
     return grounded_plan.to_trip_plan_response(
         practical_tips=_build_grounded_practical_tips(travel_context),
         places_by_id=places_by_id,
     )
-
-
-def _validate_compact_days(
-    *,
-    grounded_plan: GroundedTripPlanResponse,
-    planning_places: list[PlaceCandidate],
-    selected_place_ids: set[str],
-    must_visit_place_ids: set[str],
-    interest_categories: list[str],
-) -> None:
-    """Отклоняет дальнюю пару, когда доступна близкая замена по интересам."""
-
-    if not interest_categories:
-        return
-
-    places_by_id = {place.source_place_id: place for place in planning_places}
-
-    for day in grounded_plan.days:
-        activities = (
-            ("morning", day.morning),
-            ("afternoon", day.afternoon),
-            ("evening", day.evening),
-        )
-        day_places = [
-            (period, places_by_id[activity.source_place_id])
-            for period, period_activities in activities
-            for activity in period_activities
-            if activity.source_place_id is not None
-        ]
-
-        if all(
-            calculate_distance_meters(
-                first_latitude=first.latitude,
-                first_longitude=first.longitude,
-                second_latitude=second.latitude,
-                second_longitude=second.longitude,
-            )
-            <= MAX_DAILY_PLACE_DISTANCE_METERS
-            for index, (_, first) in enumerate(day_places)
-            for _, second in day_places[index + 1 :]
-        ):
-            continue
-
-        for period, replaceable in day_places:
-            if replaceable.source_place_id in must_visit_place_ids:
-                continue
-
-            other_day_places = [
-                place for _, place in day_places if place is not replaceable
-            ]
-            missing_categories = [
-                category
-                for category in interest_categories
-                if not any(
-                    place_matches_category(places_by_id[place_id], category)
-                    for place_id in selected_place_ids - {replaceable.source_place_id}
-                )
-            ]
-
-            for candidate in planning_places:
-                if candidate.source_place_id in selected_place_ids:
-                    continue
-                if not any(
-                    place_matches_category(candidate, category)
-                    for category in interest_categories
-                ) or not all(
-                    place_matches_category(candidate, category)
-                    for category in missing_categories
-                ):
-                    continue
-                available_periods = infer_available_periods(candidate.opening_hours)
-                if available_periods is not None and period not in available_periods:
-                    continue
-                if all(
-                    calculate_distance_meters(
-                        first_latitude=place.latitude,
-                        first_longitude=place.longitude,
-                        second_latitude=candidate.latitude,
-                        second_longitude=candidate.longitude,
-                    )
-                    <= MAX_DAILY_PLACE_DISTANCE_METERS
-                    for place in other_day_places
-                ):
-                    raise ValueError(
-                        "LLM placed distant sites in one day despite a "
-                        "nearby alternative."
-                    )
 
 
 def _validate_grounded_activity(
