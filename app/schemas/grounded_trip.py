@@ -49,7 +49,7 @@ ACTIVITY_FOCUS_DESCRIPTIONS: dict[
     GroundedActivityFocus,
     str,
 ] = {
-    "history": "осмотреть историческое здание",
+    "history": "осмотреть исторический объект",
     "architecture": "осмотреть архитектурный объект",
     "museum": "посетить музей",
     "food": "познакомиться с местной кухней",
