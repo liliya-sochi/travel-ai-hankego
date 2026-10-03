@@ -719,7 +719,7 @@ def test_history_interest_requires_historic_building_when_available() -> None:
     assert (
         result.days[0]
         .afternoon[0]
-        .startswith("Историческое здание: осмотреть историческое здание.")
+        .startswith("Историческое здание: осмотреть исторический объект.")
     )
 
 
