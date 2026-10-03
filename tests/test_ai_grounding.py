@@ -659,6 +659,111 @@ def test_builds_multiday_geographic_planning_target() -> None:
     assert message["travel_context"]["geographic_planning"]["target_area_count"] == 3
 
 
+def test_rejects_distant_daily_museum_when_nearby_museum_is_available() -> None:
+    """Пара из разных районов не проходит при доступной близкой замене."""
+
+    context = build_travel_context()
+    context.places.extend(
+        [
+            PlaceCandidate(
+                name=name,
+                formatted_address="Стамбул",
+                latitude=latitude,
+                longitude=longitude,
+                categories=["entertainment.museum"],
+                source_place_id=place_id,
+                opening_hours="Mo-Su 09:00-18:00",
+            )
+            for name, latitude, longitude, place_id in (
+                ("Музей рядом с центром", 41.009, 28.980, "central-museum"),
+                ("Панорама 1453", 41.0181266, 28.9203842, "panorama"),
+                ("Музей Древнего Востока", 41.0114495, 28.9804625, "orient"),
+                ("Музей рядом с Панорамой", 41.0185, 28.921, "near-panorama"),
+            )
+        ]
+    )
+    plan = {
+        "destination": "Стамбул",
+        "duration_days": 2,
+        "summary": "Исторические музеи Стамбула.",
+        "days": [
+            {
+                "day": day,
+                "title": "Музеи Стамбула",
+                "morning": [
+                    {
+                        "source_place_id": morning_id,
+                        "place_name": morning_name,
+                        "activity_focus": morning_focus,
+                        "description": None,
+                    }
+                ],
+                "afternoon": [
+                    {
+                        "source_place_id": afternoon_id,
+                        "place_name": afternoon_name,
+                        "activity_focus": "museum",
+                        "description": None,
+                    }
+                ],
+                "evening": [
+                    {
+                        "source_place_id": None,
+                        "place_name": None,
+                        "activity_focus": None,
+                        "description": "Прогуляться по городу.",
+                    }
+                ],
+            }
+            for day, morning_id, morning_name, morning_focus, afternoon_id, afternoon_name in (
+                (
+                    1,
+                    "hagia-sophia-id",
+                    "Айя-София",
+                    "sight",
+                    "central-museum",
+                    "Музей рядом с центром",
+                ),
+                (
+                    2,
+                    "panorama",
+                    "Панорама 1453",
+                    "museum",
+                    "orient",
+                    "Музей Древнего Востока",
+                ),
+            )
+        ],
+    }
+
+    with pytest.raises(ValueError, match="distant sites in one day"):
+        _validate_grounded_trip_plan(
+            json.dumps(plan, ensure_ascii=False),
+            preferences=build_preferences(duration_days=2, interests="Музеи"),
+            travel_context=context,
+        )
+
+    nearby = context.places.pop()
+    fallback = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(duration_days=2, interests="Музеи"),
+        travel_context=context,
+    )
+    assert "Музей Древнего Востока" in fallback.days[1].afternoon[0]
+    context.places.append(nearby)
+
+    plan["days"][1]["afternoon"][0].update(
+        source_place_id="near-panorama",
+        place_name="Музей рядом с Панорамой",
+    )
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(duration_days=2, interests="Музеи"),
+        travel_context=context,
+    )
+    assert "Музей рядом с Панорамой" in result.days[1].afternoon[0]
+
+
 def test_history_interest_requires_historic_building_when_available() -> None:
     """Историческое место становится проверяемым требованием LLM."""
 
