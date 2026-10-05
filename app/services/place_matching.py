@@ -31,7 +31,9 @@ def required_place_name_matches(
     if normalized_required == normalized_candidate:
         return True
 
-    shorter_name = min(normalized_required, normalized_candidate, key=len)
-    longer_name = max(normalized_required, normalized_candidate, key=len)
+    if len(normalized_required) <= len(normalized_candidate):
+        shorter_name, longer_name = normalized_required, normalized_candidate
+    else:
+        shorter_name, longer_name = normalized_candidate, normalized_required
 
     return len(shorter_name) >= 4 and shorter_name in longer_name
