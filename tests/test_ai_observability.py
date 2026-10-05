@@ -241,6 +241,50 @@ def test_extracts_metadata_and_uses_safe_fallbacks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_focus_alignment_completes_plan_without_another_llm_call(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Подходящее место с общим фокусом не расходует повторный запрос к Groq."""
+
+    context = build_private_travel_context()
+    context.places[0].categories = ["tourism.sights", "building.tourism"]
+    preferences = build_private_preferences().model_copy(
+        update={"interests": "Архитектура"}
+    )
+    call_count = 0
+
+    async def fake_request_model(**_: object) -> LLMProviderResponse:
+        nonlocal call_count
+        call_count += 1
+        return LLMProviderResponse(
+            data=build_response_data(
+                day_number=1, request_id="req_focus_alignment", prompt_tokens=10
+            ),
+            duration_ms=125,
+            header_request_id=None,
+        )
+
+    settings = SimpleNamespace(
+        llm_base_url="https://api.groq.com/openai/v1",
+        llm_api_key=PRIVATE_API_KEY,
+        llm_model="openai/gpt-oss-120b",
+    )
+    monkeypatch.setattr(ai_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(ai_service, "_request_model", fake_request_model)
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", DummyAsyncClient)
+
+    with caplog.at_level(logging.INFO, logger=ai_service.__name__):
+        result = await generate_trip_plan(
+            preferences=preferences, travel_context=context
+        )
+
+    assert call_count == 1
+    assert "осмотреть архитектурный объект" in result.days[0].afternoon[0]
+    assert [event["outcome"] for event in read_llm_events(caplog)] == ["success"]
+
+
+@pytest.mark.asyncio
 async def test_logs_attempts_and_success_without_private_data(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

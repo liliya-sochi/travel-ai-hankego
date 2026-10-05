@@ -27,6 +27,7 @@ from app.schemas.geoapify import PlaceCandidate, TravelContext
 from app.schemas.grounded_trip import (
     INTEREST_CATEGORY_ACTIVITY_FOCUSES,
     GroundedActivity,
+    GroundedActivityFocus,
     GroundedTripPlanResponse,
     get_supported_activity_focuses,
 )
@@ -1593,7 +1594,7 @@ def _validate_grounded_trip_plan(
         if category in EVENING_PLACE_CATEGORIES
     }
     selected_place_ids: set[str] = set()
-    selected_place_ids_by_focus: dict[str, set[str]] = {}
+    selected_activities: list[tuple[DayPeriod, GroundedActivity]] = []
     day_place_ids_collection: list[set[str]] = []
 
     for day in grounded_plan.days:
@@ -1619,11 +1620,7 @@ def _validate_grounded_trip_plan(
                     selected_place_ids.add(activity.source_place_id)
                     day_place_ids.add(activity.source_place_id)
 
-                    if activity.activity_focus is not None:
-                        selected_place_ids_by_focus.setdefault(
-                            activity.activity_focus,
-                            set(),
-                        ).add(activity.source_place_id)
+                    selected_activities.append((period, activity))
 
         day_place_ids_collection.append(day_place_ids)
 
@@ -1631,6 +1628,18 @@ def _validate_grounded_trip_plan(
 
     if missing_must_visit_place_ids:
         raise ValueError("LLM omitted a required place.")
+
+    _align_grounded_interest_focuses(
+        activities=selected_activities,
+        requirements=interest_category_requirements,
+        places_by_id=places_by_id,
+    )
+    selected_place_ids_by_focus: dict[str, set[str]] = {}
+    for _, activity in selected_activities:
+        if activity.activity_focus is not None and activity.source_place_id is not None:
+            selected_place_ids_by_focus.setdefault(activity.activity_focus, set()).add(
+                activity.source_place_id
+            )
 
     for category, required_place_ids in interest_category_requirements.items():
         required_focus = INTEREST_CATEGORY_ACTIVITY_FOCUSES[category]
@@ -1747,6 +1756,65 @@ def _validate_grounded_trip_plan(
         practical_tips=_build_grounded_practical_tips(travel_context),
         places_by_id=places_by_id,
     )
+
+
+def _align_grounded_interest_focuses(
+    *,
+    activities: list[tuple[DayPeriod, GroundedActivity]],
+    requirements: dict[str, list[str]],
+    places_by_id: dict[str, PlaceCandidate],
+) -> None:
+    """Согласует фокус уже проверенных мест с интересами без нового LLM-вызова."""
+
+    if all(
+        any(
+            activity.source_place_id in place_ids
+            and activity.activity_focus == INTEREST_CATEGORY_ACTIVITY_FOCUSES[category]
+            for _, activity in activities
+        )
+        for category, place_ids in requirements.items()
+    ):
+        return
+
+    candidates: dict[GroundedActivityFocus, list[int]] = {}
+    for category, place_ids in requirements.items():
+        focus = INTEREST_CATEGORY_ACTIVITY_FOCUSES[category]
+        eligible: list[int] = []
+        for index, (period, activity) in enumerate(activities):
+            if activity.source_place_id not in place_ids:
+                continue
+            try:
+                _validate_grounded_activity(
+                    activity=activity.model_copy(update={"activity_focus": focus}),
+                    places_by_id=places_by_id,
+                    period=period,
+                )
+            except ValueError:
+                continue
+            eligible.append(index)
+        candidates[focus] = sorted(
+            eligible,
+            key=lambda index: activities[index][1].activity_focus != focus,
+        )
+
+    assignments: dict[int, GroundedActivityFocus] = {}
+
+    def assign(focus: GroundedActivityFocus, visited: set[int]) -> bool:
+        for index in candidates[focus]:
+            if index in visited:
+                continue
+            visited.add(index)
+            previous_focus = assignments.get(index)
+            if previous_focus is None or assign(previous_focus, visited):
+                assignments[index] = focus
+                return True
+        return False
+
+    if not all(assign(focus, set()) for focus in candidates):
+        return
+
+    for index, focus in assignments.items():
+        activities[index][1].activity_focus = focus
 
 
 def _validate_grounded_activity(

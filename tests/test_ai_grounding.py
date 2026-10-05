@@ -536,8 +536,8 @@ def test_accepts_plan_covering_explicit_interest_categories() -> None:
     assert result.days[0].evening[0].startswith("Городской парк: прогуляться по парку.")
 
 
-def test_rejects_wrong_focus_for_explicit_interest_category() -> None:
-    """Не засчитывает музейный фокус как интерес к архитектуре."""
+def test_aligns_supported_focus_for_explicit_interest_category() -> None:
+    """Исправляет музейный фокус на архитектурный у уже выбранного здания."""
 
     context = build_travel_context()
     context.places[0] = context.places[0].model_copy(
@@ -560,15 +560,54 @@ def test_rejects_wrong_focus_for_explicit_interest_category() -> None:
 
     morning[0]["activity_focus"] = "museum"
 
-    with pytest.raises(
-        ValueError,
-        match="explicitly requested interest category",
-    ):
-        _validate_grounded_trip_plan(
-            json.dumps(plan, ensure_ascii=False),
-            preferences=build_preferences(interests="Архитектура"),
-            travel_context=context,
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(interests="Архитектура"),
+        travel_context=context,
+    )
+    assert (
+        result.days[0]
+        .morning[0]
+        .startswith("Айя-София: осмотреть архитектурный объект.")
+    )
+
+
+def test_focus_alignment_preserves_both_history_and_architecture() -> None:
+    """Переназначает фокусы так, чтобы один интерес не вытеснил другой."""
+
+    context = build_travel_context()
+    context.places[0].categories = [
+        "tourism.sights",
+        "building.historic",
+        "building.tourism",
+    ]
+    context.places.append(
+        PlaceCandidate(
+            name="Исторический объект",
+            formatted_address="Стамбул",
+            latitude=41.009,
+            longitude=28.981,
+            categories=["tourism.sights", "building.historic"],
+            source_place_id="historic-id",
+            opening_hours="Mo-Su 09:00-18:00",
         )
+    )
+    plan = build_grounded_plan()
+    plan["days"][0]["afternoon"] = [
+        {
+            "source_place_id": "historic-id",
+            "place_name": "Исторический объект",
+            "activity_focus": "sight",
+            "description": None,
+        }
+    ]
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(interests="История и архитектура"),
+        travel_context=context,
+    )
+    assert "осмотреть архитектурный объект" in result.days[0].morning[0]
+    assert "осмотреть исторический объект" in result.days[0].afternoon[0]
 
 
 def test_rejects_free_text_description_for_grounded_place() -> None:
@@ -720,16 +759,6 @@ def test_history_interest_requires_historic_building_when_available() -> None:
         "building.historic": ["historic-building-id"],
     }
     plan = build_grounded_plan()
-    days = plan["days"]
-    assert isinstance(days, list) and isinstance(days[0], dict)
-    days[0]["afternoon"] = [
-        {
-            "source_place_id": "historic-building-id",
-            "place_name": "Историческое здание",
-            "activity_focus": "sight",
-            "description": None,
-        }
-    ]
     with pytest.raises(ValueError, match="explicitly requested interest category"):
         _validate_grounded_trip_plan(
             json.dumps(plan, ensure_ascii=False),
@@ -737,11 +766,13 @@ def test_history_interest_requires_historic_building_when_available() -> None:
             travel_context=context,
         )
 
+    days = plan["days"]
+    assert isinstance(days, list) and isinstance(days[0], dict)
     days[0]["afternoon"] = [
         {
             "source_place_id": "historic-building-id",
             "place_name": "Историческое здание",
-            "activity_focus": "history",
+            "activity_focus": "sight",
             "description": None,
         }
     ]
