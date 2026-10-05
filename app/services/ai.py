@@ -43,7 +43,6 @@ from app.services.opening_hours import (
 )
 from app.services.place_geography import (
     GEOGRAPHIC_CELL_SIZE_METERS,
-    calculate_distance_meters,
     format_place_area_group,
 )
 from app.services.place_matching import required_place_name_matches
@@ -195,8 +194,6 @@ SYSTEM_PROMPT = """
 - если два места дня удалены более чем на 4 км по прямой,
   выбери доступное место поближе по интересам пользователя;
 - распределяй разные area_group по разным дням;
-- если geographic_planning.compact_groups=true, выбирай конкретные места
-  каждого дня из одной area_group и назначь разные группы разным дням;
 - если пользователь явно ограничил поездку одним районом,
   следуй этому ограничению вместо geographic_planning.
 
@@ -1081,70 +1078,6 @@ def _planning_place_sort_key(
     )
 
 
-def _proximity_groups(places: list[PlaceCandidate]) -> list[list[PlaceCandidate]]:
-    """Объединяет кандидатов, соединённых переходами до двух километров."""
-
-    remaining = {place.source_place_id: place for place in places}
-    groups: list[list[PlaceCandidate]] = []
-
-    while remaining:
-        first = next(iter(remaining.values()))
-        group = [remaining.pop(first.source_place_id)]
-
-        for anchor in group:
-            nearby_ids = [
-                place_id
-                for place_id, candidate in remaining.items()
-                if calculate_distance_meters(
-                    first_latitude=anchor.latitude,
-                    first_longitude=anchor.longitude,
-                    second_latitude=candidate.latitude,
-                    second_longitude=candidate.longitude,
-                )
-                <= GEOGRAPHIC_CELL_SIZE_METERS
-            ]
-            group.extend(remaining.pop(place_id) for place_id in nearby_ids)
-
-        groups.append(group)
-
-    return groups
-
-
-def _select_compact_two_day_places(
-    *,
-    places: list[PlaceCandidate],
-    interests: str | None,
-    must_visit_place_ids: set[str],
-) -> list[PlaceCandidate]:
-    """Оставляет две полноценные группы, если они покрывают запрос."""
-
-    groups = [group for group in _proximity_groups(places) if len(group) >= 2]
-    categories = [
-        category
-        for category in select_interest_categories(interests)
-        if any(place_matches_category(place, category) for place in places)
-    ]
-    choices: list[tuple[list[PlaceCandidate], list[PlaceCandidate]]] = [
-        (first, second)
-        for index, first in enumerate(groups)
-        for second in groups[index + 1 :]
-        if must_visit_place_ids.issubset(
-            {place.source_place_id for place in (*first, *second)}
-        )
-        and all(
-            any(place_matches_category(place, category) for place in (*first, *second))
-            for category in categories
-        )
-    ]
-
-    if not choices:
-        return places
-
-    first, second = max(choices, key=lambda pair: len(pair[0]) + len(pair[1]))
-    chosen_ids = {place.source_place_id for place in (*first, *second)}
-    return [place for place in places if place.source_place_id in chosen_ids]
-
-
 def _select_planning_places(
     *,
     preferences: TripPreferences,
@@ -1247,22 +1180,13 @@ def _select_planning_places(
         selected_places.append(place)
         selected_place_ids.add(place.source_place_id)
 
-    planning_places = sorted(
+    return sorted(
         selected_places,
         key=lambda place: (
             place.source_place_id not in must_visit_place_id_set,
             *_planning_place_sort_key(place),
         ),
     )
-
-    if preferences.duration_days == 2:
-        return _select_compact_two_day_places(
-            places=planning_places,
-            interests=preferences.interests,
-            must_visit_place_ids=must_visit_place_id_set,
-        )
-
-    return planning_places
 
 
 def _build_grounded_user_message(
@@ -1293,23 +1217,9 @@ def _build_grounded_user_message(
 
     llm_places: list[dict[str, Any]] = []
     area_groups: set[str] = set()
-    compact_groups = (
-        _proximity_groups(planning_places) if preferences.duration_days == 2 else []
-    )
-    compact_area_labels = (
-        {
-            place.source_place_id: f"area:{index}"
-            for index, group in enumerate(compact_groups)
-            for place in group
-        }
-        if len(compact_groups) == 2 and all(len(group) >= 2 for group in compact_groups)
-        else {}
-    )
 
     for place in planning_places:
-        area_group = compact_area_labels.get(
-            place.source_place_id
-        ) or format_place_area_group(
+        area_group = format_place_area_group(
             place=place,
             location=travel_context.location,
         )
@@ -1339,8 +1249,6 @@ def _build_grounded_user_message(
         "area_group_size_meters": GEOGRAPHIC_CELL_SIZE_METERS,
         "target_area_count": target_area_count,
     }
-    if compact_area_labels:
-        llm_travel_context["geographic_planning"]["compact_groups"] = True
     llm_travel_context["grounding_requirements"] = _build_grounding_requirements(
         preferences=preferences,
         travel_context=planning_context,
