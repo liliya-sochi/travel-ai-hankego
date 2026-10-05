@@ -808,7 +808,7 @@ def _build_request_payload(
     Формирует тело запроса к OpenAI-совместимому API.
     """
 
-    return {
+    payload = {
         "model": model,
         "messages": messages,
         "temperature": 0.2,
@@ -817,6 +817,15 @@ def _build_request_payload(
             structured_output_name=structured_output_name,
         ),
     }
+
+    if response_schema is GroundedTripPlanResponse and model in {
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+    }:
+        # Меньше токенов рассуждения оставляет место для полного JSON-маршрута.
+        payload["reasoning_effort"] = "low"
+
+    return payload
 
 
 def _build_user_message(

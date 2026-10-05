@@ -7,6 +7,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from app.schemas.grounded_trip import GroundedTripPlanResponse
 from app.schemas.trip import (
     TripDraft,
     TripIntakeExtraction,
@@ -115,6 +116,27 @@ def test_request_payload_contains_response_format() -> None:
     assert payload["messages"] == messages
 
     assert payload["response_format"]["json_schema"]["strict"] is True
+    assert "reasoning_effort" not in payload
+
+
+def test_grounded_gpt_oss_payload_uses_low_reasoning_effort() -> None:
+    """Экономит бюджет ответа маршрута только для поддерживаемых моделей."""
+
+    for model in ("openai/gpt-oss-20b", "openai/gpt-oss-120b"):
+        payload = _build_request_payload(
+            model=model,
+            messages=[{"role": "user", "content": "Маршрут по Стамбулу."}],
+            response_schema=GroundedTripPlanResponse,
+        )
+        assert payload["reasoning_effort"] == "low"
+        assert payload["response_format"]["json_schema"]["strict"] is True
+
+    other_provider = _build_request_payload(
+        model="other-provider-model",
+        messages=[],
+        response_schema=GroundedTripPlanResponse,
+    )
+    assert "reasoning_effort" not in other_provider
 
 
 def test_intake_payload_uses_its_own_strict_schema() -> None:
