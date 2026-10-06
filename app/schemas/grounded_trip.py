@@ -59,6 +59,17 @@ ACTIVITY_FOCUS_DESCRIPTIONS: dict[
     "place": "посетить место",
 }
 
+ACTIVITY_FOCUS_TITLES: dict[GroundedActivityFocus, str] = {
+    "history": "история",
+    "architecture": "архитектура",
+    "museum": "музеи",
+    "food": "рестораны",
+    "park": "парки",
+    "entertainment": "развлечения",
+    "sight": "достопримечательности",
+    "place": "посещения",
+}
+
 
 INTEREST_CATEGORY_ACTIVITY_FOCUSES: dict[
     str,
@@ -213,7 +224,7 @@ class GroundedTripPlanResponse(StrictSchema):
             days=[
                 DayPlan(
                     day=day.day,
-                    title=day.title,
+                    title=_format_day_title(day),
                     morning=[
                         _format_activity(
                             activity,
@@ -240,6 +251,24 @@ class GroundedTripPlanResponse(StrictSchema):
             ],
             practical_tips=practical_tips,
         )
+
+
+def _format_day_title(day: GroundedDayPlan) -> str:
+    """Собирает темы из проверенных конкретных активностей, без текста LLM."""
+
+    themes = list(
+        dict.fromkeys(
+            ACTIVITY_FOCUS_TITLES[activity.activity_focus]
+            for activity in (*day.morning, *day.afternoon, *day.evening)
+            if activity.source_place_id is not None
+            and activity.activity_focus is not None
+        )
+    )
+    if not themes:
+        return "План дня"
+    if len(themes) == 1:
+        return themes[0].capitalize()
+    return f"{', '.join(themes[:-1])} и {themes[-1]}".capitalize()
 
 
 def _format_activity(

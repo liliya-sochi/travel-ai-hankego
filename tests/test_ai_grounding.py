@@ -570,6 +570,7 @@ def test_aligns_supported_focus_for_explicit_interest_category() -> None:
         .morning[0]
         .startswith("Айя-София: осмотреть архитектурный объект.")
     )
+    assert result.days[0].title == "Архитектура"
 
 
 def test_focus_alignment_preserves_both_history_and_architecture() -> None:
@@ -608,6 +609,7 @@ def test_focus_alignment_preserves_both_history_and_architecture() -> None:
     )
     assert "осмотреть архитектурный объект" in result.days[0].morning[0]
     assert "осмотреть исторический объект" in result.days[0].afternoon[0]
+    assert result.days[0].title == "Архитектура и история"
 
 
 def test_rejects_free_text_description_for_grounded_place() -> None:
@@ -1065,6 +1067,99 @@ def test_validates_and_converts_grounded_plan() -> None:
         ),
         ("Powered by Geoapify; data © OpenStreetMap contributors"),
     ]
+
+
+@pytest.mark.parametrize(
+    "model_title",
+    [
+        "Смотровые площадки",
+        "Военный и восточный кварталы",
+        "PRIVATE_MODEL_TITLE_DO_NOT_SHOW",
+    ],
+)
+def test_builds_title_from_verified_focus_instead_of_model_text(
+    model_title: str,
+) -> None:
+    """Не выводит неподтверждённые типы мест, районы и произвольный текст модели."""
+
+    plan = build_grounded_plan()
+    plan["days"][0]["title"] = model_title
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(),
+        travel_context=build_travel_context(),
+    )
+    assert result.days[0].title == "Достопримечательности"
+    assert model_title not in result.days[0].title
+
+
+def test_does_not_label_istanbul_columns_as_viewpoints() -> None:
+    """Повторяет пример с колоннами; координаты и категории взяты из диагностики."""
+
+    context = build_travel_context()
+    context.places = [
+        PlaceCandidate(
+            name=name,
+            source_place_id=place_id,
+            formatted_address="Стамбул",
+            latitude=latitude,
+            longitude=longitude,
+            categories=[category],
+            wiki_reference_count=1,
+        )
+        for name, place_id, latitude, longitude, category in [
+            ("Kıztaşı", "kiztasi", 41.01544, 28.95028, "tourism.sights.memorial"),
+            (
+                "Arkadyos Sütunu",
+                "arkadyos",
+                41.00774,
+                28.94306,
+                "tourism.sights.ruines",
+            ),
+        ]
+    ]
+    plan = build_grounded_plan()
+    day = plan["days"][0]
+    day["title"] = "Смотровые площадки"
+    for period, place in zip(("morning", "afternoon"), context.places, strict=True):
+        day[period] = [
+            {
+                "source_place_id": place.source_place_id,
+                "place_name": place.name,
+                "activity_focus": "sight",
+                "description": None,
+            }
+        ]
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(interests="Достопримечательности"),
+        travel_context=context,
+    )
+    assert result.days[0].title == "Достопримечательности"
+    assert result.days[0].morning[0].startswith("Kıztaşı:")
+    assert result.days[0].afternoon[0].startswith("Arkadyos Sütunu:")
+
+
+def test_general_activities_receive_neutral_title() -> None:
+    """Не выводит тему из свободного текста, когда нет конкретных посещений."""
+
+    context = build_travel_context()
+    context.places[0].opening_hours = "off"
+    plan = build_grounded_plan()
+    plan["days"][0]["morning"] = [
+        {
+            "source_place_id": None,
+            "place_name": None,
+            "activity_focus": None,
+            "description": "Прогуляться и отдохнуть.",
+        }
+    ]
+    result = _validate_grounded_trip_plan(
+        json.dumps(plan, ensure_ascii=False),
+        preferences=build_preferences(),
+        travel_context=context,
+    )
+    assert result.days[0].title == "План дня"
 
 
 def test_rejects_false_required_places_in_summary() -> None:
