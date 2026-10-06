@@ -1885,7 +1885,6 @@ def _shorten_grounded_afternoons(
         )
 
     for day in plan.days:
-        day_changed = False
         for index, activity in enumerate(day.afternoon):
             place_id = activity.source_place_id
             if (
@@ -1949,17 +1948,7 @@ def _shorten_grounded_afternoons(
                 selected_ids.add(candidate.source_place_id)
                 counts[candidate.source_place_id] = 1
                 replacement_count += 1
-                day_changed = True
                 break
-        if day_changed:
-            names = dict.fromkeys(
-                places_by_id[activity.source_place_id].localized_name
-                or places_by_id[activity.source_place_id].name
-                for activity in (*day.morning, *day.afternoon, *day.evening)
-                if activity.source_place_id is not None
-            )
-            title = " / ".join(names)
-            day.title = title if len(title) <= 255 else "Достопримечательности рядом"
 
     if replacement_count:
         names = dict.fromkeys(

@@ -90,6 +90,9 @@ Redis is used for:
   safe validation reason codes in logs;
 - one or two required activities for every morning, afternoon, and evening period;
 - strict validation of every referenced place identifier and name;
+- deterministic day titles derived from validated activity focuses after interest
+  alignment and any local place correction; unverified LLM district and venue-type
+  labels are replaced with the selected themes;
 - a deterministic minimum of concrete verified places whenever the available
   travel context can support it;
 - an afternoon visit matching explicit interests on one-day trips when an
@@ -107,7 +110,7 @@ Redis is used for:
   4 km of every other stop that day; required visits and morning/evening stops
   are preserved, and the corrected plan is revalidated without another LLM call;
   if no suitable correction passes validation, the original valid plan is returned;
-  changed day titles and the summary use the resulting place names;
+  changed summaries use the resulting place names;
 - rejects summaries that call optional places required or misstate the number
   of selected parks; expects a distinct matching park or restaurant in the
   evening on one-day trips when that interest and suitable candidates exist;

@@ -150,7 +150,7 @@ def test_replaces_distant_afternoon_and_refreshes_text(route_case) -> None:
         "Atatürk Museum, Şişli: осмотреть архитектурный объект"
         in (result.days[1].afternoon[0])
     )
-    assert result.days[0].title == plan.days[0].title
+    assert result.days[0].title == "История и музеи"
     assert (
         "Aya İrini Kilisesi: осмотреть исторический объект"
         in (result.days[0].morning[0])
@@ -201,7 +201,7 @@ def test_keeps_valid_plan_when_replacement_is_not_suitable(route_case, blocker) 
 
     assert "Eski Şark Eserleri Müzesi" in result.days[1].afternoon[0]
     assert result.summary == plan.summary
-    assert result.days[1].title == plan.days[1].title
+    assert result.days[1].title == "Музеи и архитектура"
 
 
 def test_keeps_already_compact_day(route_case) -> None:
