@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass
 from math import isfinite
 from time import perf_counter
@@ -44,6 +45,7 @@ from app.services.opening_hours import (
 )
 from app.services.place_geography import (
     GEOGRAPHIC_CELL_SIZE_METERS,
+    calculate_distance_meters,
     format_place_area_group,
 )
 from app.services.place_matching import required_place_name_matches
@@ -70,6 +72,7 @@ MAX_LOG_TEXT_LENGTH = 200
 MAX_LLM_AREA_GROUPS = 3
 TARGET_GROUNDED_PLACES_PER_DAY = 2
 MAX_GROUNDED_ACTIVITIES_PER_DAY = 6
+MAX_COMPACT_PLACE_DISTANCE_METERS = 4_000
 EVENING_PLACE_CATEGORIES = ("leisure.park", "catering.restaurant")
 SUMMARY_PARK_COUNT_WORDS = {
     "один": 1,
@@ -1537,6 +1540,7 @@ def _validate_grounded_trip_plan(
     *,
     preferences: TripPreferences,
     travel_context: TravelContext,
+    shorten_afternoons: bool = True,
 ) -> TripPlanResponse:
     """
     Проверяет grounded Structured Output и ссылки на места.
@@ -1752,6 +1756,34 @@ def _validate_grounded_trip_plan(
         ):
             raise ValueError("LLM omitted a new evening place matching user interests.")
 
+    if shorten_afternoons and preferences.duration_days > 1:
+        adjusted_plan = grounded_plan.model_copy(deep=True)
+        replacement_count = _shorten_grounded_afternoons(
+            plan=adjusted_plan,
+            places_by_id=places_by_id,
+            must_visit_place_ids=must_visit_place_ids,
+        )
+        if replacement_count:
+            try:
+                adjusted_result = _validate_grounded_trip_plan(
+                    adjusted_plan.model_dump_json(),
+                    preferences=preferences,
+                    travel_context=travel_context,
+                    shorten_afternoons=False,
+                )
+            except (ValidationError, ValueError) as error:
+                reason, _ = _grounded_validation_hint(error)
+                logger.warning(
+                    "Grounded geography adjustment skipped | validation_reason=%s",
+                    reason,
+                )
+            else:
+                logger.info(
+                    "Grounded geography adjusted | replacement_count=%s",
+                    replacement_count,
+                )
+                return adjusted_result
+
     return grounded_plan.to_trip_plan_response(
         practical_tips=_build_grounded_practical_tips(travel_context),
         places_by_id=places_by_id,
@@ -1815,6 +1847,131 @@ def _align_grounded_interest_focuses(
 
     for index, focus in assignments.items():
         activities[index][1].activity_focus = focus
+
+
+def _shorten_grounded_afternoons(
+    *,
+    plan: GroundedTripPlanResponse,
+    places_by_id: dict[str, PlaceCandidate],
+    must_visit_place_ids: set[str],
+) -> int:
+    """Заменяет необязательные далёкие дневные места, сохраняя их фокус."""
+
+    all_activities = [
+        activity
+        for day in plan.days
+        for activity in (*day.morning, *day.afternoon, *day.evening)
+    ]
+    counts = Counter(
+        activity.source_place_id
+        for activity in all_activities
+        if activity.source_place_id is not None
+    )
+    selected_ids = set(counts)
+    replacement_count = 0
+
+    def maximum_distance(place: PlaceCandidate, others: list[PlaceCandidate]) -> float:
+        return max(
+            (
+                calculate_distance_meters(
+                    first_latitude=place.latitude,
+                    first_longitude=place.longitude,
+                    second_latitude=other.latitude,
+                    second_longitude=other.longitude,
+                )
+                for other in others
+            ),
+            default=0.0,
+        )
+
+    for day in plan.days:
+        day_changed = False
+        for index, activity in enumerate(day.afternoon):
+            place_id = activity.source_place_id
+            if (
+                place_id is None
+                or place_id in must_visit_place_ids
+                or counts[place_id] != 1
+            ):
+                continue
+            original = places_by_id[place_id]
+            # Именованное место в общей активности нельзя оставить после замены.
+            if any(
+                name.casefold() in general.description.casefold()
+                for general in all_activities
+                if general.description is not None
+                for name in (original.name, original.localized_name)
+                if name is not None
+            ):
+                continue
+            other_places = [
+                places_by_id[other.source_place_id]
+                for other in (*day.morning, *day.afternoon, *day.evening)
+                if other is not activity and other.source_place_id is not None
+            ]
+            if (
+                maximum_distance(original, other_places)
+                <= MAX_COMPACT_PLACE_DISTANCE_METERS
+            ):
+                continue
+            candidates = [
+                place
+                for place in places_by_id.values()
+                if place.source_place_id not in selected_ids
+                and _has_planning_evidence(place)
+                and activity.activity_focus in get_supported_activity_focuses(place)
+                and maximum_distance(place, other_places)
+                <= MAX_COMPACT_PLACE_DISTANCE_METERS
+            ]
+            for candidate in sorted(
+                candidates,
+                key=lambda place: (
+                    maximum_distance(place, other_places),
+                    *_planning_place_sort_key(place),
+                ),
+            ):
+                replacement = activity.model_copy(
+                    update={
+                        "source_place_id": candidate.source_place_id,
+                        "place_name": candidate.name,
+                    }
+                )
+                try:
+                    _validate_grounded_activity(
+                        activity=replacement,
+                        places_by_id=places_by_id,
+                        period="afternoon",
+                    )
+                except ValueError:
+                    continue
+                day.afternoon[index] = replacement
+                selected_ids.remove(place_id)
+                selected_ids.add(candidate.source_place_id)
+                counts[candidate.source_place_id] = 1
+                replacement_count += 1
+                day_changed = True
+                break
+        if day_changed:
+            names = dict.fromkeys(
+                places_by_id[activity.source_place_id].localized_name
+                or places_by_id[activity.source_place_id].name
+                for activity in (*day.morning, *day.afternoon, *day.evening)
+                if activity.source_place_id is not None
+            )
+            title = " / ".join(names)
+            day.title = title if len(title) <= 255 else "Достопримечательности рядом"
+
+    if replacement_count:
+        names = dict.fromkeys(
+            places_by_id[activity.source_place_id].display_name
+            for day in plan.days
+            for activity in (*day.morning, *day.afternoon, *day.evening)
+            if activity.source_place_id is not None
+        )
+        plan.summary = (
+            f"Маршрут на {plan.duration_days} дн. с посещением: {'; '.join(names)}."
+        )
+    return replacement_count
 
 
 def _validate_grounded_activity(
@@ -2052,6 +2209,7 @@ async def _generate_grounded_plan(
     messages: list[dict[str, str]],
     preferences: TripPreferences,
     travel_context: TravelContext,
+    shorten_afternoons: bool = True,
 ) -> TripPlanResponse:
     """
     Запрашивает и проверяет полный grounded-план.
@@ -2137,6 +2295,7 @@ async def _generate_grounded_plan(
                     model_text,
                     preferences=preferences,
                     travel_context=travel_context,
+                    shorten_afternoons=shorten_afternoons,
                 )
 
             except (ValidationError, ValueError) as error:
@@ -2239,6 +2398,7 @@ async def generate_edited_trip_plan(
         messages=messages,
         preferences=preferences,
         travel_context=travel_context,
+        shorten_afternoons=False,
     )
 
 
