@@ -12,7 +12,7 @@ from app.schemas.geoapify import TravelContext
 
 logger = logging.getLogger(__name__)
 
-CACHE_KEY_PREFIX = "cache:travel-context:v7"
+CACHE_KEY_PREFIX = "cache:travel-context:v8"
 
 
 class RedisCacheClient(Protocol):
@@ -50,12 +50,14 @@ def build_travel_context_cache_key(
     *,
     destination: str,
     categories: list[str],
+    priority_categories: list[str] | None = None,
 ) -> str:
     """Создаёт стабильный ключ без открытых пользовательских данных."""
 
     key_payload = {
         "destination": " ".join(destination.casefold().split()),
         "categories": sorted(categories),
+        "priority_categories": sorted(set(priority_categories or [])),
     }
 
     serialized_payload = json.dumps(
@@ -91,12 +93,14 @@ class RedisTravelContextCache:
         *,
         destination: str,
         categories: list[str],
+        priority_categories: list[str] | None = None,
     ) -> TravelContext | None:
         """Возвращает валидный контекст или сообщает о промахе кеша."""
 
         cache_key = build_travel_context_cache_key(
             destination=destination,
             categories=categories,
+            priority_categories=priority_categories,
         )
 
         try:
@@ -130,12 +134,14 @@ class RedisTravelContextCache:
         destination: str,
         categories: list[str],
         context: TravelContext,
+        priority_categories: list[str] | None = None,
     ) -> None:
         """Сохраняет проверенный туристический контекст."""
 
         cache_key = build_travel_context_cache_key(
             destination=destination,
             categories=categories,
+            priority_categories=priority_categories,
         )
 
         try:

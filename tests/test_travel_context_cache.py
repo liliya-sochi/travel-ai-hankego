@@ -132,6 +132,75 @@ def test_cache_key_is_normalized_and_private() -> None:
     assert "стамбул" not in first_key.casefold()
 
 
+def test_cache_key_separates_explicit_interests_from_search_defaults() -> None:
+    """Одинаковые поисковые категории не смешивают разные приоритеты ranking."""
+
+    categories = ["tourism.sights", "entertainment.museum"]
+    default_key = build_travel_context_cache_key(
+        destination="Стамбул",
+        categories=categories,
+    )
+    museum_key = build_travel_context_cache_key(
+        destination="Стамбул",
+        categories=categories,
+        priority_categories=["entertainment.museum"],
+    )
+    assert default_key != museum_key
+    assert "entertainment" not in museum_key
+
+
+def test_cache_key_normalizes_priority_category_order() -> None:
+    """Перестановка и повторы приоритетов не создают новый кеш."""
+
+    categories = ["building.historic", "building.tourism"]
+    first_key = build_travel_context_cache_key(
+        destination="Стамбул",
+        categories=categories,
+        priority_categories=categories,
+    )
+    second_key = build_travel_context_cache_key(
+        destination="Стамбул",
+        categories=categories,
+        priority_categories=[
+            "building.tourism",
+            "building.historic",
+            "building.tourism",
+        ],
+    )
+    assert first_key == second_key
+
+
+@pytest.mark.asyncio
+async def test_cached_context_is_returned_only_for_matching_priorities() -> None:
+    """Сохраняет приоритеты в реальных путях get/set, а не только в builder ключа."""
+
+    cache = RedisTravelContextCache(
+        redis_client=FakeRedisCacheClient(), ttl_seconds=21_600
+    )
+    context = build_context()
+    await cache.set(
+        destination="Стамбул",
+        categories=context.requested_categories,
+        context=context,
+        priority_categories=["entertainment.museum"],
+    )
+    assert (
+        await cache.get(
+            destination="Стамбул",
+            categories=context.requested_categories,
+            priority_categories=["entertainment.museum"],
+        )
+        == context
+    )
+    assert (
+        await cache.get(
+            destination="Стамбул",
+            categories=context.requested_categories,
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("localized_name", [None, "Собор Святой Софии"])
 async def test_saves_and_restores_context_with_ttl(localized_name: str | None) -> None:
