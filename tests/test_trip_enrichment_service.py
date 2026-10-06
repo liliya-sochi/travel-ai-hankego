@@ -182,17 +182,21 @@ class FakeTravelContextCache:
         self.set_destination: str | None = None
         self.set_categories: list[str] | None = None
         self.saved_context: TravelContext | None = None
+        self.get_priority_categories: list[str] | None = None
+        self.set_priority_categories: list[str] | None = None
 
     async def get(
         self,
         *,
         destination: str,
         categories: list[str],
+        priority_categories: list[str] | None = None,
     ) -> TravelContext | None:
         """Возвращает подготовленный результат кеша."""
 
         self.get_destination = destination
         self.get_categories = categories
+        self.get_priority_categories = priority_categories
 
         return self.cached_context
 
@@ -202,11 +206,13 @@ class FakeTravelContextCache:
         destination: str,
         categories: list[str],
         context: TravelContext,
+        priority_categories: list[str] | None = None,
     ) -> None:
         """Запоминает контекст, переданный для сохранения."""
 
         self.set_destination = destination
         self.set_categories = categories
+        self.set_priority_categories = priority_categories
         self.saved_context = context
 
 
@@ -507,6 +513,167 @@ def test_balances_quality_and_geographic_cells() -> None:
         "east",
         "west",
     }
+
+
+def test_ranking_preserves_explicit_interests_among_documented_defaults() -> None:
+    """Не теряет историю и архитектуру среди многочисленных полных карточек музеев."""
+
+    places = [
+        build_place(
+            name=f"Музей {index}",
+            source_place_id=f"museum-{index}",
+            categories=["tourism.sights", "entertainment.museum"],
+            distance_meters=10.0 + index,
+            wiki_reference_count=4,
+        )
+        for index in range(8)
+    ]
+    places.extend(
+        [
+            build_place(
+                name="Ближайший исторический объект",
+                source_place_id="history-near",
+                categories=["building.historic"],
+                distance_meters=400.0,
+            ),
+            build_place(
+                name="Объект без подробностей",
+                source_place_id="history-sparse",
+                categories=["building.historic"],
+                distance_meters=600.0,
+            ),
+            build_place(
+                name="Исторический объект со справкой",
+                source_place_id="history-documented",
+                categories=["building.historic"],
+                distance_meters=1_500.0,
+                wiki_reference_count=3,
+            ),
+            build_place(
+                name="Архитектурный объект",
+                source_place_id="architecture",
+                categories=["building.tourism"],
+                distance_meters=1_200.0,
+                wiki_reference_count=2,
+            ),
+        ]
+    )
+    categories = select_place_categories("История и архитектура")
+    baseline = select_place_candidates(
+        places=places,
+        location=build_location(),
+        requested_categories=categories,
+        limit=4,
+    )
+    assert all(place.source_place_id.startswith("museum-") for place in baseline)
+
+    selected = select_place_candidates(
+        places=places,
+        location=build_location(),
+        requested_categories=categories,
+        priority_categories=select_interest_categories("История и архитектура"),
+        limit=4,
+    )
+    selected_ids = {place.source_place_id for place in selected}
+    assert len(selected) == 4
+    assert len(selected_ids) == 4
+    assert {"history-near", "history-documented", "architecture"} <= selected_ids
+    assert "history-sparse" not in selected_ids
+
+
+@pytest.mark.parametrize("priority_categories", [[], ["building.historic"]])
+def test_ranking_backfills_when_priority_places_are_unavailable(
+    priority_categories: list[str],
+) -> None:
+    """Отсутствие дополнительных тем не сокращает список доступных кандидатов."""
+
+    places = [
+        build_place(
+            name=f"Место {index}",
+            source_place_id=f"place-{index}",
+            distance_meters=float(index),
+        )
+        for index in range(10)
+    ]
+    selected = select_place_candidates(
+        places=places,
+        location=build_location(),
+        limit=6,
+        requested_categories=["tourism.sights", "building.historic"],
+        priority_categories=priority_categories,
+    )
+    assert len(selected) == 6
+    assert len({place.source_place_id for place in selected}) == 6
+
+
+def test_ranking_keeps_alternatives_for_each_interest_at_twenty_place_limit() -> None:
+    """Сохраняет несколько вариантов тем в рабочем лимите среди 30 музеев."""
+
+    places = [
+        build_place(
+            name=f"Музей {index}",
+            source_place_id=f"museum-{index}",
+            categories=["tourism.sights", "entertainment.museum"],
+            distance_meters=float(index),
+            wiki_reference_count=4,
+        )
+        for index in range(30)
+    ]
+    priority_categories = select_interest_categories("История и архитектура")
+    for category in priority_categories:
+        places.extend(
+            build_place(
+                name=f"Объект {category} {index}",
+                source_place_id=f"{category}-{index}",
+                categories=[category],
+                distance_meters=500.0 + index,
+                wiki_reference_count=1,
+            )
+            for index in range(6)
+        )
+    categories = select_place_categories("История и архитектура")
+    baseline = select_place_candidates(
+        places=places,
+        location=build_location(),
+        requested_categories=categories,
+    )
+    selected = select_place_candidates(
+        places=places,
+        location=build_location(),
+        requested_categories=categories,
+        priority_categories=priority_categories,
+    )
+    assert len(selected) == 20
+    assert len({place.source_place_id for place in selected}) == 20
+    for category in priority_categories:
+        assert sum(category in place.categories for place in baseline) == 1
+        assert sum(category in place.categories for place in selected) >= 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interests", ["История и архитектура", "Музеи"])
+async def test_enrichment_uses_interest_priorities_for_ranking_and_cache(
+    interests: str,
+) -> None:
+    """Передаёт одинаковые приоритеты при чтении и записи; cache hit не ищет места."""
+
+    priority_categories = select_interest_categories(interests)
+    provider = FakePlacesProvider(places=[build_place(categories=priority_categories)])
+    cache = FakeTravelContextCache()
+    service = TripEnrichmentService(
+        places_provider=provider, travel_context_cache=cache
+    )
+    preferences = TripPreferences(
+        destination="Стамбул", duration_days=2, interests=interests
+    )
+    context = await service.enrich(preferences)
+    assert cache.get_priority_categories == priority_categories
+    assert cache.set_priority_categories == priority_categories
+    assert provider.received_categories == select_place_categories(interests)
+
+    cache.cached_context = context
+    provider.error = GeoapifyServiceError("Unexpected provider call")
+    assert await service.enrich(preferences) == context
 
 
 @pytest.mark.asyncio

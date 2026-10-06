@@ -157,6 +157,7 @@ class TravelContextCache(Protocol):
         *,
         destination: str,
         categories: list[str],
+        priority_categories: list[str] | None = None,
     ) -> TravelContext | None:
         """Возвращает контекст или сообщает о промахе кеша."""
 
@@ -168,6 +169,7 @@ class TravelContextCache(Protocol):
         destination: str,
         categories: list[str],
         context: TravelContext,
+        priority_categories: list[str] | None = None,
     ) -> None:
         """Сохраняет проверенный контекст."""
 
@@ -294,18 +296,13 @@ def _quality_sort_key(
     )
 
 
-def _select_nearby_by_category(
+def _select_by_category(
     *,
-    places: list[PlaceCandidate],
+    ordered_places: list[PlaceCandidate],
     requested_categories: list[str],
     limit: int,
 ) -> list[PlaceCandidate]:
-    """Равномерно выбирает ближайшие места разных категорий."""
-
-    ordered_places = sorted(
-        places,
-        key=_distance_sort_key,
-    )
+    """Равномерно выбирает категории, сохраняя заданный порядок мест."""
     selected: list[PlaceCandidate] = []
     selected_ids: set[str] = set()
 
@@ -357,6 +354,7 @@ def select_place_candidates(
     places: list[PlaceCandidate],
     location: DestinationLocation,
     requested_categories: list[str],
+    priority_categories: list[str] | None = None,
     limit: int = TRAVEL_CONTEXT_PLACE_LIMIT,
 ) -> list[PlaceCandidate]:
     """Выбирает разнообразный и качественный shortlist мест."""
@@ -366,6 +364,18 @@ def select_place_candidates(
 
     if not 1 <= limit <= TRAVEL_CONTEXT_PLACE_LIMIT:
         raise ValueError("Размер shortlist должен быть от 1 до 20.")
+
+    priority_categories = sorted(
+        set(priority_categories or []).intersection(requested_categories)
+    )
+    ordered_categories = [
+        *priority_categories,
+        *(
+            category
+            for category in requested_categories
+            if category not in priority_categories
+        ),
+    ]
 
     unique_places: list[PlaceCandidate] = []
     seen_place_ids: set[str] = set()
@@ -382,9 +392,9 @@ def select_place_candidates(
         len(unique_places),
     )
 
-    selected = _select_nearby_by_category(
-        places=unique_places,
-        requested_categories=requested_categories,
+    selected = _select_by_category(
+        ordered_places=sorted(unique_places, key=_distance_sort_key),
+        requested_categories=ordered_categories,
         limit=nearby_limit,
     )
     selected_ids = {place.source_place_id for place in selected}
@@ -399,15 +409,17 @@ def select_place_candidates(
         nearby_limit + max(1, limit // 2),
     )
 
-    for place in quality_ordered_places:
-        if len(selected) == quality_limit:
-            break
-
-        if place.source_place_id in selected_ids:
-            continue
-
-        selected.append(place)
-        selected_ids.add(place.source_place_id)
+    quality_places = _select_by_category(
+        ordered_places=[
+            place
+            for place in quality_ordered_places
+            if place.source_place_id not in selected_ids
+        ],
+        requested_categories=priority_categories,
+        limit=quality_limit - len(selected),
+    )
+    selected.extend(quality_places)
+    selected_ids.update(place.source_place_id for place in quality_places)
 
     selected_cells = {
         calculate_place_grid_cell(
@@ -815,11 +827,13 @@ class TripEnrichmentService:
         """Обогащает параметры поездки актуальными местами."""
 
         categories = select_place_categories(preferences.interests)
+        priority_categories = select_interest_categories(preferences.interests)
 
         if self._travel_context_cache is not None:
             cached_context = await self._travel_context_cache.get(
                 destination=preferences.destination,
                 categories=categories,
+                priority_categories=priority_categories,
             )
 
             if cached_context is not None:
@@ -853,6 +867,7 @@ class TripEnrichmentService:
             places=place_candidates,
             location=location,
             requested_categories=categories,
+            priority_categories=priority_categories,
         )
 
         places = await self._enrich_place_details(places)
@@ -869,6 +884,7 @@ class TripEnrichmentService:
                 destination=preferences.destination,
                 categories=categories,
                 context=context,
+                priority_categories=priority_categories,
             )
 
         context = await self._ensure_must_visit_places(

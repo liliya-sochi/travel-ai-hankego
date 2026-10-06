@@ -137,6 +137,9 @@ Redis is used for:
 - deduplication of candidates returned by overlapping geographic searches;
 - partial fail-open handling when only some geographic searches are unavailable;
 - hybrid selection of no more than 20 places based on category coverage, proximity, data completeness, and geographic diversity;
+- explicit user-interest categories take priority in the nearby and documented
+  portions of candidate selection; documented alternatives are balanced across
+  those categories, with other candidates filling available slots;
 - centered two-kilometre area groups that keep nearby places together across coordinate quadrants;
 - an explicit multi-day area target passed to the LLM without exposing technical group labels to users;
 - Geoapify Place Details API integration for opening hours and provider websites;
@@ -158,6 +161,8 @@ Redis is used for:
 - ranking based on verified provider metadata rather than invented popularity scores;
 - normalized internal travel context isolated from the provider response format;
 - Redis cache-aside for validated travel contexts with a configurable TTL;
+- travel-context cache keys include explicit ranking priorities as well as
+  search categories; the cache namespace is versioned when selection changes;
 - versioned SHA-256 cache keys that do not expose destinations in plaintext;
 - fail-open cache handling that falls back to Geoapify when Redis caching fails;
 - Pydantic validation of cached JSON before it can be passed to the LLM;
