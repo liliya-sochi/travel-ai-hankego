@@ -336,6 +336,17 @@ PostgreSQL integration tests run only when `TEST_DATABASE_URL` is configured.
 
 For safety, the test database name must end with `_test`.
 
+`tests/test_trip_lifecycle_integration.py` runs complete HTTP scenarios against
+real trip services, grounded-response validation, repositories, and PostgreSQL.
+Fixed LLM and travel-data responses cover creation, required-place preservation,
+editing and reopening, rejected duration changes, invalid generated edits, and
+owner-only access. Each HTTP request uses a separate database session. These
+scenarios check application behavior, not the quality of live model generations.
+They run in the existing CI PostgreSQL job and require a migrated
+`TEST_DATABASE_URL` locally. The shared integration fixture truncates `trips` and
+`users`; use a dedicated disposable test database, never a development or production
+database containing data you need to keep.
+
 ## Security
 
 - secrets are loaded from `.env`;
