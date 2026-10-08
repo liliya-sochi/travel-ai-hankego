@@ -347,6 +347,65 @@ They run in the existing CI PostgreSQL job and require a migrated
 `users`; use a dedicated disposable test database, never a development or production
 database containing data you need to keep.
 
+### Live Model Evaluation
+
+List and validate the fixed evaluation scenarios without network access:
+
+```bash
+python -m scripts.evaluate_routes
+```
+
+Run one scenario against the configured real LLM (uses quota or paid tokens):
+
+```bash
+python -m scripts.evaluate_routes --live --case tokyo_required_parks --repeat 3
+```
+
+Run the complete corpus explicitly:
+
+```bash
+python -m scripts.evaluate_routes --live --case all --repeat 3
+```
+
+`evals/route_cases.json` contains four scenarios: Istanbul history/architecture,
+Tokyo with a required museum and parks, replacing parks with museums and a general
+evening, and rejection of a duration change. Creation starts from prepared
+`TripPreferences`, so it does not evaluate conversational intake. Edit cases use
+the real analysis model and a fixed original plan; expected rejected edits stop
+after analysis. The tool calls the same AI functions, bounded retries, validation,
+and optional local geography correction as the application. It uses fixed travel
+contexts and makes no Geoapify, Google, Redis, PostgreSQL, or HTTP API calls.
+Existing `.env` settings must be valid, but those other services need not run.
+
+The corpus is evaluation data, not current travel advice. Istanbul coordinates
+come from the user-provided candidate snapshot; Tokyo coordinates and all IDs,
+addresses, and opening hours are synthetic. Fixed category data and deliberate
+off-interest/distant candidates make runs comparable across prompt changes.
+
+JSON reports in ignored `evals/results/` distinguish `passed`, `quality_failed`,
+`service_error`, and `runner_error`. They include the final public plan, independent
+required-place/category/count checks, and maximum **straight-line pair distance**
+within each day (4 km target, not a walking distance or travel-time estimate).
+Visits are identified by the public formatter's unique place-name prefixes, not
+mentions in summaries. General activities have no coordinates. The evening-edit
+check verifies absence of concrete visits; whether its text describes calm rest,
+and the overall itinerary's appeal, still require human review.
+
+Reports also include model names, corpus/code hashes, latency, safe per-call
+metadata, retry usage, and known token totals. Missing usage is marked explicitly;
+totals are not a billing estimate. Each completed run is saved immediately, so an
+interrupted batch retains partial results. Existing reports are not overwritten;
+`--output PATH` chooses a new destination. A 65-second pause separates scenarios
+by default; `--interval-seconds` adjusts it. This reduces immediate quota pressure
+but does not guarantee that the provider accepts every call. No batch-level retry
+is added. A few runs expose regressions, not a statistically reliable success rate.
+
+Without `--live`, settings are not loaded and no requests are sent. Live execution
+also requires an explicit `--case`; repetitions are limited to 1–10. Exit codes:
+0 = all criteria passed, 1 = quality/service failure, 2 = configuration/tool error,
+130 = interrupted. CI tests the runner with mocked AI boundaries; it never enables
+live evaluation or requires real API keys.
+
 ## Security
 
 - secrets are loaded from `.env`;

@@ -20,3 +20,6 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Локальные отчёты оценки настоящей модели
+evals/results/

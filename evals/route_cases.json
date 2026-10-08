@@ -1,0 +1,438 @@
+{
+  "version": 1,
+  "notes": "Фиксированный корпус, не актуальные туристические данные. Названия и координаты Стамбула взяты из предоставленного пользователем снимка кандидатов 05.10.2026; координаты Токио, все ID, адреса и часы вымышлены. Категории фиксированы. Создание начинается с готовых предпочтений, не проверяет intake. Исходный план редактирования фиксирован; calm-rest текст требует ручного просмотра.",
+  "contexts": {
+    "istanbul": {
+      "location": {
+        "formatted_name": "Стамбул",
+        "latitude": 41.0082,
+        "longitude": 28.9784,
+        "source_place_id": "eval-destination-Стамбул"
+      },
+      "requested_categories": [
+        "building.historic",
+        "building.tourism",
+        "entertainment.museum",
+        "tourism.sights"
+      ],
+      "places": [
+        {
+          "source_place_id": "eval-ist-irene",
+          "name": "Aya İrini Kilisesi",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.00974,
+          "longitude": 28.98106,
+          "categories": [
+            "building.historic",
+            "building.tourism",
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-ist-orient",
+          "name": "Eski Şark Eserleri Müzesi",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.0114495,
+          "longitude": 28.9804625,
+          "categories": [
+            "building.tourism",
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-ist-islamic",
+          "name": "Türk ve İslam Eserleri Müzesi",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.00628,
+          "longitude": 28.97491,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-ist-military",
+          "name": "Askerî Müze",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.0488755,
+          "longitude": 28.9882427,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-ist-ataturk",
+          "name": "Atatürk Museum, Şişli",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.0564,
+          "longitude": 28.98721,
+          "categories": [
+            "building.tourism",
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-ist-panorama",
+          "name": "Panorama 1453 Tarih Müzesi",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.0181266,
+          "longitude": 28.9203842,
+          "categories": [
+            "building.tourism",
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-ist-tiled",
+          "name": "Çinili Köşk",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.01203,
+          "longitude": 28.98124,
+          "categories": [
+            "building.historic",
+            "building.tourism",
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-ist-cistern",
+          "name": "Şerefiye Sarnıcı",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.00741,
+          "longitude": 28.9724,
+          "categories": [
+            "building.tourism",
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-ist-marcian",
+          "name": "Kıztaşı",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.01544,
+          "longitude": 28.95028,
+          "categories": [
+            "tourism.sights.memorial"
+          ]
+        },
+        {
+          "source_place_id": "eval-ist-arcadius",
+          "name": "Arkadyos Sütunu",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.00774,
+          "longitude": 28.94306,
+          "categories": [
+            "tourism.sights.ruines"
+          ]
+        },
+        {
+          "source_place_id": "eval-ist-obelisk",
+          "name": "Theodosius Dikilitaşı",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.00593,
+          "longitude": 28.9754,
+          "categories": [
+            "tourism.sights.memorial.monument"
+          ]
+        },
+        {
+          "source_place_id": "eval-ist-fountain",
+          "name": "Baba-Oğul Çeşmesi",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 41.00137,
+          "longitude": 29.0404,
+          "categories": [
+            "building.historic",
+            "building.tourism"
+          ]
+        }
+      ],
+      "fetched_at": "2026-10-07T00:00:00Z",
+      "attribution": "Evaluation fixture: IDs, addresses and schedules are synthetic; not travel advice."
+    },
+    "tokyo_parks": {
+      "location": {
+        "formatted_name": "Токио",
+        "latitude": 35.68,
+        "longitude": 139.76,
+        "source_place_id": "eval-destination-Токио"
+      },
+      "requested_categories": [
+        "entertainment.museum",
+        "leisure.park"
+      ],
+      "places": [
+        {
+          "source_place_id": "eval-tokyo-mitsubishi",
+          "name": "Mitsubishi Ichigokan Museum",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.68,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum",
+            "building.tourism"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-tokyo-kokyo",
+          "name": "皇居外苑",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.684,
+          "longitude": 139.758,
+          "categories": [
+            "leisure.park"
+          ],
+          "opening_hours": "24/7"
+        },
+        {
+          "source_place_id": "eval-tokyo-hibiya",
+          "name": "日比谷公園",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.675,
+          "longitude": 139.757,
+          "categories": [
+            "leisure.park"
+          ],
+          "opening_hours": "24/7"
+        },
+        {
+          "source_place_id": "eval-tokyo-aquarium",
+          "name": "Art Aquarium Museum GINZA",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.672,
+          "longitude": 139.765,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-tokyo-other-museum",
+          "name": "Тестовый музей",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.681,
+          "longitude": 139.761,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-tokyo-distant-park",
+          "name": "Тестовый дальний парк",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.75,
+          "longitude": 139.8,
+          "categories": [
+            "leisure.park"
+          ],
+          "opening_hours": "24/7"
+        }
+      ],
+      "fetched_at": "2026-10-07T00:00:00Z",
+      "attribution": "Evaluation fixture: IDs, addresses and schedules are synthetic; not travel advice."
+    },
+    "tokyo_museums": {
+      "location": {
+        "formatted_name": "Токио",
+        "latitude": 35.68,
+        "longitude": 139.76,
+        "source_place_id": "eval-destination-Токио"
+      },
+      "requested_categories": [
+        "entertainment.museum"
+      ],
+      "places": [
+        {
+          "source_place_id": "eval-tokyo-mitsubishi",
+          "name": "Mitsubishi Ichigokan Museum",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.68,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum",
+            "building.tourism"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-tokyo-kokyo",
+          "name": "皇居外苑",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.684,
+          "longitude": 139.758,
+          "categories": [
+            "leisure.park"
+          ],
+          "opening_hours": "24/7"
+        },
+        {
+          "source_place_id": "eval-tokyo-hibiya",
+          "name": "日比谷公園",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.675,
+          "longitude": 139.757,
+          "categories": [
+            "leisure.park"
+          ],
+          "opening_hours": "24/7"
+        },
+        {
+          "source_place_id": "eval-tokyo-aquarium",
+          "name": "Art Aquarium Museum GINZA",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.672,
+          "longitude": 139.765,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-tokyo-other-museum",
+          "name": "Тестовый музей",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.681,
+          "longitude": 139.761,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "source_place_id": "eval-tokyo-distant-park",
+          "name": "Тестовый дальний парк",
+          "formatted_address": "Фиксированный адрес оценки, не туристические данные",
+          "latitude": 35.75,
+          "longitude": 139.8,
+          "categories": [
+            "leisure.park"
+          ],
+          "opening_hours": "24/7"
+        }
+      ],
+      "fetched_at": "2026-10-07T00:00:00Z",
+      "attribution": "Evaluation fixture: IDs, addresses and schedules are synthetic; not travel advice."
+    }
+  },
+  "plans": {
+    "tokyo_parks": {
+      "destination": "Токио",
+      "duration_days": 1,
+      "summary": "Музей Mitsubishi Ichigokan Museum и два парка.",
+      "days": [
+        {
+          "day": 1,
+          "title": "Музеи и парки",
+          "morning": [
+            "Mitsubishi Ichigokan Museum: посетить музей."
+          ],
+          "afternoon": [
+            "皇居外苑: прогуляться по парку."
+          ],
+          "evening": [
+            "日比谷公園: прогуляться по парку."
+          ]
+        }
+      ],
+      "practical_tips": [
+        "Фиксированный исходный план для оценки, не туристическая рекомендация."
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "istanbul_history_architecture",
+      "kind": "generate",
+      "user_message": "Хочу провести два дня в Стамбуле. Интересуют история и архитектура.",
+      "preferences": {
+        "destination": "Стамбул",
+        "duration_days": 2,
+        "interests": "История и архитектура"
+      },
+      "context": "istanbul",
+      "expectations": {
+        "interest_categories": [
+          "building.historic",
+          "building.tourism"
+        ],
+        "minimum_unique_places": 4
+      }
+    },
+    {
+      "id": "tokyo_required_parks",
+      "kind": "generate",
+      "user_message": "Хочу провести один день в Токио. Обязательно хочу увидеть Mitsubishi Ichigokan Museum. Интересуют парки.",
+      "preferences": {
+        "destination": "Токио",
+        "duration_days": 1,
+        "interests": "Парки",
+        "must_visit_places": [
+          "Mitsubishi Ichigokan Museum"
+        ]
+      },
+      "context": "tokyo_parks",
+      "expectations": {
+        "required_place_ids": [
+          "eval-tokyo-mitsubishi"
+        ],
+        "interest_categories": [
+          "leisure.park"
+        ],
+        "minimum_places_per_day": 3,
+        "minimum_unique_places": 3
+      }
+    },
+    {
+      "id": "tokyo_museum_edit",
+      "kind": "edit",
+      "user_message": "Вместо парков хочу посещать музеи. Вечером — спокойный отдых.",
+      "preferences": {
+        "destination": "Токио",
+        "duration_days": 1,
+        "interests": "Парки",
+        "must_visit_places": [
+          "Mitsubishi Ichigokan Museum"
+        ]
+      },
+      "context": "tokyo_museums",
+      "current_plan": "tokyo_parks",
+      "expectations": {
+        "required_place_ids": [
+          "eval-tokyo-mitsubishi"
+        ],
+        "interest_categories": [
+          "entertainment.museum"
+        ],
+        "forbidden_categories": [
+          "leisure.park"
+        ],
+        "general_evening_only": true
+      }
+    },
+    {
+      "id": "tokyo_duration_edit_rejected",
+      "kind": "reject_edit",
+      "user_message": "Сделай этот маршрут на два дня.",
+      "preferences": {
+        "destination": "Токио",
+        "duration_days": 1,
+        "interests": "Парки",
+        "must_visit_places": [
+          "Mitsubishi Ichigokan Museum"
+        ]
+      },
+      "context": "tokyo_parks",
+      "current_plan": "tokyo_parks",
+      "expectations": {}
+    }
+  ]
+}
