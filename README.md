@@ -406,6 +406,54 @@ also requires an explicit `--case`; repetitions are limited to 1–10. Exit code
 130 = interrupted. CI tests the runner with mocked AI boundaries; it never enables
 live evaluation or requires real API keys.
 
+#### Conversational Intake Evaluation
+
+Validate and list the separate intake corpus without model calls:
+
+```bash
+python -m scripts.evaluate_routes --suite intake
+```
+
+Run one conversation or the complete intake corpus against the analysis model:
+
+```bash
+python -m scripts.evaluate_routes --suite intake --live --case intake_dialogue_completion --repeat 1
+python -m scripts.evaluate_routes --suite intake --live --case all --repeat 1 --output evals/results/intake-baseline.json
+```
+
+`evals/intake_cases.json` contains eight cases and eleven messages: complete
+requests, an explicit required museum, collecting missing fields over three
+turns, replacing interests and adding a required place, cancellation, history,
+an unrelated question, and an instruction attempting to override extraction.
+The tool calls the real `process_trip_message` service, including the analysis
+LLM, strict validation, draft merge, readiness decision, and next question.
+It does not generate itineraries or access Telegram, HTTP API, Redis, PostgreSQL,
+Geoapify, or Google. Initial drafts and messages are fixed test data.
+
+Each next turn receives the **actual** draft returned by the previous turn.
+The runner never replaces it with the expected draft. It stops a case at the
+first failed check or service error and continues with the next independent
+case. Dialogues end when ready to generate or after a non-planning intent.
+The default 65-second interval separates both cases and turns. The full corpus
+takes roughly twelve minutes without provider retries; `--case ID` selects a
+smaller run. Each repeat starts from a fresh initial draft.
+
+Checks compare intent, all six draft fields, missing required fields, readiness,
+and the deterministic next question. Text comparisons ignore case and whitespace;
+required-place lists ignore order but retain duplicate counts. Selected cases
+use required/excluded substrings for interests to allow different wording.
+These simple checks do not establish semantic equivalence or comprehensive
+prompt-injection protection; review the saved responses as well.
+
+Reports include the corpus type, planned case/message counts, each attempted
+turn's message, input draft, expected criteria, public response, and checks.
+Latency/token/retry metadata covers the entire case, including pauses between
+turns. Case latency therefore differs from a single-message API response time.
+Completed cases are checkpointed; if interrupted during a multi-turn case,
+that unfinished case is not saved. Corpus/code hashes and exit codes follow the
+route evaluator above. Without `--suite`, existing route commands remain valid.
+CI tests both corpora with mocked provider responses and never runs live calls.
+
 ## Security
 
 - secrets are loaded from `.env`;
