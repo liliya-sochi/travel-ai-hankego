@@ -347,6 +347,33 @@ They run in the existing CI PostgreSQL job and require a migrated
 `users`; use a dedicated disposable test database, never a development or production
 database containing data you need to keep.
 
+### Telegram Dialogue Integration Tests
+
+`tests/test_bot_dialogue_integration.py` feeds typed messages and callbacks into
+the same Dispatcher assembly used by the running bot. It checks router filters,
+command arguments, draft preservation between turns and after generation errors,
+recovery through a new RedisStorage connection, creation and history callbacks,
+editing retries, menu transitions, non-text input, and isolation between users.
+The `/plan` handler accepts an optional trip description after the command;
+without arguments, it starts an empty planning dialogue.
+
+The suite uses real Redis FSM storage, the bot's API payload serialization and
+response validation, and its public formatter. Telegram API and backend HTTP
+responses are fixed test doubles, so these checks complement the PostgreSQL
+HTTP lifecycle tests and live Telegram smoke tests. Reconnecting storage checks
+persisted FSM data; it does not simulate a full process restart or polling.
+
+Use an explicitly configured local Redis database 15:
+
+```bash
+TEST_REDIS_URL=redis://127.0.0.1:6379/15 uv run pytest -q tests/test_bot_dialogue_integration.py
+```
+
+Without `TEST_REDIS_URL`, this module is skipped. A configured unavailable Redis
+fails the tests. Each run uses a unique key prefix and deletes only its own keys,
+without flushing Redis. The existing CI Redis service runs these tests together
+with the full suite; real Telegram credentials and model calls are unnecessary.
+
 ### Live Model Evaluation
 
 List and validate the fixed evaluation scenarios without network access:

@@ -258,7 +258,6 @@ async def generate_and_send_trip(
         await delete_progress_message(progress_message)
 
 
-@router.message(Command("plan"))
 async def start_new_trip_dialog(
     *,
     message: Message,
