@@ -784,19 +784,41 @@ def _log_grounded_schema_retry(*, attempt: int) -> None:
 def _build_response_format(
     response_schema: type[BaseModel] = TripPlanResponse,
     structured_output_name: str = STRUCTURED_OUTPUT_NAME,
+    *,
+    allowed_place_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Создаёт строгий Structured Output из переданной Pydantic-схемы.
 
-    Значения по умолчанию сохраняют прежнее поведение генерации маршрута.
+    Для grounded-плана ограничивает ID кандидатами текущего запроса.
     """
+
+    schema = response_schema.model_json_schema()
+    if allowed_place_ids is not None:
+        if response_schema is not GroundedTripPlanResponse:
+            raise ValueError(
+                "Place ID constraints require the grounded response schema."
+            )
+
+        place_id_schema = schema["$defs"]["GroundedActivity"]["properties"][
+            "source_place_id"
+        ]
+        if allowed_place_ids:
+            # Pydantic возвращает новую схему: enum не попадёт в другой запрос.
+            for branch in place_id_schema["anyOf"]:
+                if branch.get("type") == "string":
+                    branch["enum"] = list(dict.fromkeys(allowed_place_ids))
+        else:
+            # Без кандидатов доступны только общие активности; пустой enum недопустим.
+            place_id_schema.pop("anyOf")
+            place_id_schema["type"] = "null"
 
     return {
         "type": "json_schema",
         "json_schema": {
             "name": structured_output_name,
             "strict": True,
-            "schema": response_schema.model_json_schema(),
+            "schema": schema,
         },
     }
 
@@ -807,6 +829,7 @@ def _build_request_payload(
     messages: list[dict[str, str]],
     response_schema: type[BaseModel] = TripPlanResponse,
     structured_output_name: str = STRUCTURED_OUTPUT_NAME,
+    allowed_place_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Формирует тело запроса к OpenAI-совместимому API.
@@ -819,6 +842,7 @@ def _build_request_payload(
         "response_format": _build_response_format(
             response_schema=response_schema,
             structured_output_name=structured_output_name,
+            allowed_place_ids=allowed_place_ids,
         ),
     }
 
@@ -2210,6 +2234,17 @@ async def _generate_grounded_plan(
 
     settings = get_settings()
 
+    must_visit_place_ids = _resolve_must_visit_place_ids(
+        preferences=preferences,
+        travel_context=travel_context,
+    )
+    planning_places = _select_planning_places(
+        preferences=preferences,
+        travel_context=travel_context,
+        must_visit_place_ids=must_visit_place_ids,
+    )
+    allowed_place_ids = [place.source_place_id for place in planning_places]
+
     url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
 
     headers = {
@@ -2233,6 +2268,7 @@ async def _generate_grounded_plan(
                 model=settings.llm_model,
                 messages=messages,
                 response_schema=GroundedTripPlanResponse,
+                allowed_place_ids=allowed_place_ids,
             )
 
             try:

@@ -139,6 +139,85 @@ def test_grounded_gpt_oss_payload_uses_low_reasoning_effort() -> None:
     assert "reasoning_effort" not in other_provider
 
 
+def test_grounded_schema_limits_ids_and_preserves_strict_fields() -> None:
+    """Допускает только переданные ID и null, сохраняя ограничения Pydantic."""
+
+    response_format = _build_response_format(
+        response_schema=GroundedTripPlanResponse,
+        allowed_place_ids=["geoapify-id", "ChIJ-google-id", "geoapify-id"],
+    )
+    activity_schema = response_format["json_schema"]["schema"]["$defs"][
+        "GroundedActivity"
+    ]
+    assert activity_schema["properties"]["source_place_id"]["anyOf"] == [
+        {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "enum": ["geoapify-id", "ChIJ-google-id"],
+        },
+        {"type": "null"},
+    ]
+    assert set(activity_schema["required"]) == set(activity_schema["properties"])
+    assert activity_schema["additionalProperties"] is False
+    assert response_format["json_schema"]["strict"] is True
+
+
+def test_empty_grounded_candidate_list_permits_only_null_id() -> None:
+    """Пустой контекст не создаёт недопустимый пустой enum."""
+
+    schema = _build_response_format(
+        response_schema=GroundedTripPlanResponse,
+        allowed_place_ids=[],
+    )["json_schema"]["schema"]
+    place_id_schema = schema["$defs"]["GroundedActivity"]["properties"][
+        "source_place_id"
+    ]
+    assert place_id_schema["type"] == "null"
+    assert "anyOf" not in place_id_schema
+    assert "enum" not in place_id_schema
+
+
+def test_grounded_id_constraints_do_not_mutate_shared_schema() -> None:
+    """Новый запрос и исходная Pydantic-схема не наследуют чужие ID."""
+
+    original_schema = GroundedTripPlanResponse.model_json_schema()
+    first = _build_response_format(
+        response_schema=GroundedTripPlanResponse,
+        allowed_place_ids=["first-id"],
+    )
+    _build_response_format(
+        response_schema=GroundedTripPlanResponse,
+        allowed_place_ids=[],
+    )
+    second = _build_response_format(
+        response_schema=GroundedTripPlanResponse,
+        allowed_place_ids=["second-id"],
+    )
+    for response_format, expected_id in ((first, "first-id"), (second, "second-id")):
+        branches = response_format["json_schema"]["schema"]["$defs"][
+            "GroundedActivity"
+        ]["properties"]["source_place_id"]["anyOf"]
+        assert branches[0]["enum"] == [expected_id]
+    assert GroundedTripPlanResponse.model_json_schema() == original_schema
+    assert (
+        _build_response_format(response_schema=GroundedTripPlanResponse)["json_schema"][
+            "schema"
+        ]
+        == original_schema
+    )
+
+
+def test_intake_schema_rejects_grounded_id_constraints() -> None:
+    """Не применяет внутреннее ограничение маршрута к другому контракту."""
+
+    with pytest.raises(ValueError, match="grounded response schema"):
+        _build_response_format(
+            response_schema=TripIntakeExtraction,
+            allowed_place_ids=["place-id"],
+        )
+
+
 def test_intake_payload_uses_its_own_strict_schema() -> None:
     """Проверяет отдельный Structured Output для intake."""
 

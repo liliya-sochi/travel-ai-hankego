@@ -90,6 +90,11 @@ Redis is used for:
   safe validation reason codes in logs;
 - one or two required activities for every morning, afternoon, and evening period;
 - strict validation of every referenced place identifier and name;
+- request-specific `source_place_id` enums in the provider's strict JSON Schema
+  for both itinerary creation and editing, using only the candidates sent to the
+  model; `null` remains available for general activities, and an empty candidate
+  list permits only `null`; server-side name, category, schedule, and ID validation
+  still applies, and provider rate limits still use the existing bounded retries;
 - deterministic day titles derived from validated activity focuses after interest
   alignment and any local place correction; unverified LLM district and venue-type
   labels are replaced with the selected themes;
