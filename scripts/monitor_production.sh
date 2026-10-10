@@ -7,10 +7,27 @@ backup_dir="${HANKEGO_BACKUP_DIR:-/home/liliya/backups/hankego/automatic}"
 state_dir="${STATE_DIRECTORY:-${HOME}/.local/state/hankego-monitor}"
 max_disk_usage_percent="${HANKEGO_MAX_DISK_USAGE_PERCENT:-85}"
 max_backup_age_seconds="${HANKEGO_MAX_BACKUP_AGE_SECONDS:-129600}"
+ai_window_minutes="${HANKEGO_AI_WINDOW_MINUTES:-30}"
+ai_min_requests="${HANKEGO_AI_MIN_REQUESTS:-5}"
+ai_max_error_percent="${HANKEGO_AI_MAX_SERVER_ERROR_PERCENT:-50}"
 
 if ! [[ "$max_disk_usage_percent" =~ ^[0-9]+$ ]] \
     || ! [[ "$max_backup_age_seconds" =~ ^[0-9]+$ ]]; then
     echo "ERROR: monitoring thresholds must be non-negative integers" >&2
+    exit 2
+fi
+
+if ! [[ "$ai_window_minutes" =~ ^[0-9]+$ ]] \
+    || ! [[ "$ai_min_requests" =~ ^[0-9]+$ ]] \
+    || ! [[ "$ai_max_error_percent" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: AI monitoring thresholds must be positive integers" >&2
+    exit 2
+fi
+
+if [ "$ai_window_minutes" -lt 1 ] || [ "$ai_window_minutes" -gt 1440 ] \
+    || [ "$ai_min_requests" -lt 1 ] || [ "$ai_min_requests" -gt 100000 ] \
+    || [ "$ai_max_error_percent" -lt 1 ] || [ "$ai_max_error_percent" -gt 100 ]; then
+    echo "ERROR: AI monitoring thresholds are outside supported ranges" >&2
     exit 2
 fi
 
@@ -130,6 +147,49 @@ if ! curl --fail --silent --show-error \
     add_error "API readiness check failed"
 fi
 
+# Readiness не проверяет провайдера LLM. Считаем итоговые ответы рабочих API,
+# а ошибки отдельных попыток модели оставляем в диагностической сводке.
+install -d -m 700 -- "$state_dir"
+ai_report_tmp="$(mktemp "${state_dir}/ai-report.XXXXXX")"
+trap 'rm -f -- "$ai_report_tmp"' EXIT
+
+set +e
+timeout 20s "${compose[@]}" logs \
+    --no-color --since "${ai_window_minutes}m" api 2>&1 \
+    | python3 scripts/report_production.py \
+        --window-minutes "$ai_window_minutes" \
+        --minimum-requests "$ai_min_requests" \
+        --max-server-error-percent "$ai_max_error_percent" \
+        --api-prefix "${API_PREFIX:-/api/v1}" \
+        --check > "$ai_report_tmp"
+ai_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+
+if [ "${ai_pipeline_status[0]}" -ne 0 ]; then
+    add_error "API logs could not be collected for AI monitoring"
+elif [ "${ai_pipeline_status[1]}" -gt 1 ]; then
+    add_error "AI monitoring report could not be validated"
+else
+    mv -- "$ai_report_tmp" "${state_dir}/ai-report.json"
+    if [ "${ai_pipeline_status[1]}" -eq 1 ]; then
+        ai_error_details="$(python3 - "${state_dir}/ai-report.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    report = json.load(source)
+for item in report["check"]["violations"]:
+    print(
+        f'{item["operation"]}: {item["server_errors"]}/'
+        f'{item["availability_samples"]} requests returned 5xx '
+        f'({item["server_error_percent"]}%)'
+    )
+PY
+)"
+        add_error "AI API error threshold reached in ${ai_window_minutes}m: ${ai_error_details}"
+    fi
+fi
+
 disk_usage_percent="$(df -P / | awk 'NR == 2 {gsub("%", "", $5); print $5}')"
 
 if [ "$disk_usage_percent" -ge "$max_disk_usage_percent" ]; then
@@ -180,7 +240,6 @@ else
     fi
 fi
 
-install -d -m 700 -- "$state_dir"
 status_file="${state_dir}/status"
 previous_status="$(cat "$status_file" 2> /dev/null || true)"
 hostname_value="$(hostname)"

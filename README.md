@@ -128,6 +128,8 @@ Redis is used for:
 - prompt injection risk reduction;
 - user input length limits;
 - safe LLM observability without logging prompts or personal data.
+- rolling production reports for LLM attempts and final AI API responses, with
+  error-threshold alerts through the existing host monitor.
 - explicit validation reason codes for grounded-plan failures without logging model output.
 
 ### External Travel Data
@@ -481,6 +483,73 @@ that unfinished case is not saved. Corpus/code hashes and exit codes follow the
 route evaluator above. Without `--suite`, existing route commands remain valid.
 CI tests both corpora with mocked provider responses and never runs live calls.
 
+## Production AI Monitoring
+
+`scripts/report_production.py` reads application logs from stdin and prints a JSON
+report using only Python's standard library (host Python 3.10+). It does not load `.env`, call models,
+or access application databases. It accepts ordinary application lines and Docker
+Compose prefixes; Uvicorn access logs are ignored to prevent double counting.
+Application timestamps are interpreted as UTC, as in the production containers.
+
+Read a fresh 30-minute window manually on the VPS:
+
+```bash
+docker compose -f compose.yaml -f compose.prod.yaml --profile bot logs --no-color --since 30m api 2>&1 \
+  | python3 scripts/report_production.py --window-minutes 30
+```
+
+The report separates final `POST /trip-intake`, `/trip-plan`, and `/trip-edit`
+responses from individual LLM calls. It includes per-operation HTTP statuses and
+p50/p95 latency, per-model attempt outcomes, retry calls, scheduled retry events,
+and known token sums. Missing usage is counted explicitly; sums are not billing
+estimates. Latency uses nearest-rank percentiles and includes failed attempts or
+requests. These are technical reliability metrics, not an assessment of itinerary
+appeal, correctness beyond existing validation, or successful Telegram delivery.
+
+`scripts/monitor_production.sh` collects API logs with a 20-second timeout on each
+existing five-minute timer run. It atomically saves the latest valid report as
+`ai-report.json` in its private state directory (normally
+`/var/lib/hankego-monitor`, file mode 0600). A collection or parsing failure keeps
+the previous report and adds a monitoring error; check the report's UTC window
+before treating it as current. Raw logs, prompts, response bodies, correlation IDs,
+and provider request IDs are not copied into the report or notifications.
+
+Defaults, configurable in the host's `.env` through systemd's `EnvironmentFile`:
+
+- `HANKEGO_AI_WINDOW_MINUTES=30` (1–1440);
+- `HANKEGO_AI_MIN_REQUESTS=5` (1–100000, separately for each operation);
+- `HANKEGO_AI_MAX_SERVER_ERROR_PERCENT=50` (1–100).
+
+The threshold is reached when an operation has at least five **2xx + 5xx** results
+and at least half are 5xx within the rolling window. Unhandled request failures
+count as 500. Expected 4xx responses, including validation, ownership, locks, and
+local rate limits, are reported but excluded from this availability denominator.
+An exhausted provider rate limit becomes 503 and is included. Successful intake
+does not hide failed generation; an LLM attempt recovered by retry does not count
+as a failed API request.
+
+Low traffic is marked `insufficient_data`, not proof of availability, and does not
+trigger a threshold alert. The existing monitor sends a problem notification on
+the transition to failed and a recovery notification when all monitored conditions
+clear. A rolling-window alert can clear as old failures expire, even without new
+requests; recovery means the configured conditions cleared, not that the model
+was actively retested. Collection spans current Compose containers and retained
+Docker logs, not a durable cross-deployment metrics history.
+
+For automation, `--check` returns 1 when an API threshold is reached; normal or
+insufficient data returns 0. Invalid known events, input failures, or configuration
+errors return 2. Without `--check`, a valid report returns 0 even when degraded.
+`--api-prefix` supports a non-default API prefix. Health checks, backups, disk
+checks, and notification deduplication continue in the same host monitor. No API
+or bot restart is required to update these host-side scripts.
+
+Tests cover real logger/middleware formats, recovered attempts, per-operation
+thresholds, UTC boundaries, partial usage, malformed events, privacy, and CLI
+exit codes. Linux CI also executes the monitor with fake Docker/system commands
+and intercepted Telegram notifications, checking alert/recovery transitions and
+failed report collection. These shell tests are skipped on Windows; they never
+contact Docker, Telegram, or a production server.
+
 ## Security
 
 - secrets are loaded from `.env`;
@@ -496,8 +565,8 @@ CI tests both corpora with mocked provider responses and never runs live calls.
 ## Roadmap
 
 - enrichment of verified places with official references, prices, and schedules where reliable sources provide them;
-- production metrics and automated alerting;
-- expanded end-to-end testing of Telegram dialogue scenarios;
+- durable production metrics history and alert calibration as traffic grows;
+- broader Telegram dialogue and live evaluation scenarios;
 - web interface using the existing FastAPI backend;
 - support for additional LLM providers.
 
