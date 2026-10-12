@@ -183,7 +183,9 @@ async def test_schema_ids_match_selected_prompt_places(
 ) -> None:
     """Создание и редактирование не допускают ID, удалённые из shortlist."""
 
-    requests = mock_provider(monkeypatch, [build_plan()])
+    plan = build_plan()
+    plan["summary"] = "Утренний, дневной и вечерний отдых."
+    requests = mock_provider(monkeypatch, [plan])
     preferences = build_preferences()
     context = build_context()
     if editing:
@@ -230,6 +232,10 @@ async def test_schema_ids_match_selected_prompt_places(
     assert prompt["travel_context"]["must_visit_place_ids"] == ["ChIJ-tokyo-museum"]
     assert "Обязательный музей" in result.days[0].morning[0]
     assert "Парк 2" in result.days[0].evening[0]
+    assert result.summary == (
+        "Утром: посетить музей. Днём: прогуляться по парку. "
+        "Вечером: прогуляться по парку."
+    )
 
 
 @pytest.mark.asyncio

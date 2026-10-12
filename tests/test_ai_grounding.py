@@ -1162,36 +1162,34 @@ def test_general_activities_receive_neutral_title() -> None:
     assert result.days[0].title == "План дня"
 
 
-def test_rejects_false_required_places_in_summary() -> None:
-    """Интересы пользователя не делают места обязательными."""
+@pytest.mark.parametrize(
+    "model_summary",
+    [
+        "Маршрут включает обязательные места для любителей истории.",
+        "Обязательно проверьте часы работы перед поездкой.",
+        "Маршрут включает обязательное посещение Айя-Софии.",
+    ],
+)
+def test_model_summary_does_not_define_required_places(model_summary: str) -> None:
+    """Сводка LLM не создаёт обязательных посещений и не вызывает retry."""
 
     plan = build_grounded_plan()
-    plan["summary"] = "Маршрут включает обязательные места для любителей истории."
-
-    with pytest.raises(ValueError, match="optional places as required"):
-        _validate_grounded_trip_plan(
-            json.dumps(plan, ensure_ascii=False),
-            preferences=build_preferences(),
-            travel_context=build_travel_context(),
-        )
-
-    plan["summary"] = "Обязательно проверьте часы работы перед поездкой."
-    _validate_grounded_trip_plan(
+    plan["summary"] = model_summary
+    result = _validate_grounded_trip_plan(
         json.dumps(plan, ensure_ascii=False),
         preferences=build_preferences(),
         travel_context=build_travel_context(),
     )
-
-    plan["summary"] = "Маршрут включает обязательное посещение Айя-Софии."
-    _validate_grounded_trip_plan(
-        json.dumps(plan, ensure_ascii=False),
-        preferences=build_preferences(must_visit_places=["Айя-София"]),
-        travel_context=build_travel_context(),
-    )
+    assert result.summary != model_summary
+    assert "обязательн" not in result.summary.casefold()
+    assert "осмотреть достопримечательность" in result.summary
 
 
-def test_summary_park_count_matches_selected_places() -> None:
-    """Не обещает два парка, если в маршруте выбран только один."""
+@pytest.mark.parametrize("model_summary", ["Маршрут включает два парка.", "Один парк."])
+def test_model_park_count_is_replaced_with_actual_activities(
+    model_summary: str,
+) -> None:
+    """Не показывает выдуманное число парков и не отклоняет корректные посещения."""
 
     context = build_travel_context()
     context.places.append(
@@ -1218,21 +1216,15 @@ def test_summary_park_count_matches_selected_places() -> None:
             "description": None,
         }
     ]
-    plan["summary"] = "Маршрут включает два парка."
-
-    with pytest.raises(ValueError, match="number of parks"):
-        _validate_grounded_trip_plan(
-            json.dumps(plan, ensure_ascii=False),
-            preferences=build_preferences(interests="Прогулка"),
-            travel_context=context,
-        )
-
-    plan["summary"] = "Маршрут включает один парк."
-    _validate_grounded_trip_plan(
+    plan["summary"] = model_summary
+    result = _validate_grounded_trip_plan(
         json.dumps(plan, ensure_ascii=False),
         preferences=build_preferences(interests="Прогулка"),
         travel_context=context,
     )
+    assert result.summary != model_summary
+    assert "Днём: прогуляться по парку." in result.summary
+    assert "два парка" not in result.summary
 
 
 def test_requires_new_evening_place_when_safe_candidates_exist() -> None:
