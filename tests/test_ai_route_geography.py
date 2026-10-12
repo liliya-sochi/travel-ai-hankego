@@ -156,8 +156,8 @@ def test_replaces_distant_afternoon_and_refreshes_text(route_case) -> None:
         in (result.days[0].morning[0])
     )
     assert "Askerî Müze: посетить музей" in result.days[1].morning[0]
-    assert "Eski Şark" not in result.summary
-    assert "Atatürk Museum, Şişli" in result.summary
+    assert result.summary == "Темы маршрута: история, музеи и архитектура."
+    assert result.summary != plan.summary
     assert "кварталы" not in result.days[1].title
     assert "Часы по данным Geoapify" in result.days[1].afternoon[0]
 
@@ -200,7 +200,7 @@ def test_keeps_valid_plan_when_replacement_is_not_suitable(route_case, blocker) 
     )
 
     assert "Eski Şark Eserleri Müzesi" in result.days[1].afternoon[0]
-    assert result.summary == plan.summary
+    assert result.summary == "Темы маршрута: история, музеи и архитектура."
     assert result.days[1].title == "Музеи и архитектура"
 
 
@@ -216,7 +216,7 @@ def test_keeps_already_compact_day(route_case) -> None:
         travel_context=context,
     )
     assert "Eski Şark Eserleri Müzesi" in result.days[1].afternoon[0]
-    assert result.summary == plan.summary
+    assert result.summary == "Темы маршрута: история, музеи и архитектура."
 
 
 def test_replacement_must_be_close_to_evening_too(route_case) -> None:
@@ -268,7 +268,7 @@ def test_falls_back_to_valid_plan_if_adjustment_fails_validation(
         travel_context=context,
     )
     assert "Eski Şark Eserleri Müzesi" in result.days[1].afternoon[0]
-    assert result.summary == plan.summary
+    assert result.summary == "Темы маршрута: история, музеи и архитектура."
     assert "validation_reason=unknown_place_id" in caplog.text
     assert "PRIVATE_INVALID_PLACE_ID" not in caplog.text
 
@@ -283,6 +283,7 @@ async def test_generation_uses_one_http_call_and_respects_edits(
     """Коррекция не вызывает retry и не меняет выбор при редактировании."""
 
     preferences, context, plan = route_case
+    plan.summary = "Маршрут включает пять обязательных парков и целый день отдыха."
     calls: list[httpx.Request] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -327,3 +328,4 @@ async def test_generation_uses_one_http_call_and_respects_edits(
         )
         assert "Atatürk Museum, Şişli" in result.days[1].afternoon[0]
     assert len(calls) == 1
+    assert result.summary == "Темы маршрута: история, музеи и архитектура."

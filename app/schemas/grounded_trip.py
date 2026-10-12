@@ -29,6 +29,8 @@ GroundedActivityFocus = Literal[
     "place",
 ]
 
+MAX_SUMMARY_DESCRIPTION_LENGTH = 200
+
 
 ACTIVITY_FOCUS_CATEGORY_PREFIXES: dict[
     GroundedActivityFocus,
@@ -220,7 +222,7 @@ class GroundedTripPlanResponse(StrictSchema):
         return TripPlanResponse(
             destination=self.destination,
             duration_days=self.duration_days,
-            summary=self.summary,
+            summary=_format_summary(self),
             days=[
                 DayPlan(
                     day=day.day,
@@ -251,6 +253,52 @@ class GroundedTripPlanResponse(StrictSchema):
             ],
             practical_tips=practical_tips,
         )
+
+
+def _format_summary(plan: GroundedTripPlanResponse) -> str:
+    """Описывает итоговые активности, не используя свободную сводку LLM."""
+
+    if plan.duration_days == 1:
+        day = plan.days[0]
+        sentences: list[str] = []
+        for label, activities in (
+            ("Утром", day.morning),
+            ("Днём", day.afternoon),
+            ("Вечером", day.evening),
+        ):
+            descriptions: list[str] = []
+            for activity in activities:
+                if activity.activity_focus is not None:
+                    description = ACTIVITY_FOCUS_DESCRIPTIONS[activity.activity_focus]
+                else:
+                    description = activity.description
+                    if description is None:
+                        raise ValueError("General activity is missing a description.")
+                    if len(description) > MAX_SUMMARY_DESCRIPTION_LENGTH:
+                        description = (
+                            description[:MAX_SUMMARY_DESCRIPTION_LENGTH].rstrip() + "…"
+                        )
+                descriptions.append(description.removesuffix(".") or description)
+            sentence = f"{label}: {'; '.join(descriptions)}"
+            if not sentence.endswith((".", "!", "?", "…")):
+                sentence += "."
+            sentences.append(sentence)
+        return " ".join(sentences)
+
+    themes = list(
+        dict.fromkeys(
+            ACTIVITY_FOCUS_TITLES[activity.activity_focus]
+            for day in plan.days
+            for activity in (*day.morning, *day.afternoon, *day.evening)
+            if activity.source_place_id is not None
+            and activity.activity_focus is not None
+        )
+    )
+    if not themes:
+        return "План поездки по дням."
+    if len(themes) == 1:
+        return f"Темы маршрута: {themes[0]}."
+    return f"Темы маршрута: {', '.join(themes[:-1])} и {themes[-1]}."
 
 
 def _format_day_title(day: GroundedDayPlan) -> str:
