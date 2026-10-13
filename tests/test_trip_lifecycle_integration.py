@@ -25,7 +25,7 @@ from app.main import app
 from app.models.trip import Trip
 from app.repositories.user import UserRepository
 from app.schemas.geoapify import DestinationLocation, PlaceCandidate, TravelContext
-from app.schemas.trip import TripPreferences
+from app.schemas.trip import RestPeriod, TripPreferences
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -76,7 +76,7 @@ def grounded_plan(*, museums: bool = False) -> dict[str, Any]:
                         "source_place_id": None,
                         "place_name": None,
                         "activity_focus": None,
-                        "description": "Спокойный отдых.",
+                        "description": "прогулка",
                     }
                     if museums
                     else visit("evening-park", "Тестовый вечерний парк", "park")
@@ -86,7 +86,9 @@ def grounded_plan(*, museums: bool = False) -> dict[str, Any]:
     }
 
 
-def edit_analysis(*, supported: bool = True) -> dict[str, Any]:
+def edit_analysis(
+    *, supported: bool = True, change_rest: bool = True
+) -> dict[str, Any]:
     """Даёт полный список обязательных мест при смене интересов."""
 
     return {
@@ -94,6 +96,11 @@ def edit_analysis(*, supported: bool = True) -> dict[str, Any]:
         "interests_changed": supported,
         "interests": "Музеи" if supported else None,
         "must_visit_places_changed": False,
+        "rest_period_changes": (
+            [{"day": None, "period": "evening", "rest": True}]
+            if supported and change_rest
+            else []
+        ),
         "must_visit_places": [REQUIRED_MUSEUM],
     }
 
@@ -311,7 +318,10 @@ async def test_create_edit_and_reopen_keep_required_place_and_same_trip(
     plan_data, preference_data, count = await stored_state(database_session, trip_id)
     assert plan_data["days"] == edited["days"]
     assert preference_data == preferences().model_copy(
-        update={"interests": "Музеи"}
+        update={
+            "interests": "Музеи",
+            "rest_periods": [RestPeriod(day=None, period="evening")],
+        }
     ).model_dump(mode="json")
     assert count == 1
     assert case.context.calls == [
@@ -319,6 +329,29 @@ async def test_create_edit_and_reopen_keep_required_place_and_same_trip(
         TripPreferences.model_validate(preference_data),
     ]
     assert case.model.calls == ["trip_plan", "trip_edit_analysis", "trip_plan"]
+    assert not case.model.replies
+
+    # Следующая инструкция не повторяет пожелание к отдыху, но оно сохраняется.
+    case.model.replies.extend(
+        [
+            ("trip_edit_analysis", edit_analysis(change_rest=False)),
+            ("trip_plan", grounded_plan(museums=True)),
+        ]
+    )
+    second = await case.client.post(
+        "/api/v1/trip-edit",
+        json={
+            "telegram_id": OWNER_ID,
+            "trip_id": trip_id,
+            "instruction": "Оставь утренний музей.",
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["days"][0]["evening"] == ["Спокойный отдых."]
+    assert (await case.details(trip_id))["days"][0]["evening"] == ["Спокойный отдых."]
+    _, second_preferences, second_count = await stored_state(database_session, trip_id)
+    assert second_preferences["rest_periods"] == [{"day": None, "period": "evening"}]
+    assert second_count == 1
     assert not case.model.replies
 
 

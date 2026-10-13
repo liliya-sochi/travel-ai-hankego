@@ -47,7 +47,7 @@ class TripEditUnavailableError(TripServiceError):
 
 
 class TripEditUnsupportedError(TripServiceError):
-    """Инструкция требует создания другой поездки."""
+    """Изменение несовместимо с параметрами или обязательными местами поездки."""
 
 
 class TripService:
@@ -198,9 +198,18 @@ class TripService:
         if analysis.must_visit_places_changed:
             preference_updates["must_visit_places"] = analysis.must_visit_places
 
-        updated_preferences = current_preferences.model_copy(
-            update=preference_updates,
-        )
+        try:
+            preference_updates["rest_periods"] = current_preferences.rest_periods_after(
+                analysis.rest_period_changes
+            )
+            updated_preferences = TripPreferences.model_validate(
+                {**current_preferences.model_dump(), **preference_updates}
+            )
+        except ValueError as error:
+            raise TripEditUnsupportedError(
+                "Периоды отдыха несовместимы с длительностью поездки "
+                "или обязательными местами. Измените пожелания."
+            ) from error
 
         # Все данные мест получаем заново. Сохранённый публичный текст
         # не используется как источник фактов.

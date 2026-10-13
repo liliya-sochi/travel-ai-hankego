@@ -116,6 +116,22 @@ Redis is used for:
   required candidates;
 - deterministic coverage of explicitly requested interest categories whenever
   verified matching places are available;
+- structured additions and cancellations of rest periods in trip editing:
+  `rest_period_changes` in edit analysis are merged by Python with persisted
+  `TripPreferences.rest_periods`; a rule can apply to all days or a specific day,
+  and a day-specific exception takes precedence over a general change;
+- deterministic quiet-rest activities in reserved periods before validating
+  the resulting visits and formatting the summary; optional place minima and
+  interest requirements account for remaining periods and known opening hours,
+  while required places still must be included outside rest periods;
+- rest preferences survive subsequent unrelated edits, and conflicting edits
+  leave the saved plan intact. Old preferences without `rest_periods` use an empty
+  list; storage remains in the existing preferences JSON, without a DB migration.
+  Natural-language extraction uses the existing edit-analysis LLM call; initial
+  conversational intake is not extended with rest-period extraction in this change;
+- fully reserved rest-only plans are built and validated locally without a
+  generation-model call, including long trips; edit analysis still parses the
+  instruction before these preferences are applied;
 - local correction of optional afternoon visits in newly generated multi-day plans:
   a visit over 4 km from another concrete stop can be replaced with an unused,
   documented candidate supporting the same activity focus and day period, within

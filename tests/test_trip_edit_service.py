@@ -13,6 +13,8 @@ from app.schemas.geoapify import (
     TravelContext,
 )
 from app.schemas.trip import (
+    RestPeriod,
+    RestPeriodChange,
     TripEditAnalysis,
     TripPlanResponse,
     TripPreferences,
@@ -121,6 +123,101 @@ class FakeTripRepository:
 
 
 @pytest.mark.asyncio
+async def test_unrelated_edit_preserves_saved_rest_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Редактирование интересов не отменяет ранее сохранённый отдых."""
+
+    original = TripPreferences(
+        destination="Стамбул",
+        duration_days=1,
+        rest_periods=[RestPeriod(day=None, period="evening")],
+    )
+
+    async def analyze(**_: Any) -> TripEditAnalysis:
+        return TripEditAnalysis(
+            supported=True,
+            interests_changed=True,
+            interests="Музеи",
+            must_visit_places_changed=False,
+            must_visit_places=[],
+            rest_period_changes=[],
+        )
+
+    async def generate(**arguments: Any) -> TripPlanResponse:
+        assert arguments["preferences"].is_rest_period(1, "evening")
+        return build_plan()
+
+    monkeypatch.setattr(trip_service_module, "analyze_trip_edit", analyze)
+    monkeypatch.setattr(trip_service_module, "generate_edited_trip_plan", generate)
+    session = FakeSession()
+    repository = FakeTripRepository(preferences_data=original.model_dump(mode="json"))
+    service = TripService(session)  # type: ignore[arg-type]
+    service._user_repository = FakeUserRepository()
+    service._trip_repository = repository
+    await service.edit_trip_plan(
+        telegram_id=9000000001,
+        trip_id=7,
+        instruction="Добавь интерес к музеям.",
+        enrichment_service=FakeEnrichmentService(),
+    )
+    assert repository.update_arguments is not None
+    assert repository.update_arguments["preferences_data"]["rest_periods"] == [
+        {"day": None, "period": "evening"}
+    ]
+    assert session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_rest_conflict_leaves_saved_trip_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Отдых во всех периодах не удаляет обязательное место из сохранённого плана."""
+
+    original = TripPreferences(
+        destination="Стамбул", duration_days=1, must_visit_places=["Айя-София"]
+    )
+
+    async def analyze(**_: Any) -> TripEditAnalysis:
+        return TripEditAnalysis(
+            supported=True,
+            interests_changed=False,
+            interests=None,
+            must_visit_places_changed=False,
+            must_visit_places=["Айя-София"],
+            rest_period_changes=[
+                RestPeriodChange(day=None, period=period, rest=True)
+                for period in ("morning", "afternoon", "evening")
+            ],
+        )
+
+    async def unexpected_generation(**_: Any) -> TripPlanResponse:
+        pytest.fail("Конфликт должен быть обнаружен до генерации.")
+
+    monkeypatch.setattr(trip_service_module, "analyze_trip_edit", analyze)
+    monkeypatch.setattr(
+        trip_service_module, "generate_edited_trip_plan", unexpected_generation
+    )
+    session = FakeSession()
+    repository = FakeTripRepository(preferences_data=original.model_dump(mode="json"))
+    service = TripService(session)  # type: ignore[arg-type]
+    service._user_repository = FakeUserRepository()
+    service._trip_repository = repository
+    enrichment = FakeEnrichmentService()
+    with pytest.raises(TripEditUnsupportedError, match="Периоды отдыха несовместимы"):
+        await service.edit_trip_plan(
+            telegram_id=9000000001,
+            trip_id=7,
+            instruction="Весь день только отдых.",
+            enrichment_service=enrichment,
+        )
+    assert repository.update_arguments is None
+    assert repository.trip.preferences_data == original.model_dump(mode="json")
+    assert session.commit_count == 0
+    assert enrichment.received_preferences is None
+
+
+@pytest.mark.asyncio
 async def test_edit_rebuilds_context_and_saves_full_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -136,6 +233,7 @@ async def test_edit_rebuilds_context_and_saves_full_version(
         interests_changed=True,
         interests="Архитектура и музеи",
         must_visit_places_changed=True,
+        rest_period_changes=[RestPeriodChange(day=None, period="evening", rest=True)],
         must_visit_places=["Айя-София"],
     )
     captured: dict[str, object] = {}
@@ -180,7 +278,7 @@ async def test_edit_rebuilds_context_and_saves_full_version(
     result = await service.edit_trip_plan(
         telegram_id=9000000001,
         trip_id=7,
-        instruction="Добавь Айя-Софию",
+        instruction="Добавь Айя-Софию. Вечером спокойный отдых.",
         enrichment_service=enrichment_service,
     )
 
@@ -189,10 +287,11 @@ async def test_edit_rebuilds_context_and_saves_full_version(
         duration_days=1,
         interests="Архитектура и музеи",
         must_visit_places=["Айя-София"],
+        rest_periods=[RestPeriod(day=None, period="evening")],
     )
     assert enrichment_service.received_preferences == expected_preferences
     assert captured["generation_preferences"] == expected_preferences
-    assert captured["instruction"] == "Добавь Айя-Софию"
+    assert captured["instruction"] == "Добавь Айя-Софию. Вечером спокойный отдых."
     assert repository.update_arguments is not None
     assert repository.update_arguments["preferences_data"] == (
         expected_preferences.model_dump(mode="json")
@@ -245,6 +344,7 @@ async def test_edit_rejects_destination_or_duration_change(
             interests_changed=False,
             interests=None,
             must_visit_places_changed=False,
+            rest_period_changes=[],
             must_visit_places=[],
         )
 
