@@ -271,7 +271,11 @@ def test_builds_grounded_edit_message_with_fresh_context() -> None:
         )
     )
 
-    assert message["current_trip_plan"] == current_plan.model_dump(mode="json")
+    assert message["current_trip_plan"] == {
+        "destination": current_plan.destination,
+        "duration_days": current_plan.duration_days,
+        "days": [day.model_dump(exclude={"title"}) for day in current_plan.days],
+    }
     assert message["edit_instruction"] == ("Замени вечер на спокойную прогулку")
     assert message["travel_context"]["places"][0]["source_place_id"] == (
         "hagia-sophia-id"

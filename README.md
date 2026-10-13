@@ -88,6 +88,19 @@ Redis is used for:
 - grounded itinerary generation using externally retrieved place candidates;
 - compact, verified place data in LLM requests and short semantic retries with
   safe validation reason codes in logs;
+- compact saved-plan context for both edit analysis and generation: all days,
+  periods, place names, and actions remain; previously rendered addresses,
+  schedules, and websites are removed only after a recognized visit description.
+  The old summary, derived day titles, and practical tips are omitted. Fresh
+  candidate validation and persisted required-place/rest constraints still apply;
+- a shorter shared planning prompt for creation and editing, consolidating
+  repeated explanations while retaining grounding, rest, schedule, geography,
+  and interest rules; backend validation and request-specific ID enums are unchanged;
+- provider HTTP errors include the actual JSON body size and numeric token-limit
+  headers when available, plus a bounded numeric Retry-After value; no request
+  content, raw error text, or arbitrary headers are logged. HTTP 413 is classified
+  as `request_too_large` and is not retried with the same body. These reductions do
+  not guarantee that every request fits a provider's account-specific limits;
 - one or two required activities for every morning, afternoon, and evening period;
 - strict validation of every referenced place identifier and name;
 - request-specific `source_place_id` enums in the provider's strict JSON Schema

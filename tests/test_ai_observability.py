@@ -423,6 +423,8 @@ async def test_logs_rate_limit_without_sensitive_payload(
     assert events[0]["attempt"] == 1
     assert events[0]["provider_attempt"] == 1
     assert events[0]["max_provider_attempts"] == 2
+    assert events[0]["retry_after_ms"] == 7500
+    assert events[0]["request_body_bytes"] > 0
 
     service_logs = "\n".join(
         record.getMessage()
@@ -433,6 +435,96 @@ async def test_logs_rate_limit_without_sensitive_payload(
     assert PRIVATE_INTERESTS not in service_logs
     assert PRIVATE_API_KEY not in service_logs
     assert "PRIVATE_ERROR_BODY_DO_NOT_LOG" not in service_logs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_body", ["json", "html"])
+async def test_request_too_large_is_not_retried_and_logs_safe_limits(
+    caplog: pytest.LogCaptureFixture, response_body: str
+) -> None:
+    """413 не маскируется под временную недоступность и не повторяется."""
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        headers = {
+            "x-request-id": "req_too_large",
+            "x-ratelimit-limit-tokens": "8000",
+            "x-ratelimit-remaining-tokens": "0",
+            "x-private-header": PRIVATE_BUDGET,
+        }
+        if response_body == "html":
+            return httpx.Response(413, headers=headers, text=PRIVATE_ROUTE)
+        return httpx.Response(
+            413,
+            headers=headers,
+            json={"error": {"code": "rate_limit_exceeded", "message": PRIVATE_ROUTE}},
+        )
+
+    with caplog.at_level(logging.WARNING, logger=ai_service.__name__):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(ai_service.AIServiceError, match="слишком большой"):
+                await _request_model_with_retry(
+                    client=client,
+                    url="https://example.invalid/chat/completions",
+                    headers={"Authorization": f"Bearer {PRIVATE_API_KEY}"},
+                    payload={
+                        "messages": [{"role": "user", "content": PRIVATE_INTERESTS}]
+                    },
+                    model="openai/gpt-oss-120b",
+                    attempt=1,
+                )
+
+    assert len(requests) == 1
+    events = read_llm_events(caplog)
+    assert len(events) == 1
+    assert events[0]["http_status"] == 413
+    assert events[0]["provider_error_code"] == "request_too_large"
+    assert events[0]["request_body_bytes"] == len(requests[0].content)
+    assert events[0]["provider_token_limit"] == 8000
+    assert events[0]["provider_tokens_remaining"] == 0
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    for private in (PRIVATE_ROUTE, PRIVATE_INTERESTS, PRIVATE_BUDGET, PRIVATE_API_KEY):
+        assert private not in logs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_header", ["private-value", "-1", "1.5", "9" * 100])
+async def test_invalid_provider_limit_headers_are_not_logged(
+    caplog: pytest.LogCaptureFixture, invalid_header: str
+) -> None:
+    """Неверные заголовки не нарушают обработку ошибки и не попадают в лог."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            headers={
+                "retry-after": "45",
+                "x-ratelimit-limit-tokens": invalid_header,
+                "x-ratelimit-remaining-tokens": invalid_header,
+            },
+        )
+
+    with caplog.at_level(logging.WARNING, logger=ai_service.__name__):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(AIProviderRateLimitError):
+                await _request_model_with_retry(
+                    client=client,
+                    url="https://example.invalid/chat/completions",
+                    headers={},
+                    payload={},
+                    model="test-model",
+                    attempt=1,
+                )
+    events = read_llm_events(caplog)
+    assert len(events) == 1
+    assert events[0]["retry_after_ms"] == 45000
+    assert "provider_token_limit" not in events[0]
+    assert "provider_tokens_remaining" not in events[0]
+    assert invalid_header not in "\n".join(
+        record.getMessage() for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

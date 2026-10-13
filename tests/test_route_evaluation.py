@@ -574,7 +574,12 @@ async def test_live_edit_path_updates_interests_and_uses_fixed_original_plan(
     assert not result["retry_used"]
     generation_payload = requester.call_args_list[1].kwargs["payload"]
     generation_input = json.loads(generation_payload["messages"][1]["content"])
-    assert generation_input["current_trip_plan"] == suite.plans[
-        case.current_plan
-    ].model_dump(mode="json")
+    saved_plan = suite.plans[case.current_plan]
+    saved_context = generation_input["current_trip_plan"]
+    assert saved_context["destination"] == saved_plan.destination
+    assert saved_context["duration_days"] == saved_plan.duration_days
+    assert len(saved_context["days"]) == len(saved_plan.days)
+    assert "summary" not in saved_context
+    assert "practical_tips" not in saved_context
+    assert "Mitsubishi Ichigokan Museum" in saved_context["days"][0]["morning"][0]
     assert generation_input["trip_preferences"]["interests"] == analysis["interests"]
