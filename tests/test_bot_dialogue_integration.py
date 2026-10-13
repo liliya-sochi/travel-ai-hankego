@@ -315,9 +315,10 @@ async def test_dialogue_survives_new_redis_connection_and_opens_history(
         assert backend.await_args_list[3].kwargs["payload"][
             "draft"
         ] == partial.model_dump(mode="json")
-        assert backend.await_args_list[4].kwargs["payload"][
-            "preferences"
-        ] == complete.model_dump(mode="json")
+        assert backend.await_args_list[4].kwargs["payload"]["preferences"] == {
+            **complete.model_dump(mode="json"),
+            "rest_periods": [],
+        }
         assert await get_state(dispatcher, bot).get_state() is None
         assert await get_state(dispatcher, bot).get_data() == {}
         assert bot.session.replies[-1].text == format_trip_plan(trip())
@@ -376,9 +377,10 @@ async def test_generation_failure_preserves_draft_for_short_retry(
     assert backend.await_args_list[2].kwargs["payload"]["draft"] == draft.model_dump(
         mode="json"
     )
-    assert backend.await_args_list[3].kwargs["payload"][
-        "preferences"
-    ] == draft.model_dump(mode="json")
+    assert backend.await_args_list[3].kwargs["payload"]["preferences"] == {
+        **draft.model_dump(mode="json"),
+        "rest_periods": [],
+    }
     assert await state.get_state() is None
     assert await state.get_data() == {}
     assert sum(isinstance(method, DeleteMessage) for method in bot.session.methods) == 2

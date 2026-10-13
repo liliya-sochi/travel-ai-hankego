@@ -459,7 +459,12 @@ async def evaluate_case(
                 updates["interests"] = analysis.interests
             if analysis.must_visit_places_changed:
                 updates["must_visit_places"] = analysis.must_visit_places
-            preferences = preferences.model_copy(update=updates)
+            updates["rest_periods"] = preferences.rest_periods_after(
+                analysis.rest_period_changes
+            )
+            preferences = TripPreferences.model_validate(
+                {**preferences.model_dump(), **updates}
+            )
             result["updated_preferences"] = preferences.model_dump(mode="json")
             plan = await ai.generate_edited_trip_plan(
                 preferences=preferences,

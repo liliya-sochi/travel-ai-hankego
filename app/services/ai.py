@@ -26,8 +26,10 @@ from app.config import get_settings
 from app.schemas.geoapify import PlaceCandidate, TravelContext
 from app.schemas.grounded_trip import (
     INTEREST_CATEGORY_ACTIVITY_FOCUSES,
+    REST_PERIOD_DESCRIPTION,
     GroundedActivity,
     GroundedActivityFocus,
+    GroundedDayPlan,
     GroundedTripPlanResponse,
     get_supported_activity_focuses,
 )
@@ -70,7 +72,6 @@ UNKNOWN_OBSERVABILITY_VALUE = "unknown"
 MAX_LOG_TEXT_LENGTH = 200
 MAX_LLM_AREA_GROUPS = 3
 TARGET_GROUNDED_PLACES_PER_DAY = 2
-MAX_GROUNDED_ACTIVITIES_PER_DAY = 6
 MAX_COMPACT_PLACE_DISTANCE_METERS = 4_000
 EVENING_PLACE_CATEGORIES = ("leisure.park", "catering.restaurant")
 FORBIDDEN_GROUNDED_DESCRIPTION_MARKERS = (
@@ -102,6 +103,8 @@ SYSTEM_PROMPT = """
   места по интересам, сгруппированные по area_group;
 - travel_context.evening_place_ids — парки или рестораны, подходящие
   для запрошенного вечернего занятия.
+- trip_preferences.rest_periods — периоды, зарезервированные для отдыха;
+  day=null означает все дни поездки, иначе указан конкретный номер дня.
 
 Создай реалистичный и практичный план поездки.
 
@@ -133,6 +136,8 @@ SYSTEM_PROMPT = """
   хотя бы один source_place_id из её списка;
 - каждый день используй не менее
   grounding_requirements.minimum_places_per_day конкретных мест;
+- если есть minimum_places_per_day_by_day, используй минимум из этой
+  таблицы для каждого дня вместо общего minimum_places_per_day;
 - во всём маршруте используй не менее
   grounding_requirements.minimum_unique_places разных конкретных мест;
 - не заменяй обязательное место похожим или альтернативным местом;
@@ -178,6 +183,11 @@ SYSTEM_PROMPT = """
   следуй этому ограничению вместо geographic_planning.
 
 Правила расписания:
+- в каждом периоде из rest_periods верни одну общую активность
+  с description="Спокойный отдых." и null во всех полях конкретного места;
+- периоды отдыха имеют приоритет над необязательными посещениями
+  и общими требованиями к заполнению дня;
+- обязательные места размести в других разрешённых периодах;
 - конкретное место выбирай только для периода,
   указанного в его available_periods;
 - morning соответствует значению morning, afternoon — afternoon,
@@ -243,7 +253,8 @@ GROUNDED_VALIDATION_HINTS: dict[str, tuple[str, str]] = {
     ),
     "LLM used too few grounded places in a day.": (
         "too_few_places_per_day",
-        "Каждый день включи минимум grounding_requirements.minimum_places_per_day разных мест.",
+        "Для каждого дня используй minimum_places_per_day_by_day, если таблица задана; "
+        "иначе включи минимум grounding_requirements.minimum_places_per_day разных мест.",
     ),
     "LLM used too few unique grounded places.": (
         "too_few_unique_places",
@@ -399,6 +410,22 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
 - обычные категории вроде «музеи» или «парки» не являются конкретным местом;
 - если список конкретных мест не меняется,
   must_visit_places_changed=false и верни текущий список без изменений.
+- rest_period_changes содержит только изменения отдыха из edit_instruction;
+  поддерживаются morning, afternoon, evening; day=null означает все дни,
+  конкретный номер дня — только этот день;
+- rest=true означает запланировать отдых, rest=false — отменить его;
+- «вечером спокойный отдых» означает {"day":null,"period":"evening","rest":true};
+- «во второй день утром отдых» означает {"day":2,"period":"morning","rest":true};
+- «весь второй день отдых» означает три изменения с day=2 и rest=true;
+- «второй вечер вместо отдыха прогулка» означает day=2, period=evening, rest=false;
+- спокойная прогулка, менее насыщенный день и просьба сделать маршрут
+  спокойнее сами по себе не означают резервирование периода для отдыха;
+- не извлекай изменения отдыха из current_trip_plan или current_preferences;
+- не повторяй сохранённые правила; приложение сохранит их само;
+- если инструкция не меняет отдых, верни rest_period_changes=[];
+- общее правило может иметь исключение для отдельного дня; такое исключение
+  уточняет общее правило независимо от порядка изменений в списке;
+- для одинаковых day и period верни только одно изменение.
 """.strip()
 
 
@@ -413,6 +440,9 @@ EDIT_ANALYSIS_RETRY_PROMPT = """
   и current_preferences.must_visit_places;
 - не удаляй прежнее обязательное место, если оно не названо
   в edit_instruction;
+- верни rest_period_changes только для явно затронутых периодов отдыха;
+- номер дня отдыха не может превышать current_preferences.duration_days;
+- не меняй правила отдыха, которые не затронуты edit_instruction;
 - не добавляй неизвестные поля и обычный текст.
 """.strip()
 
@@ -878,23 +908,74 @@ def _resolve_must_visit_place_ids(
                 "Проверьте актуальное расписание и измените запрос."
             )
 
+        if not _place_has_visit_period(preferences=preferences, place=matched_place):
+            raise AIServiceError(
+                f"Обязательное место «{matched_place.name}» нельзя посетить "
+                "вне выбранных периодов отдыха. Измените пожелания."
+            )
+
         if matched_place.source_place_id not in resolved_place_ids:
             resolved_place_ids.append(matched_place.source_place_id)
 
     return resolved_place_ids
 
 
+def _place_has_visit_period(
+    *,
+    preferences: TripPreferences,
+    place: PlaceCandidate,
+    focus: GroundedActivityFocus | None = None,
+) -> bool:
+    """Использует ту же проверку расписания для посещений вне отдыха."""
+
+    if not preferences.rest_periods:
+        return infer_available_periods(place.opening_hours) != ()
+    focuses = (
+        {focus}
+        if focus is not None
+        else {
+            INTEREST_CATEGORY_ACTIVITY_FOCUSES[category]
+            for category in select_interest_categories(preferences.interests)
+            if place_matches_category(place, category)
+        }
+        or get_supported_activity_focuses(place)
+    )
+    for period in ("morning", "afternoon", "evening"):
+        if not any(
+            not preferences.is_rest_period(day, period)
+            for day in range(1, preferences.duration_days + 1)
+        ):
+            continue
+        for candidate_focus in focuses:
+            activity = GroundedActivity(
+                source_place_id=place.source_place_id,
+                place_name=place.name,
+                activity_focus=candidate_focus,
+                description=None,
+            )
+            try:
+                _validate_grounded_activity(
+                    activity=activity,
+                    places_by_id={place.source_place_id: place},
+                    period=period,
+                )
+            except ValueError:
+                continue
+            return True
+    return False
+
+
 def _build_grounding_requirements(
     *,
     preferences: TripPreferences,
     travel_context: TravelContext,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Рассчитывает достижимый минимум конкретных мест в маршруте."""
 
     available_place_ids = {
         place.source_place_id
         for place in travel_context.places
-        if infer_available_periods(place.opening_hours) != ()
+        if _place_has_visit_period(preferences=preferences, place=place)
     }
     available_place_count = len(available_place_ids)
     duration_days = preferences.duration_days
@@ -906,19 +987,33 @@ def _build_grounding_requirements(
     else:
         minimum_places_per_day = 0
 
+    capacities = {
+        day: preferences.concrete_activity_capacity(day)
+        for day in range(1, duration_days + 1)
+    }
+    daily_minimums = {
+        day: min(minimum_places_per_day, capacity)
+        for day, capacity in capacities.items()
+    }
     target_unique_places = max(
         TARGET_GROUNDED_PLACES_PER_DAY,
-        minimum_places_per_day * duration_days,
-        duration_days,
+        sum(daily_minimums.values()),
+        sum(capacity > 0 for capacity in capacities.values()),
     )
 
-    return {
-        "minimum_places_per_day": minimum_places_per_day,
+    requirements: dict[str, Any] = {
+        "minimum_places_per_day": min(daily_minimums.values()),
         "minimum_unique_places": min(
             available_place_count,
             target_unique_places,
+            sum(capacities.values()),
         ),
     }
+    if preferences.rest_periods:
+        requirements["minimum_places_per_day_by_day"] = {
+            str(day): minimum for day, minimum in daily_minimums.items()
+        }
+    return requirements
 
 
 def _nearby_afternoon_place_ids(
@@ -967,6 +1062,8 @@ def _evening_interest_place_ids(
     """Находит места нужной категории для вечера однодневного маршрута."""
 
     if preferences.duration_days != 1:
+        return []
+    if preferences.is_rest_period(1, "evening"):
         return []
 
     requested_evening_categories = set(
@@ -1019,7 +1116,10 @@ def _build_interest_category_requirements(
     must_visit_place_id_set = set(must_visit_place_ids)
     remaining_activity_slots = max(
         0,
-        MAX_GROUNDED_ACTIVITIES_PER_DAY * preferences.duration_days
+        sum(
+            preferences.concrete_activity_capacity(day)
+            for day in range(1, preferences.duration_days + 1)
+        )
         - len(must_visit_place_id_set),
     )
     requirements: dict[str, list[str]] = {}
@@ -1029,6 +1129,11 @@ def _build_interest_category_requirements(
             place.source_place_id
             for place in available_places
             if place_matches_category(place, category)
+            and _place_has_visit_period(
+                preferences=preferences,
+                place=place,
+                focus=INTEREST_CATEGORY_ACTIVITY_FOCUSES[category],
+            )
         ]
 
         if not matching_place_ids:
@@ -1095,10 +1200,12 @@ def _select_planning_places(
     available_places = [
         place
         for place in travel_context.places
-        if infer_available_periods(place.opening_hours) != ()
+        if _place_has_visit_period(preferences=preferences, place=place)
     ]
 
     if not available_places:
+        if preferences.rest_periods:
+            return []
         return sorted(
             travel_context.places,
             key=_planning_place_sort_key,
@@ -1245,7 +1352,10 @@ def _build_grounded_user_message(
 
     llm_travel_context: dict[str, Any] = {"places": llm_places}
     target_area_count = min(
-        preferences.duration_days,
+        sum(
+            preferences.concrete_activity_capacity(day) > 0
+            for day in range(1, preferences.duration_days + 1)
+        ),
         len(area_groups),
         MAX_LLM_AREA_GROUPS,
     )
@@ -1274,7 +1384,9 @@ def _build_grounded_user_message(
     )
     afternoon_interest_place_ids_by_area: dict[str, list[str]] = {}
 
-    if preferences.duration_days == 1:
+    if preferences.duration_days == 1 and not preferences.is_rest_period(
+        1, "afternoon"
+    ):
         interest_categories = select_interest_categories(preferences.interests)
 
         for place_data, place in zip(llm_places, planning_places, strict=True):
@@ -1365,6 +1477,13 @@ def _validate_trip_edit_analysis(
 
     current_places = current_preferences.must_visit_places
     returned_places = analysis.must_visit_places
+
+    if analysis.supported:
+        if any(
+            item.day is not None and item.day > current_preferences.duration_days
+            for item in analysis.rest_period_changes
+        ):
+            raise ValueError("LLM returned a rest day outside the trip.")
 
     for index, place_name in enumerate(returned_places):
         if _place_name_matches_any(place_name, returned_places[:index]):
@@ -1527,6 +1646,29 @@ def _build_grounded_practical_tips(
     ]
 
 
+def _apply_rest_periods(
+    plan: GroundedTripPlanResponse,
+    preferences: TripPreferences,
+) -> int:
+    """Закрепляет явно запрошенный отдых до проверки итоговых посещений."""
+
+    replacement_count = 0
+    for day in plan.days:
+        for period in ("morning", "afternoon", "evening"):
+            if not preferences.is_rest_period(day.day, period):
+                continue
+            rest = GroundedActivity(
+                source_place_id=None,
+                place_name=None,
+                activity_focus=None,
+                description=REST_PERIOD_DESCRIPTION,
+            )
+            if getattr(day, period) != [rest]:
+                setattr(day, period, [rest])
+                replacement_count += 1
+    return replacement_count
+
+
 def _validate_grounded_trip_plan(
     model_text: str,
     *,
@@ -1550,6 +1692,7 @@ def _validate_grounded_trip_plan(
     if grounded_plan.destination.casefold() != preferences.destination.casefold():
         raise ValueError("LLM destination does not match trip preferences.")
 
+    rest_replacement_count = _apply_rest_periods(grounded_plan, preferences)
     resolved_must_visit_place_ids = _resolve_must_visit_place_ids(
         preferences=preferences,
         travel_context=travel_context,
@@ -1642,16 +1785,24 @@ def _validate_grounded_trip_plan(
         if selected_for_focus.isdisjoint(required_place_ids):
             raise ValueError("LLM omitted an explicitly requested interest category.")
 
+    minimum_by_day = grounding_requirements.get("minimum_places_per_day_by_day", {})
     if any(
-        len(day_place_ids) < grounding_requirements["minimum_places_per_day"]
-        for day_place_ids in day_place_ids_collection
+        len(day_place_ids)
+        < minimum_by_day.get(
+            str(day.day), grounding_requirements["minimum_places_per_day"]
+        )
+        for day, day_place_ids in zip(
+            grounded_plan.days, day_place_ids_collection, strict=True
+        )
     ):
         raise ValueError("LLM used too few grounded places in a day.")
 
     if len(selected_place_ids) < grounding_requirements["minimum_unique_places"]:
         raise ValueError("LLM used too few unique grounded places.")
 
-    if preferences.duration_days == 1:
+    if preferences.duration_days == 1 and not preferences.is_rest_period(
+        1, "afternoon"
+    ):
         day = grounded_plan.days[0]
         afternoon_place_ids = {
             activity.source_place_id
@@ -1726,6 +1877,12 @@ def _validate_grounded_trip_plan(
             for activity in day.evening
         ):
             raise ValueError("LLM omitted a new evening place matching user interests.")
+
+    if rest_replacement_count:
+        logger.info(
+            "Grounded rest periods applied | replacement_count=%s",
+            rest_replacement_count,
+        )
 
     if shorten_afternoons and preferences.duration_days > 1:
         adjusted_plan = grounded_plan.model_copy(deep=True)
@@ -2169,6 +2326,41 @@ async def _generate_grounded_plan(
     и преобразует результат в публичный TripPlanResponse.
     """
 
+    if all(
+        preferences.concrete_activity_capacity(day) == 0
+        for day in range(1, preferences.duration_days + 1)
+    ):
+        # Все активности уже определены правилами: генерация LLM не требуется.
+        rest = GroundedActivity(
+            source_place_id=None,
+            place_name=None,
+            activity_focus=None,
+            description=REST_PERIOD_DESCRIPTION,
+        )
+        plan = GroundedTripPlanResponse(
+            destination=preferences.destination,
+            duration_days=preferences.duration_days,
+            summary="План поездки",
+            days=[
+                GroundedDayPlan(
+                    day=day,
+                    title="План дня",
+                    morning=[rest.model_copy()],
+                    afternoon=[rest.model_copy()],
+                    evening=[rest.model_copy()],
+                )
+                for day in range(1, preferences.duration_days + 1)
+            ],
+        )
+        result = _validate_grounded_trip_plan(
+            plan.model_dump_json(),
+            preferences=preferences,
+            travel_context=travel_context,
+            shorten_afternoons=shorten_afternoons,
+        )
+        logger.info("Grounded rest plan created")
+        return result
+
     settings = get_settings()
 
     must_visit_place_ids = _resolve_must_visit_place_ids(
@@ -2581,6 +2773,10 @@ async def analyze_trip_edit(
                 duration_ms=provider_response.duration_ms,
             )
 
+            logger.info(
+                "Trip edit rest changes parsed | change_count=%s",
+                len(analysis.rest_period_changes),
+            )
             return analysis
 
     raise AIServiceError("Не удалось понять изменение маршрута.")

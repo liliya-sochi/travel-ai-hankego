@@ -12,6 +12,7 @@ from pydantic import Field, model_validator
 
 from app.schemas.geoapify import PlaceCandidate
 from app.schemas.trip import (
+    MAX_ACTIVITIES_PER_PERIOD,
     DayPlan,
     StrictSchema,
     TripPlanResponse,
@@ -30,6 +31,7 @@ GroundedActivityFocus = Literal[
 ]
 
 MAX_SUMMARY_DESCRIPTION_LENGTH = 200
+REST_PERIOD_DESCRIPTION = "Спокойный отдых."
 
 
 ACTIVITY_FOCUS_CATEGORY_PREFIXES: dict[
@@ -156,15 +158,15 @@ class GroundedDayPlan(StrictSchema):
     )
     morning: list[GroundedActivity] = Field(
         min_length=1,
-        max_length=2,
+        max_length=MAX_ACTIVITIES_PER_PERIOD,
     )
     afternoon: list[GroundedActivity] = Field(
         min_length=1,
-        max_length=2,
+        max_length=MAX_ACTIVITIES_PER_PERIOD,
     )
     evening: list[GroundedActivity] = Field(
         min_length=1,
-        max_length=2,
+        max_length=MAX_ACTIVITIES_PER_PERIOD,
     )
 
 

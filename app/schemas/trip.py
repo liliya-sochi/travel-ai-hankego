@@ -9,6 +9,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    field_validator,
     model_validator,
 )
 
@@ -31,6 +32,38 @@ class StrictSchema(BaseModel):
         strict=True,
         str_strip_whitespace=True,
     )
+
+
+TripDayPeriod = Literal["morning", "afternoon", "evening"]
+MAX_ACTIVITIES_PER_PERIOD = 2
+
+
+class RestPeriod(StrictSchema):
+    """Явно запрошенный отдых в одном периоде дня или во всех днях."""
+
+    day: int | None = Field(
+        ge=1,
+        le=30,
+        description="Номер дня поездки или null, если отдых относится ко всем дням.",
+    )
+    period: TripDayPeriod
+
+
+class RestPeriodChange(RestPeriod):
+    """Одно явное добавление или отмена отдыха из текущей инструкции."""
+
+    rest: bool = Field(description="true — запланировать отдых, false — отменить его.")
+
+
+def _validate_rest_period_list(periods: list[RestPeriod]) -> list[RestPeriod]:
+    """Не допускает повторов и пересечения общего правила с отдельным днём."""
+
+    keys = {(item.day, item.period) for item in periods}
+    if len(keys) != len(periods):
+        raise ValueError("Периоды отдыха не должны повторяться.")
+    if any(item.day is not None and (None, item.period) in keys for item in periods):
+        raise ValueError("Общее правило отдыха уже охватывает указанный день.")
+    return periods
 
 
 class TripPreferences(StrictSchema):
@@ -88,6 +121,87 @@ class TripPreferences(StrictSchema):
         ),
         examples=[["Военный музей Стамбула"]],
     )
+
+    rest_periods: list[RestPeriod] = Field(
+        default_factory=list,
+        max_length=90,
+        description="Периоды отдыха, сохранённые при редактировании поездки.",
+    )
+
+    @field_validator("rest_periods")
+    @classmethod
+    def validate_rest_period_list(cls, periods: list[RestPeriod]) -> list[RestPeriod]:
+        return _validate_rest_period_list(periods)
+
+    def is_rest_period(self, day: int, period: TripDayPeriod) -> bool:
+        """Проверяет правило для конкретного дня с учётом общих пожеланий."""
+
+        return any(
+            item.period == period and item.day in (None, day)
+            for item in self.rest_periods
+        )
+
+    def concrete_activity_capacity(self, day: int) -> int:
+        """Считает верхнюю границу посещений вне периодов отдыха."""
+
+        return sum(
+            MAX_ACTIVITIES_PER_PERIOD
+            for period in ("morning", "afternoon", "evening")
+            if not self.is_rest_period(day, period)
+        )
+
+    def rest_periods_after(self, changes: list[RestPeriodChange]) -> list[RestPeriod]:
+        """Применяет изменения, сохраняя остальные правила и исключения по дням."""
+
+        periods: tuple[TripDayPeriod, ...] = ("morning", "afternoon", "evening")
+        active = {
+            (day, period)
+            for day in range(1, self.duration_days + 1)
+            for period in periods
+            if self.is_rest_period(day, period)
+        }
+        # Правило отдельного дня уточняет общее правило той же инструкции.
+        for change in sorted(changes, key=lambda item: item.day is not None):
+            if change.day is not None and change.day > self.duration_days:
+                raise ValueError("День отдыха выходит за пределы поездки.")
+            days = (
+                range(1, self.duration_days + 1) if change.day is None else [change.day]
+            )
+            for day in days:
+                key = (day, change.period)
+                if change.rest:
+                    active.add(key)
+                else:
+                    active.discard(key)
+        result: list[RestPeriod] = []
+        for period in periods:
+            days = [
+                day
+                for day in range(1, self.duration_days + 1)
+                if (day, period) in active
+            ]
+            if len(days) == self.duration_days:
+                result.append(RestPeriod(day=None, period=period))
+            else:
+                result.extend(RestPeriod(day=day, period=period) for day in days)
+        return result
+
+    @model_validator(mode="after")
+    def validate_rest_capacity(self) -> Self:
+        """Согласует номера дней и обязательные места с периодами отдыха."""
+
+        if any(
+            item.day is not None and item.day > self.duration_days
+            for item in self.rest_periods
+        ):
+            raise ValueError("День отдыха выходит за пределы поездки.")
+        capacity = sum(
+            self.concrete_activity_capacity(day)
+            for day in range(1, self.duration_days + 1)
+        )
+        if len(self.must_visit_places) > capacity:
+            raise ValueError("Для обязательных мест не осталось периодов посещения.")
+        return self
 
 
 class TripDraft(StrictSchema):
@@ -267,6 +381,20 @@ class TripEditAnalysis(StrictSchema):
             "если он не изменился."
         ),
     )
+
+    rest_period_changes: list[RestPeriodChange] = Field(
+        max_length=90,
+        description="Только явно запрошенные добавления и отмены отдыха; [] без изменений.",
+    )
+
+    @field_validator("rest_period_changes")
+    @classmethod
+    def validate_rest_changes(
+        cls, changes: list[RestPeriodChange]
+    ) -> list[RestPeriodChange]:
+        if len({(item.day, item.period) for item in changes}) != len(changes):
+            raise ValueError("Изменения одного периода отдыха не должны повторяться.")
+        return changes
 
 
 class TripPlanRequest(StrictSchema):

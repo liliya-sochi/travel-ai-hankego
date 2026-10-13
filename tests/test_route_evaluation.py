@@ -147,6 +147,7 @@ async def test_rejected_edit_stops_after_analysis(
             interests_changed=False,
             interests=None,
             must_visit_places_changed=False,
+            rest_period_changes=[],
             must_visit_places=case.preferences.must_visit_places,
         )
     )
@@ -511,6 +512,7 @@ async def test_live_edit_path_updates_interests_and_uses_fixed_original_plan(
         "interests_changed": True,
         "interests": "Музеи, вечером спокойный отдых",
         "must_visit_places_changed": False,
+        "rest_period_changes": [{"day": None, "period": "evening", "rest": True}],
         "must_visit_places": case.preferences.must_visit_places,
     }
     raw_plan = {
