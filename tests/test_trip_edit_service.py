@@ -245,11 +245,13 @@ async def test_edit_rebuilds_context_and_saves_full_version(
     async def fake_generate_edited_trip_plan(
         *,
         preferences: TripPreferences,
+        current_preferences: TripPreferences,
         travel_context: TravelContext,
         current_plan: TripPlanResponse,
         instruction: str,
     ) -> TripPlanResponse:
         captured["generation_preferences"] = preferences
+        captured["generation_current_preferences"] = current_preferences
         captured["generation_context"] = travel_context
         captured["current_plan"] = current_plan
         captured["instruction"] = instruction
@@ -291,6 +293,7 @@ async def test_edit_rebuilds_context_and_saves_full_version(
     )
     assert enrichment_service.received_preferences == expected_preferences
     assert captured["generation_preferences"] == expected_preferences
+    assert captured["generation_current_preferences"].rest_periods == []
     assert captured["instruction"] == "Добавь Айя-Софию. Вечером спокойный отдых."
     assert repository.update_arguments is not None
     assert repository.update_arguments["preferences_data"] == (

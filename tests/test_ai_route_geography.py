@@ -316,6 +316,7 @@ async def test_generation_uses_one_http_call_and_respects_edits(
         )
         result = await ai_service.generate_edited_trip_plan(
             preferences=preferences,
+            current_preferences=preferences,
             travel_context=context,
             current_plan=current_plan,
             instruction="Сохрани выбранные музеи.",

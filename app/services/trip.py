@@ -218,6 +218,7 @@ class TripService:
         )
         edited_plan = await generate_edited_trip_plan(
             preferences=updated_preferences,
+            current_preferences=current_preferences,
             travel_context=travel_context,
             current_plan=current_plan,
             instruction=instruction,
