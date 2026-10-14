@@ -3,7 +3,8 @@
 Запуск без --live только проверяет и перечисляет сценарии. Корпус routes
 начинается с готовых TripPreferences и оценивает итоговый публичный план.
 Корпус intake проверяет сервис разбора сообщений и переходы черновика.
-HTTP, Redis, БД и получение геоданных не входят в оба вида оценки.
+Корпус edits проверяет последовательные изменения с фактическим состоянием.
+HTTP API, Redis, БД и получение геоданных не входят в оценку.
 """
 
 import argparse
@@ -24,10 +25,15 @@ from pydantic import Field, ValidationError, model_validator
 
 from app.config import get_settings
 from app.schemas.geoapify import PlaceCandidate, TravelContext
+from app.schemas.grounded_trip import REST_PERIOD_DESCRIPTION
 from app.schemas.trip import (
     RequiredTripField,
+    RestPeriod,
+    RestPeriodChange,
     StrictSchema,
+    TripDayPeriod,
     TripDraft,
+    TripEditAnalysis,
     TripIntakeResponse,
     TripIntent,
     TripPlanResponse,
@@ -40,6 +46,7 @@ from app.services.trip_enrichment import place_matches_category
 ROOT = Path(__file__).resolve().parents[1]
 CASES_PATH = ROOT / "evals" / "route_cases.json"
 INTAKE_CASES_PATH = ROOT / "evals" / "intake_cases.json"
+EDIT_CASES_PATH = ROOT / "evals" / "edit_cases.json"
 PERIODS = ("morning", "afternoon", "evening")
 
 
@@ -206,6 +213,172 @@ def load_intake_suite() -> IntakeEvaluationSuite:
     return IntakeEvaluationSuite.model_validate_json(INTAKE_CASES_PATH.read_bytes())
 
 
+class EditPeriodVisits(StrictSchema):
+    """Конкретные посещения, которые инструкция просит сохранить в периоде."""
+
+    day: int = Field(ge=1, le=30)
+    period: TripDayPeriod
+    place_ids: list[str] = Field(min_length=1, max_length=2)
+
+
+class EditPeriodTerms(StrictSchema):
+    """Ограниченная текстовая проверка общей активности, не оценка её качества."""
+
+    day: int = Field(ge=1, le=30)
+    period: TripDayPeriod
+    contains: list[str] = Field(min_length=1)
+    excludes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_terms(self) -> Self:
+        if any(not term.strip() for term in [*self.contains, *self.excludes]):
+            raise ValueError("Подстроки активности не должны быть пустыми.")
+        return self
+
+
+class EditExpectations(StrictSchema):
+    """Ожидания задаются корпусом, а не ответом анализатора или генератора."""
+
+    rest_period_changes: list[RestPeriodChange]
+    rest_periods: list[RestPeriod]
+    general_activities: list[EditPeriodTerms] = Field(default_factory=list)
+
+
+class EditStep(StrictSchema):
+    """Одна правка и независимые критерии её результата."""
+
+    user_message: str = Field(min_length=1, max_length=2000)
+    expectations: EditExpectations
+
+
+def expanded_rest_rules(rules: list[RestPeriod], duration: int) -> set[tuple[int, str]]:
+    """Сравнивает смысл правил независимо от общей или подневной записи."""
+
+    return {
+        (day, rule.period)
+        for rule in rules
+        for day in (range(1, duration + 1) if rule.day is None else [rule.day])
+    }
+
+
+def expanded_rest_changes(
+    changes: list[RestPeriodChange], duration: int
+) -> dict[tuple[int, str], bool]:
+    """Общие изменения применяются до исключений для конкретного дня."""
+
+    result: dict[tuple[int, str], bool] = {}
+    for change in sorted(changes, key=lambda item: item.day is not None):
+        for day in range(1, duration + 1) if change.day is None else [change.day]:
+            result[day, change.period] = change.rest
+    return result
+
+
+class EditEvaluationCase(StrictSchema):
+    """Последовательность правок без подстановки эталонного промежуточного плана."""
+
+    id: str = Field(min_length=1)
+    kind: Literal["edit_dialogue"] = "edit_dialogue"
+    preferences: TripPreferences
+    context: str
+    current_plan: str
+    preserved_visits: list[EditPeriodVisits] = Field(min_length=1)
+    steps: list[EditStep] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_criteria(self) -> Self:
+        duration = self.preferences.duration_days
+        scopes = [(visit.day, visit.period) for visit in self.preserved_visits]
+        if len(scopes) != len(set(scopes)):
+            raise ValueError("Проверки сохранения периодов не должны повторяться.")
+        if any(day > duration for day, _ in scopes):
+            raise ValueError("Период сохранения вне поездки.")
+        state = expanded_rest_rules(self.preferences.rest_periods, duration)
+        for step in self.steps:
+            expected = step.expectations
+            TripEditAnalysis(
+                supported=True,
+                interests_changed=False,
+                interests=None,
+                must_visit_places_changed=False,
+                must_visit_places=self.preferences.must_visit_places,
+                rest_period_changes=expected.rest_period_changes,
+            )
+            if any(
+                rule.day is not None and rule.day > duration
+                for rule in expected.rest_period_changes
+            ):
+                raise ValueError("Изменение отдыха вне поездки.")
+            TripPreferences.model_validate(
+                {**self.preferences.model_dump(), "rest_periods": expected.rest_periods}
+            )
+            for cell, enabled in expanded_rest_changes(
+                expected.rest_period_changes, duration
+            ).items():
+                if enabled:
+                    state.add(cell)
+                else:
+                    state.discard(cell)
+            if state != expanded_rest_rules(expected.rest_periods, duration):
+                raise ValueError("Ожидаемые изменения и правила отдыха противоречат.")
+            if state.intersection(scopes):
+                raise ValueError("Отдых конфликтует с сохранением посещения.")
+            text_scopes = [
+                (term.day, term.period) for term in expected.general_activities
+            ]
+            if len(text_scopes) != len(set(text_scopes)) or any(
+                day > duration or (day, period) in state or (day, period) in scopes
+                for day, period in text_scopes
+            ):
+                raise ValueError("Некорректная проверка общей активности.")
+        return self
+
+
+class EditEvaluationSuite(StrictSchema):
+    """Отдельный корпус редактирования с собственными синтетическими данными."""
+
+    version: Literal[1]
+    notes: str
+    contexts: dict[str, TravelContext]
+    plans: dict[str, TripPlanResponse]
+    cases: list[EditEvaluationCase] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_references(self) -> Self:
+        if len({case.id for case in self.cases}) != len(self.cases):
+            raise ValueError("Идентификаторы сценариев должны быть уникальными.")
+        for context in self.contexts.values():
+            for values in (
+                [place.source_place_id for place in context.places],
+                [place.display_name for place in context.places],
+            ):
+                if len(values) != len(set(values)):
+                    raise ValueError("ID и отображаемые имена должны быть уникальны.")
+        for case in self.cases:
+            context = self.contexts.get(case.context)
+            plan = self.plans.get(case.current_plan)
+            if context is None or plan is None:
+                raise ValueError("Неизвестный контекст или исходный план.")
+            if (plan.destination, plan.duration_days) != (
+                case.preferences.destination,
+                case.preferences.duration_days,
+            ):
+                raise ValueError("Исходный план не соответствует сценарию.")
+            available = {place.source_place_id for place in context.places}
+            if any(
+                len(visit.place_ids) != len(set(visit.place_ids))
+                or not set(visit.place_ids).issubset(available)
+                for visit in case.preserved_visits
+            ):
+                raise ValueError("Неверные ID сохраняемых посещений.")
+        return self
+
+
+def load_edit_suite() -> EditEvaluationSuite:
+    """Проверяет корпус до чтения настроек и первого вызова модели."""
+
+    return EditEvaluationSuite.model_validate_json(EDIT_CASES_PATH.read_bytes())
+
+
 def normalize_text(value: str | None) -> str | None:
     """Игнорирует только регистр и различия пробелов, сохраняя смысл проверки."""
 
@@ -309,7 +482,9 @@ def selected_places(
 
 
 def assess_plan(
-    plan: TripPlanResponse, case: EvaluationCase, context: TravelContext
+    plan: TripPlanResponse,
+    case: EvaluationCase | EditEvaluationCase,
+    context: TravelContext,
 ) -> dict[str, Any]:
     """Оценивает итоговый план независимо от успешного ответа AI-сервиса."""
 
@@ -336,7 +511,19 @@ def assess_plan(
         )
         for places in daily_places
     ]
-    expected = case.expectations
+    expected = (
+        Expectations(
+            required_place_ids=list(
+                dict.fromkeys(
+                    place_id
+                    for visit in case.preserved_visits
+                    for place_id in visit.place_ids
+                )
+            )
+        )
+        if isinstance(case, EditEvaluationCase)
+        else case.expectations
+    )
     checks = {
         "destination": plan.destination.casefold()
         == case.preferences.destination.casefold(),
@@ -370,6 +557,168 @@ def assess_plan(
         "selected_place_ids": list(selected),
         "daily_max_distance_meters": [round(value, 1) for value in distances],
     }
+
+
+def merge_edit_preferences(
+    preferences: TripPreferences, analysis: TripEditAnalysis
+) -> TripPreferences:
+    """Использует то же валидируемое объединение, что сервис редактирования."""
+
+    updates: dict[str, object] = {}
+    if analysis.interests_changed:
+        updates["interests"] = analysis.interests
+    if analysis.must_visit_places_changed:
+        updates["must_visit_places"] = analysis.must_visit_places
+    updates["rest_periods"] = preferences.rest_periods_after(
+        analysis.rest_period_changes
+    )
+    return TripPreferences.model_validate({**preferences.model_dump(), **updates})
+
+
+def assess_edit_periods(
+    plan: TripPlanResponse,
+    case: EditEvaluationCase,
+    expected: EditExpectations,
+    context: TravelContext,
+) -> dict[str, bool]:
+    """Проверяет конкретные периоды; упоминание музея в сводке не считается."""
+
+    by_day = {day.day: day for day in plan.days}
+
+    def activities(day: int, period: str) -> list[str]:
+        return getattr(by_day[day], period) if day in by_day else []
+
+    checks = {}
+    for visit in case.preserved_visits:
+        actual = selected_places(activities(visit.day, visit.period), context)
+        checks[f"preserved:{visit.day}:{visit.period}"] = [
+            place.source_place_id for place in actual
+        ] == visit.place_ids
+    reserved = expanded_rest_rules(
+        expected.rest_periods, case.preferences.duration_days
+    )
+    for day, period in sorted(reserved):
+        checks[f"quiet_rest:{day}:{period}"] = activities(day, period) == [
+            REST_PERIOD_DESCRIPTION
+        ]
+    checks["unexpected_quiet_rest_absent"] = all(
+        REST_PERIOD_DESCRIPTION not in activities(day, period)
+        for day in range(1, case.preferences.duration_days + 1)
+        for period in PERIODS
+        if (day, period) not in reserved
+    )
+    for terms in expected.general_activities:
+        period_activities = activities(terms.day, terms.period)
+        text = normalize_text(" ".join(period_activities)) or ""
+        checks[f"general_activity:{terms.day}:{terms.period}"] = (
+            bool(period_activities)
+            and not selected_places(period_activities, context)
+            and all(normalize_text(term) in text for term in terms.contains)
+            and all(normalize_text(term) not in text for term in terms.excludes)
+        )
+    return checks
+
+
+async def evaluate_edit_dialogue(
+    case: EditEvaluationCase,
+    suite: EditEvaluationSuite,
+    result: dict[str, Any],
+    *,
+    interval: float,
+    calls: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Передаёт дальше фактические настройки и план; останавливается на ошибке."""
+
+    preferences = case.preferences.model_copy(deep=True)
+    plan = suite.plans[case.current_plan].model_copy(deep=True)
+    context = suite.contexts[case.context].model_copy(deep=True)
+    result["steps"] = []
+    result["checks"] = {}
+
+    def record_checks(turn: dict[str, Any]) -> bool:
+        result["checks"].update(
+            {
+                f"step:{turn['step']}:{key}": value
+                for key, value in turn["checks"].items()
+            }
+        )
+        return all(turn["checks"].values())
+
+    for index, step in enumerate(case.steps, start=1):
+        if index > 1:
+            print(f"Пауза перед следующей правкой: {interval:g} с.", flush=True)
+            await asyncio.sleep(interval)
+        result["failed_step"] = index
+        turn = {
+            "step": index,
+            "user_message": step.user_message,
+            "input_preferences": preferences.model_dump(mode="json"),
+            "input_plan": plan.model_dump(mode="json"),
+            "expectations": step.expectations.model_dump(mode="json"),
+            "checks": {},
+        }
+        result["steps"].append(turn)
+        first_call = len(calls)
+        started = perf_counter()
+        try:
+            analysis = await ai.analyze_trip_edit(
+                current_preferences=preferences,
+                current_plan=plan,
+                instruction=step.user_message,
+            )
+            turn["analysis"] = analysis.model_dump(mode="json")
+            turn["checks"] = {
+                "edit_supported": analysis.supported,
+                "rest_changes": expanded_rest_changes(
+                    analysis.rest_period_changes, preferences.duration_days
+                )
+                == expanded_rest_changes(
+                    step.expectations.rest_period_changes, preferences.duration_days
+                ),
+            }
+            if not record_checks(turn):
+                return finish_checks(result)
+            try:
+                updated = merge_edit_preferences(preferences, analysis)
+            except ValidationError:
+                turn["checks"]["valid_preferences"] = False
+                record_checks(turn)
+                return finish_checks(result)
+            turn["updated_preferences"] = updated.model_dump(mode="json")
+            turn["checks"]["rest_preferences"] = expanded_rest_rules(
+                updated.rest_periods, preferences.duration_days
+            ) == expanded_rest_rules(
+                step.expectations.rest_periods, preferences.duration_days
+            )
+            turn["checks"]["required_preferences"] = Counter(
+                normalize_text(name) for name in updated.must_visit_places
+            ) == Counter(
+                normalize_text(name) for name in case.preferences.must_visit_places
+            )
+            if not record_checks(turn):
+                return finish_checks(result)
+            generated = await ai.generate_edited_trip_plan(
+                preferences=updated,
+                travel_context=context,
+                current_plan=plan,
+                instruction=step.user_message,
+            )
+            assessment = assess_plan(generated, case, context)
+            turn["checks"].update(assessment.pop("checks"))
+            turn.update(assessment)
+            turn["checks"].update(
+                assess_edit_periods(generated, case, step.expectations, context)
+            )
+            turn["plan"] = generated.model_dump(mode="json")
+            if not record_checks(turn):
+                return finish_checks(result)
+            preferences, plan = updated, generated
+            print(f"{case.id}: правка {index}/{len(case.steps)} прошла.", flush=True)
+        finally:
+            turn["calls"] = calls[first_call:]
+            turn["duration_ms"] = round((perf_counter() - started) * 1000)
+    result.pop("failed_step", None)
+    return finish_checks(result)
 
 
 class CallCollector(logging.Handler):
@@ -406,12 +755,22 @@ class CallCollector(logging.Handler):
             "validation_reason",
             "provider_error_code",
         )
-        self.calls.append({key: event[key] for key in allowed if key in event})
+        call = {key: event[key] for key in allowed if key in event}
+        for key in (
+            "request_body_bytes",
+            "provider_token_limit",
+            "provider_tokens_remaining",
+            "retry_after_ms",
+        ):
+            value = event.get(key)
+            if type(value) is int and value >= 0:
+                call[key] = value
+        self.calls.append(call)
 
 
 async def evaluate_case(
-    case: EvaluationCase | IntakeEvaluationCase,
-    suite: EvaluationSuite | IntakeEvaluationSuite,
+    case: EvaluationCase | IntakeEvaluationCase | EditEvaluationCase,
+    suite: EvaluationSuite | IntakeEvaluationSuite | EditEvaluationSuite,
     *,
     turn_interval: float = 0.0,
 ) -> dict[str, Any]:
@@ -423,6 +782,11 @@ async def evaluate_case(
     }
     if isinstance(case, IntakeEvaluationCase):
         result["initial_draft"] = case.initial_draft.model_dump(mode="json")
+    elif isinstance(case, EditEvaluationCase):
+        result["input_preferences"] = case.preferences.model_dump(mode="json")
+        result["preserved_visits"] = [
+            visit.model_dump(mode="json") for visit in case.preserved_visits
+        ]
     else:
         result["input_preferences"] = case.preferences.model_dump(mode="json")
         result["expectations"] = case.expectations.model_dump(mode="json")
@@ -434,6 +798,10 @@ async def evaluate_case(
     try:
         if isinstance(case, IntakeEvaluationCase):
             return await evaluate_intake_dialogue(case, result, interval=turn_interval)
+        if isinstance(case, EditEvaluationCase):
+            return await evaluate_edit_dialogue(
+                case, suite, result, interval=turn_interval, calls=collector.calls
+            )
         preferences = case.preferences.model_copy(deep=True)
         context = suite.contexts[case.context].model_copy(deep=True)
         if case.kind == "generate":
@@ -454,17 +822,7 @@ async def evaluate_case(
             if not analysis.supported:
                 result["checks"] = {"edit_supported": False}
                 return finish_checks(result)
-            updates: dict[str, object] = {}
-            if analysis.interests_changed:
-                updates["interests"] = analysis.interests
-            if analysis.must_visit_places_changed:
-                updates["must_visit_places"] = analysis.must_visit_places
-            updates["rest_periods"] = preferences.rest_periods_after(
-                analysis.rest_period_changes
-            )
-            preferences = TripPreferences.model_validate(
-                {**preferences.model_dump(), **updates}
-            )
+            preferences = merge_edit_preferences(preferences, analysis)
             result["updated_preferences"] = preferences.model_dump(mode="json")
             plan = await ai.generate_edited_trip_plan(
                 preferences=preferences,
@@ -522,8 +880,8 @@ def save_report(path: Path, report: dict[str, Any]) -> None:
 
 
 async def run_suite(
-    cases: list[EvaluationCase] | list[IntakeEvaluationCase],
-    suite: EvaluationSuite | IntakeEvaluationSuite,
+    cases: list[EvaluationCase] | list[IntakeEvaluationCase] | list[EditEvaluationCase],
+    suite: EvaluationSuite | IntakeEvaluationSuite | EditEvaluationSuite,
     *,
     repeats: int,
     interval: float,
@@ -538,7 +896,7 @@ async def run_suite(
             if report["results"]:
                 print(f"Пауза перед следующим сценарием: {interval:g} с.", flush=True)
                 await asyncio.sleep(interval)
-            if isinstance(case, IntakeEvaluationCase):
+            if isinstance(case, (IntakeEvaluationCase, EditEvaluationCase)):
                 row = await evaluate_case(case, suite, turn_interval=interval)
             else:
                 row = await evaluate_case(case, suite)
@@ -563,7 +921,9 @@ def main(argv: list[str] | None = None) -> int:
     """Проверяет параметры до первого внешнего вызова и возвращает код результата."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", choices=("routes", "intake"), default="routes")
+    parser.add_argument(
+        "--suite", choices=("routes", "intake", "edits"), default="routes"
+    )
     parser.add_argument("--live", action="store_true", help="Вызвать настоящую LLM.")
     parser.add_argument(
         "--case", action="append", default=[], help="ID сценария или all."
@@ -579,9 +939,13 @@ def main(argv: list[str] | None = None) -> int:
         or not 0 <= args.interval_seconds <= 600
     ):
         parser.error("--interval-seconds должен быть от 0 до 600.")
-    cases_path = INTAKE_CASES_PATH if args.suite == "intake" else CASES_PATH
+    cases_path, loader = {
+        "routes": (CASES_PATH, load_suite),
+        "intake": (INTAKE_CASES_PATH, load_intake_suite),
+        "edits": (EDIT_CASES_PATH, load_edit_suite),
+    }[args.suite]
     try:
-        suite = load_intake_suite() if args.suite == "intake" else load_suite()
+        suite = loader()
     except (OSError, ValidationError):
         parser.error(f"Не удалось проверить {cases_path.name}.")
     known_ids = {case.id for case in suite.cases}
@@ -598,6 +962,10 @@ def main(argv: list[str] | None = None) -> int:
         for case in cases:
             if isinstance(case, IntakeEvaluationCase):
                 print(f"{case.id}: intake | реплик: {len(case.steps)}")
+                for index, step in enumerate(case.steps, start=1):
+                    print(f"  {index}. {step.user_message}")
+            elif isinstance(case, EditEvaluationCase):
+                print(f"{case.id}: edits | правок: {len(case.steps)}")
                 for index, step in enumerate(case.steps, start=1):
                     print(f"  {index}. {step.user_message}")
             else:
@@ -632,7 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
             "completed": False,
             "results": [],
         }
-        if isinstance(suite, IntakeEvaluationSuite):
+        if isinstance(suite, (IntakeEvaluationSuite, EditEvaluationSuite)):
             report["planned_messages"] = (
                 sum(len(case.steps) for case in cases) * args.repeat
             )

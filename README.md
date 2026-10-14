@@ -475,6 +475,53 @@ also requires an explicit `--case`; repetitions are limited to 1–10. Exit code
 130 = interrupted. CI tests the runner with mocked AI boundaries; it never enables
 live evaluation or requires real API keys.
 
+#### Sequential Rest-Edit Evaluation
+
+Validate the separate edit corpus without settings or network requests:
+
+```bash
+python -m scripts.evaluate_routes --suite edits
+```
+
+Start with one three-step dialogue against the configured models:
+
+```bash
+python -m scripts.evaluate_routes --suite edits --live --case tokyo_rest_edit_cycle --repeat 1
+```
+
+Run both dialogues explicitly, with a new report path:
+
+```bash
+python -m scripts.evaluate_routes --suite edits --live --case all --repeat 1 --output evals/results/rest-edit-baseline.json
+```
+
+`evals/edit_cases.json` contains two independent dialogues with three edits each:
+adding evening rest, preserving it during an unrelated edit, and cancelling it;
+the second dialogue reserves only the second day's evening. All coordinates,
+IDs, addresses, and opening hours are synthetic. Venue names are fixture labels,
+not assertions about currently available museums.
+
+Each turn receives the actual preferences and public plan from the preceding
+successful turn. Expected intermediate values are never injected into the input.
+Independent checks compare the analysis rest changes, merged rest preferences,
+canonical reserved-rest activities, and preserved visits in their exact periods.
+An all-days rule and equivalent day-specific rules are compared by effective
+day/period scope; a specific change takes precedence over a general change.
+The required-place preferences must remain intact. Walk checks use non-empty
+general activities, required substrings, and excluded substrings; they do not
+establish semantic equivalence, calm pacing, or overall itinerary appeal.
+
+The dialogue stops on its first failed criterion or service error. Reports retain
+completed turns and the failed turn's available analysis and metadata. They include
+actual input/output states, per-turn calls, safe numeric quota diagnostics, and
+`planned_messages`. A successful dialogue normally uses six LLM calls; existing
+bounded retries can increase that count. The configured interval applies between
+turns as well as between dialogues (65 seconds by default). As with other corpora,
+only completed case results are written to disk; interruption mid-dialogue does
+not provide resumable state. No database persistence or Telegram FSM is exercised.
+This complements the existing PostgreSQL lifecycle tests and live bot checks.
+Changes to this runner and corpus require no production service restart.
+
 #### Conversational Intake Evaluation
 
 Validate and list the separate intake corpus without model calls:
@@ -521,7 +568,7 @@ turns. Case latency therefore differs from a single-message API response time.
 Completed cases are checkpointed; if interrupted during a multi-turn case,
 that unfinished case is not saved. Corpus/code hashes and exit codes follow the
 route evaluator above. Without `--suite`, existing route commands remain valid.
-CI tests both corpora with mocked provider responses and never runs live calls.
+CI tests all three corpora with mocked provider responses and never runs live calls.
 
 ## Production AI Monitoring
 
