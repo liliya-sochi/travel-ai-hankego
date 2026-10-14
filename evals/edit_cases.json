@@ -1,0 +1,352 @@
+{
+  "version": 1,
+  "notes": "Фиксированный синтетический корпус, не туристическая рекомендация. Реальные названия двух музеев служат только метками; координаты, ID, адреса и расписания вымышлены. Проверяются структурированные изменения отдыха и фактическое продолжение редактирования. Подстроки прогулки не доказывают её спокойный темп или качество маршрута.",
+  "contexts": {
+    "tokyo_museums": {
+      "location": {
+        "formatted_name": "Токио",
+        "latitude": 35.68,
+        "longitude": 139.76,
+        "source_place_id": "eval-edit-tokyo"
+      },
+      "requested_categories": [
+        "entertainment.museum"
+      ],
+      "places": [
+        {
+          "name": "Art Aquarium Museum GINZA",
+          "source_place_id": "eval-edit-aquarium",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.68,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Mitsuo Aida Museum",
+          "source_place_id": "eval-edit-aida",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.681,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Тестовый музей 3",
+          "source_place_id": "eval-edit-museum-3",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.682,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Тестовый музей 4",
+          "source_place_id": "eval-edit-museum-4",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.683,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        }
+      ],
+      "fetched_at": "2026-10-14T00:00:00Z",
+      "attribution": "Evaluation fixture: coordinates, IDs, addresses and opening hours are synthetic; not travel advice."
+    }
+  },
+  "plans": {
+    "tokyo_1_days": {
+      "destination": "Токио",
+      "duration_days": 1,
+      "summary": "Музеи и спокойные прогулки.",
+      "days": [
+        {
+          "day": 1,
+          "title": "Музеи",
+          "morning": [
+            "Art Aquarium Museum GINZA: посетить музей."
+          ],
+          "afternoon": [
+            "Mitsuo Aida Museum: посетить музей."
+          ],
+          "evening": [
+            "Спокойная прогулка."
+          ]
+        }
+      ],
+      "practical_tips": [
+        "Синтетический исходный план для оценки модели."
+      ]
+    },
+    "tokyo_2_days": {
+      "destination": "Токио",
+      "duration_days": 2,
+      "summary": "Музеи и спокойные прогулки.",
+      "days": [
+        {
+          "day": 1,
+          "title": "Музеи",
+          "morning": [
+            "Art Aquarium Museum GINZA: посетить музей."
+          ],
+          "afternoon": [
+            "Mitsuo Aida Museum: посетить музей."
+          ],
+          "evening": [
+            "Спокойная прогулка."
+          ]
+        },
+        {
+          "day": 2,
+          "title": "Музеи",
+          "morning": [
+            "Тестовый музей 3: посетить музей."
+          ],
+          "afternoon": [
+            "Тестовый музей 4: посетить музей."
+          ],
+          "evening": [
+            "Спокойная прогулка."
+          ]
+        }
+      ],
+      "practical_tips": [
+        "Синтетический исходный план для оценки модели."
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "tokyo_rest_edit_cycle",
+      "kind": "edit_dialogue",
+      "preferences": {
+        "destination": "Токио",
+        "duration_days": 1,
+        "interests": "Музеи; вечером спокойная прогулка",
+        "must_visit_places": [
+          "Art Aquarium Museum GINZA"
+        ]
+      },
+      "context": "tokyo_museums",
+      "current_plan": "tokyo_1_days",
+      "preserved_visits": [
+        {
+          "day": 1,
+          "period": "morning",
+          "place_ids": [
+            "eval-edit-aquarium"
+          ]
+        },
+        {
+          "day": 1,
+          "period": "afternoon",
+          "place_ids": [
+            "eval-edit-aida"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "user_message": "Оставь музеи утром и днём. Вечером — спокойный отдых.",
+          "expectations": {
+            "rest_period_changes": [
+              {
+                "day": null,
+                "period": "evening",
+                "rest": true
+              }
+            ],
+            "rest_periods": [
+              {
+                "day": null,
+                "period": "evening"
+              }
+            ],
+            "general_activities": []
+          }
+        },
+        {
+          "user_message": "Оставь утренний музей.",
+          "expectations": {
+            "rest_period_changes": [],
+            "rest_periods": [
+              {
+                "day": null,
+                "period": "evening"
+              }
+            ],
+            "general_activities": []
+          }
+        },
+        {
+          "user_message": "Вместо вечернего отдыха сделай спокойную прогулку. Музеи утром и днём оставь.",
+          "expectations": {
+            "rest_period_changes": [
+              {
+                "day": null,
+                "period": "evening",
+                "rest": false
+              }
+            ],
+            "rest_periods": [],
+            "general_activities": [
+              {
+                "day": 1,
+                "period": "evening",
+                "contains": [
+                  "прогул"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "tokyo_rest_second_day",
+      "kind": "edit_dialogue",
+      "preferences": {
+        "destination": "Токио",
+        "duration_days": 2,
+        "interests": "Музеи; вечером спокойная прогулка",
+        "must_visit_places": [
+          "Art Aquarium Museum GINZA"
+        ]
+      },
+      "context": "tokyo_museums",
+      "current_plan": "tokyo_2_days",
+      "preserved_visits": [
+        {
+          "day": 1,
+          "period": "morning",
+          "place_ids": [
+            "eval-edit-aquarium"
+          ]
+        },
+        {
+          "day": 1,
+          "period": "afternoon",
+          "place_ids": [
+            "eval-edit-aida"
+          ]
+        },
+        {
+          "day": 2,
+          "period": "morning",
+          "place_ids": [
+            "eval-edit-museum-3"
+          ]
+        },
+        {
+          "day": 2,
+          "period": "afternoon",
+          "place_ids": [
+            "eval-edit-museum-4"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "user_message": "Музеи утром и днём оставь. Только во второй день вечером — спокойный отдых. В первый день вечером оставь спокойную прогулку.",
+          "expectations": {
+            "rest_period_changes": [
+              {
+                "day": 2,
+                "period": "evening",
+                "rest": true
+              }
+            ],
+            "rest_periods": [
+              {
+                "day": 2,
+                "period": "evening"
+              }
+            ],
+            "general_activities": [
+              {
+                "day": 1,
+                "period": "evening",
+                "contains": [
+                  "прогул"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "user_message": "Во второй день утром и днём ничего не меняй.",
+          "expectations": {
+            "rest_period_changes": [],
+            "rest_periods": [
+              {
+                "day": 2,
+                "period": "evening"
+              }
+            ],
+            "general_activities": [
+              {
+                "day": 1,
+                "period": "evening",
+                "contains": [
+                  "прогул"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "user_message": "Во второй день вечером вместо отдыха сделай спокойную прогулку. Остальные активности оставь.",
+          "expectations": {
+            "rest_period_changes": [
+              {
+                "day": 2,
+                "period": "evening",
+                "rest": false
+              }
+            ],
+            "rest_periods": [],
+            "general_activities": [
+              {
+                "day": 1,
+                "period": "evening",
+                "contains": [
+                  "прогул"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              },
+              {
+                "day": 2,
+                "period": "evening",
+                "contains": [
+                  "прогул"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
