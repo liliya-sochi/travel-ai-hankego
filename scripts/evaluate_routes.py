@@ -699,6 +699,7 @@ async def evaluate_edit_dialogue(
                 return finish_checks(result)
             generated = await ai.generate_edited_trip_plan(
                 preferences=updated,
+                current_preferences=preferences,
                 travel_context=context,
                 current_plan=plan,
                 instruction=step.user_message,
@@ -822,10 +823,12 @@ async def evaluate_case(
             if not analysis.supported:
                 result["checks"] = {"edit_supported": False}
                 return finish_checks(result)
+            current_preferences = preferences
             preferences = merge_edit_preferences(preferences, analysis)
             result["updated_preferences"] = preferences.model_dump(mode="json")
             plan = await ai.generate_edited_trip_plan(
                 preferences=preferences,
+                current_preferences=current_preferences,
                 travel_context=context,
                 current_plan=current_plan,
                 instruction=case.user_message,

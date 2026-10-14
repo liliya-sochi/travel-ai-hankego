@@ -265,6 +265,7 @@ def test_builds_grounded_edit_message_with_fresh_context() -> None:
     message = json.loads(
         _build_grounded_edit_user_message(
             preferences=build_preferences(),
+            current_preferences=build_preferences(),
             travel_context=build_travel_context(),
             current_plan=current_plan,
             instruction="Замени вечер на спокойную прогулку",

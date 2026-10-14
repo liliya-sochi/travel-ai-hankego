@@ -230,6 +230,12 @@ GROUNDED_VALIDATION_HINTS: dict[str, tuple[str, str]] = {
         "missing_interest_category",
         "Включи места по всем категориям interest_category_requirements.",
     ),
+    "LLM added quiet rest outside its edited scope.": (
+        "unexpected_rest_period",
+        "Добавляй спокойный отдых только в trip_preferences.rest_periods. "
+        "Не распространяй его на другие дни или периоды; "
+        "в отменённых периодах отдыха выбери активность по edit_instruction.",
+    ),
 }
 
 
@@ -378,6 +384,11 @@ EDIT_SYSTEM_PROMPT = (
 Дополнительная задача — изменить сохранённый маршрут.
 
 Во входном JSON также находятся current_trip_plan и edit_instruction.
+- current_rest_periods — прежние правила отдыха, trip_preferences.rest_periods —
+  итоговые. Отменённый отдых не сохраняй; day с номером не означает все дни;
+- если прежние или итоговые правила отдыха не пусты, не добавляй
+  «Спокойный отдых.» в другие периоды. Прежний общий отдых вне
+  current_rest_periods можно сохранить, если инструкция не меняет эту активность;
 - верни полный обновлённый маршрут, а не отдельный фрагмент;
 - выполни edit_instruction только в пределах текущей поездки;
 - сохрани неизменённые части current_trip_plan настолько близко к оригиналу,
@@ -1531,6 +1542,7 @@ def _validate_trip_edit_analysis(
 def _build_grounded_edit_user_message(
     *,
     preferences: TripPreferences,
+    current_preferences: TripPreferences,
     travel_context: TravelContext,
     current_plan: TripPlanResponse,
     instruction: str,
@@ -1544,6 +1556,9 @@ def _build_grounded_edit_user_message(
         )
     )
     payload["current_trip_plan"] = _compact_trip_plan_for_edit(current_plan)
+    payload["current_rest_periods"] = [
+        rule.model_dump(mode="json") for rule in current_preferences.rest_periods
+    ]
     payload["edit_instruction"] = instruction
 
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -1684,12 +1699,53 @@ def _apply_rest_periods(
     return replacement_count
 
 
+def _is_quiet_rest(description: str | None) -> bool:
+    """Распознаёт канонический отдых без зависимости от регистра и точки."""
+
+    return description is not None and " ".join(description.casefold().split()).rstrip(
+        ".!…"
+    ) == REST_PERIOD_DESCRIPTION.casefold().rstrip(".")
+
+
+def _validate_edited_rest_scope(
+    plan: GroundedTripPlanResponse,
+    *,
+    preferences: TripPreferences,
+    current_preferences: TripPreferences,
+    current_plan: TripPlanResponse,
+) -> None:
+    """Не позволяет структурированному отдыху перейти в другие клетки плана."""
+
+    # Без структурированных правил сохраняем прежнее поведение общих активностей.
+    if not (preferences.rest_periods or current_preferences.rest_periods):
+        return
+
+    for day, saved_day in zip(plan.days, current_plan.days, strict=True):
+        for period in ("morning", "afternoon", "evening"):
+            if preferences.is_rest_period(day.day, period):
+                continue
+            if not any(
+                _is_quiet_rest(activity.description)
+                for activity in getattr(day, period)
+            ):
+                continue
+            # Старый необязательный отдых допустим. Отменённое правило — нет.
+            if not current_preferences.is_rest_period(day.day, period) and any(
+                _is_quiet_rest(description)
+                for description in getattr(saved_day, period)
+            ):
+                continue
+            raise ValueError("LLM added quiet rest outside its edited scope.")
+
+
 def _validate_grounded_trip_plan(
     model_text: str,
     *,
     preferences: TripPreferences,
     travel_context: TravelContext,
     shorten_afternoons: bool = True,
+    current_preferences: TripPreferences | None = None,
+    current_plan: TripPlanResponse | None = None,
 ) -> TripPlanResponse:
     """
     Проверяет grounded Structured Output и ссылки на места.
@@ -1708,6 +1764,13 @@ def _validate_grounded_trip_plan(
         raise ValueError("LLM destination does not match trip preferences.")
 
     rest_replacement_count = _apply_rest_periods(grounded_plan, preferences)
+    if current_preferences is not None and current_plan is not None:
+        _validate_edited_rest_scope(
+            grounded_plan,
+            preferences=preferences,
+            current_preferences=current_preferences,
+            current_plan=current_plan,
+        )
     resolved_must_visit_place_ids = _resolve_must_visit_place_ids(
         preferences=preferences,
         travel_context=travel_context,
@@ -1913,6 +1976,8 @@ def _validate_grounded_trip_plan(
                     preferences=preferences,
                     travel_context=travel_context,
                     shorten_afternoons=False,
+                    current_preferences=current_preferences,
+                    current_plan=current_plan,
                 )
             except (ValidationError, ValueError) as error:
                 reason, _ = _grounded_validation_hint(error)
@@ -2339,6 +2404,8 @@ async def _generate_grounded_plan(
     preferences: TripPreferences,
     travel_context: TravelContext,
     shorten_afternoons: bool = True,
+    current_preferences: TripPreferences | None = None,
+    current_plan: TripPlanResponse | None = None,
 ) -> TripPlanResponse:
     """
     Запрашивает и проверяет полный grounded-план.
@@ -2379,6 +2446,8 @@ async def _generate_grounded_plan(
             preferences=preferences,
             travel_context=travel_context,
             shorten_afternoons=shorten_afternoons,
+            current_preferences=current_preferences,
+            current_plan=current_plan,
         )
         logger.info("Grounded rest plan created")
         return result
@@ -2472,6 +2541,8 @@ async def _generate_grounded_plan(
                     preferences=preferences,
                     travel_context=travel_context,
                     shorten_afternoons=shorten_afternoons,
+                    current_preferences=current_preferences,
+                    current_plan=current_plan,
                 )
 
             except (ValidationError, ValueError) as error:
@@ -2548,11 +2619,12 @@ async def generate_trip_plan(
 async def generate_edited_trip_plan(
     *,
     preferences: TripPreferences,
+    current_preferences: TripPreferences,
     travel_context: TravelContext,
     current_plan: TripPlanResponse,
     instruction: str,
 ) -> TripPlanResponse:
-    """Создаёт полную обновлённую версию сохранённого маршрута."""
+    """Создаёт маршрут с контролем прежней и итоговой области отдыха."""
 
     messages = [
         {
@@ -2563,6 +2635,7 @@ async def generate_edited_trip_plan(
             "role": "user",
             "content": _build_grounded_edit_user_message(
                 preferences=preferences,
+                current_preferences=current_preferences,
                 travel_context=travel_context,
                 current_plan=current_plan,
                 instruction=instruction,
@@ -2575,6 +2648,8 @@ async def generate_edited_trip_plan(
         preferences=preferences,
         travel_context=travel_context,
         shorten_afternoons=False,
+        current_preferences=current_preferences,
+        current_plan=current_plan,
     )
 
 

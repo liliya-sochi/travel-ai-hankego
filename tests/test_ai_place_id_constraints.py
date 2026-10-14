@@ -206,6 +206,7 @@ async def test_schema_ids_match_selected_prompt_places(
         )
         result = await ai_service.generate_edited_trip_plan(
             preferences=preferences,
+            current_preferences=preferences,
             travel_context=context,
             current_plan=current_plan,
             instruction="Добавь парки вместо старого места.",

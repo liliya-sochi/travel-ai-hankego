@@ -142,6 +142,13 @@ Redis is used for:
   list; storage remains in the existing preferences JSON, without a DB migration.
   Natural-language extraction uses the existing edit-analysis LLM call; initial
   conversational intake is not extended with rest-period extraction in this change;
+- edit generation receives the previous rest rules as well as the merged rules.
+  Canonical quiet rest (ignoring case, spacing and final punctuation) newly added
+  outside reserved periods, or retained after cancellation, fails validation with
+  `unexpected_rest_period` and uses the existing bounded semantic retry. Previously
+  saved optional quiet rest outside structured rules remains allowed. No old visit
+  text is copied into the new plan; all places still require fresh validation.
+  Other general descriptions are not classified semantically as rest by this guard;
 - fully reserved rest-only plans are built and validated locally without a
   generation-model call, including long trips; edit analysis still parses the
   instruction before these preferences are applied;

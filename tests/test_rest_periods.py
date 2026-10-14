@@ -378,6 +378,7 @@ async def test_edit_analysis_and_generation_apply_rest_without_extra_calls(
     )
     result = await ai.generate_edited_trip_plan(
         preferences=updated,
+        current_preferences=preferences(),
         travel_context=context,
         current_plan=current,
         instruction=instruction,

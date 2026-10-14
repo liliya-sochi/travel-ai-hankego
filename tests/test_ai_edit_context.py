@@ -164,6 +164,7 @@ def test_both_edit_stages_receive_compact_plan_and_unchanged_constraints() -> No
     generation = json.loads(
         _build_grounded_edit_user_message(
             preferences=preferences,
+            current_preferences=preferences,
             travel_context=context,
             current_plan=saved,
             instruction=instruction,
