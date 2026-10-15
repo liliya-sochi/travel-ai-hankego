@@ -296,6 +296,8 @@ class EditEvaluationCase(StrictSchema):
         for step in self.steps:
             expected = step.expectations
             TripEditAnalysis(
+                period_actions=[],
+                requires_regeneration=True,
                 supported=True,
                 interests_changed=False,
                 interests=None,
@@ -703,6 +705,7 @@ async def evaluate_edit_dialogue(
                 travel_context=context,
                 current_plan=plan,
                 instruction=step.user_message,
+                analysis=analysis,
             )
             assessment = assess_plan(generated, case, context)
             turn["checks"].update(assessment.pop("checks"))
@@ -832,6 +835,7 @@ async def evaluate_case(
                 travel_context=context,
                 current_plan=current_plan,
                 instruction=case.user_message,
+                analysis=analysis,
             )
         result.update(assess_plan(plan, case, context))
         result["plan"] = plan.model_dump(mode="json")

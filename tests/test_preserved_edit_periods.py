@@ -1,0 +1,327 @@
+"""Сохранение посещений и локальные правки через настоящие AI-функции."""
+
+import json
+from types import SimpleNamespace
+from typing import Any
+
+import httpx
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.trip import TripEditAnalysis, TripPreferences
+from app.services import ai
+from app.services.trip_editing import (
+    period_action_map,
+    preserved_cells,
+    saved_visit_reference,
+)
+from scripts import evaluate_routes as evaluation
+
+
+def analysis(**updates: Any) -> TripEditAnalysis:
+    return TripEditAnalysis.model_validate(
+        {
+            "supported": True,
+            "interests_changed": False,
+            "interests": None,
+            "must_visit_places_changed": False,
+            "must_visit_places": ["Art Aquarium Museum GINZA"],
+            "rest_period_changes": [],
+            "period_actions": [],
+            "requires_regeneration": False,
+            **updates,
+        }
+    )
+
+
+def install_provider(monkeypatch, response):
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        content = response(payload)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": json.dumps(content, ensure_ascii=False)},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 10,
+                    "total_tokens": 30,
+                },
+            },
+        )
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        ai.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    settings = SimpleNamespace(
+        llm_base_url="https://example.invalid/v1",
+        llm_api_key="PRIVATE_KEY",
+        llm_model="generation",
+        llm_analysis_model="analysis",
+    )
+    monkeypatch.setattr(ai, "get_settings", lambda: settings)
+    monkeypatch.setattr(evaluation, "get_settings", lambda: settings)
+    return requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case_index", [0, 1])
+async def test_local_edit_cycle_preserves_actual_state_with_only_analysis_calls(
+    monkeypatch, case_index
+):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[case_index]
+    before = suite.model_dump_json()
+    turn = 0
+
+    def response(payload):
+        nonlocal turn
+        assert (
+            payload["response_format"]["json_schema"]["name"] == "trip_edit_analysis"
+        ), "Генерация не нужна для локальной правки."
+        step = case.steps[turn]
+        turn += 1
+        actions = []
+        if turn == 3:
+            actions = [
+                {
+                    "day": 2 if case_index else None,
+                    "period": "evening",
+                    "action": "quiet_walk",
+                }
+            ]
+        elif turn == 1 and case_index:
+            actions = [{"day": 1, "period": "evening", "action": "quiet_walk"}]
+        return analysis(
+            rest_period_changes=[
+                rule.model_dump() for rule in step.expectations.rest_period_changes
+            ],
+            period_actions=actions,
+        ).model_dump()
+
+    requests = install_provider(monkeypatch, response)
+    result = await evaluation.evaluate_case(case, suite)
+    assert result["status"] == "passed", result
+    assert len(requests) == len(result["calls"]) == 3
+    assert not result["retry_used"]
+    assert result["known_total_tokens"] == 90
+    assert all(result["checks"].values())
+    for old, new in zip(result["steps"][:-1], result["steps"][1:], strict=True):
+        assert new["input_plan"] == old["plan"]
+        assert new["input_preferences"] == old["updated_preferences"]
+    assert suite.model_dump_json() == before
+
+
+@pytest.mark.asyncio
+async def test_local_edit_uses_fresh_metadata_without_generation(monkeypatch):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[1]
+    saved = suite.plans[case.current_plan].model_copy(deep=True)
+    saved.days[1].afternoon[0] += (
+        " Часы по данным Geoapify: старое расписание."
+        " Сайт из данных Geoapify: https://example.invalid/old-site"
+    )
+    context = suite.contexts[case.context].model_copy(deep=True)
+    context.places[-1].opening_hours = "Mo-Su 11:00-16:00"
+    context.places[-1].website = "https://example.invalid/new-site"
+    context.places[-1].available_details = []
+
+    def no_settings():
+        pytest.fail("Генерация и её настройки не нужны.")
+
+    monkeypatch.setattr(ai, "get_settings", no_settings)
+    result = await ai.generate_edited_trip_plan(
+        current_preferences=case.preferences,
+        preferences=case.preferences,
+        current_plan=saved,
+        travel_context=context,
+        instruction="Музеи оставь.",
+        analysis=analysis(),
+    )
+    assert "11:00–16:00" in result.days[1].afternoon[0]
+    assert "new-site" in result.days[1].afternoon[0]
+    assert "old-site" not in result.model_dump_json()
+    assert result.days[0].evening == saved.days[0].evening
+    assert result.days[1].afternoon[0].startswith("Тестовый музей 4:")
+
+
+@pytest.mark.asyncio
+async def test_local_edit_protects_sparse_saved_visit_from_candidate_filtering(
+    monkeypatch,
+):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[1]
+    context = suite.contexts[case.context].model_copy(deep=True)
+    context.places[-1].opening_hours = None
+    context.places.append(
+        context.places[0].model_copy(
+            update={"name": "Другой музей", "source_place_id": "replacement"}
+        )
+    )
+
+    def no_settings():
+        pytest.fail("Локальная правка не требует генерации.")
+
+    monkeypatch.setattr(ai, "get_settings", no_settings)
+    result = await ai.generate_edited_trip_plan(
+        current_preferences=case.preferences,
+        preferences=case.preferences,
+        current_plan=suite.plans[case.current_plan],
+        travel_context=context,
+        instruction="Музеи оставь.",
+        analysis=analysis(),
+    )
+    assert result.days[1].afternoon[0] == "Тестовый музей 4: посетить музей."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defect", ["missing", "ambiguous", "closed", "category"])
+async def test_unverifiable_saved_visit_fails_before_generation(monkeypatch, defect):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[1]
+    saved = suite.plans[case.current_plan]
+    before = saved.model_dump_json()
+    context = suite.contexts[case.context].model_copy(deep=True)
+    if defect == "missing":
+        context.places.pop()
+    elif defect == "ambiguous":
+        context.places.append(
+            context.places[-1].model_copy(update={"source_place_id": "other-id"})
+        )
+    elif defect == "closed":
+        context.places[-1].opening_hours = "off"
+    else:
+        context.places[-1].categories = ["leisure.park"]
+
+    def no_settings():
+        pytest.fail("Не следует тратить генерацию на неподтверждённое сохранение.")
+
+    monkeypatch.setattr(ai, "get_settings", no_settings)
+    with pytest.raises(ai.AIServiceError, match="Маршрут не изменён"):
+        await ai.generate_edited_trip_plan(
+            current_preferences=case.preferences,
+            preferences=case.preferences,
+            current_plan=saved,
+            travel_context=context,
+            instruction="Остальное оставь.",
+            analysis=analysis(),
+        )
+    assert saved.model_dump_json() == before
+
+
+@pytest.mark.asyncio
+async def test_full_generation_cannot_replace_explicitly_preserved_museum(monkeypatch):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[1]
+    context = suite.contexts[case.context].model_copy(deep=True)
+    replacement = context.places[-1].model_copy(
+        update={"source_place_id": "police-id", "name": "Police Museum"}
+    )
+    context.places.append(replacement)
+
+    def response(payload):
+        places = context.places
+
+        def visit(index):
+            place = places[index]
+            return dict(
+                source_place_id=place.source_place_id,
+                place_name=place.name,
+                activity_focus="museum",
+                description=None,
+            )
+
+        return dict(
+            destination="Токио",
+            duration_days=2,
+            summary="План поездки",
+            days=[
+                dict(
+                    day=day,
+                    title="План дня",
+                    morning=[visit((day - 1) * 2)],
+                    afternoon=[visit(4 if day == 2 else 1)],
+                    evening=[
+                        dict(
+                            source_place_id=None,
+                            place_name=None,
+                            activity_focus=None,
+                            description="Спокойная прогулка.",
+                        )
+                    ],
+                )
+                for day in (1, 2)
+            ],
+        )
+
+    requests = install_provider(monkeypatch, response)
+    result = await ai.generate_edited_trip_plan(
+        current_preferences=case.preferences,
+        preferences=case.preferences,
+        current_plan=suite.plans[case.current_plan],
+        travel_context=context,
+        instruction="Музеи утром и днём оставь. Вечер поменяй.",
+        analysis=analysis(
+            requires_regeneration=True,
+            period_actions=[
+                {"day": None, "period": period, "action": "preserve"}
+                for period in ("morning", "afternoon")
+            ],
+        ),
+    )
+    assert len(requests) == 1
+    assert result.days[1].afternoon[0].startswith("Тестовый музей 4:")
+    assert "Police Museum" not in result.model_dump_json()
+    assert (
+        len(json.loads(requests[0]["messages"][1]["content"])["preserved_periods"]) == 4
+    )
+
+
+def test_specific_walk_overrides_general_preservation():
+    parsed = analysis(
+        period_actions=[
+            {"day": 2, "period": "evening", "action": "quiet_walk"},
+            {"day": None, "period": "evening", "action": "preserve"},
+        ]
+    )
+    prefs = TripPreferences(destination="Токио", duration_days=2)
+    actions = period_action_map(parsed, 2)
+    assert actions[1, "evening"] == "preserve"
+    assert actions[2, "evening"] == "quiet_walk"
+    assert (2, "evening") not in preserved_cells(parsed, prefs, prefs)
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "wrong_day", "changed_preferences"])
+def test_invalid_period_analysis_is_rejected(defect):
+    with pytest.raises((ValidationError, ValueError)):
+        parsed = analysis(
+            interests_changed=defect == "changed_preferences",
+            period_actions=[
+                {
+                    "day": 3 if defect == "wrong_day" else 1,
+                    "period": "morning",
+                    "action": "preserve",
+                }
+            ]
+            * (2 if defect == "duplicate" else 1),
+        )
+        period_action_map(parsed, 2)
+
+
+def test_saved_reference_keeps_colons_in_name_and_discards_only_provider_suffix():
+    assert saved_visit_reference(
+        "Музей: главный корпус: посетить музей. Часы по данным Google Maps: старые часы."
+    ) == ("Музей: главный корпус", "museum")
+    assert saved_visit_reference("Спокойная прогулка.") is None
+    assert saved_visit_reference("Музей: посетить музей. Потом другое занятие.") is None

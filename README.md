@@ -152,6 +152,29 @@ Redis is used for:
 - fully reserved rest-only plans are built and validated locally without a
   generation-model call, including long trips; edit analysis still parses the
   instruction before these preferences are applied;
+- edit analysis includes scoped `period_actions` (`preserve` or `quiet_walk`)
+  and `requires_regeneration`. When the whole request consists of keeping
+  activities, changing rest rules and calm walks, Python applies it locally
+  after the analysis call. Cancellation without a replacement activity still
+  uses generation; changed interests, required places and other edits do too.
+  This reduces generation-model requests, without changing provider retry limits;
+- periods explicitly marked `preserve` are enforced even during full generation.
+  Local edits also preserve every untouched period. Saved visit names and focuses
+  are extracted only from the known formatter layout, resolved unambiguously in
+  fresh candidates and checked for category and available period. Old hours,
+  addresses and links are discarded; formatting uses the current candidate.
+  General activities remain text rather than proof of a concrete visit;
+- names of preserved visits are supplied temporarily to enrichment, including
+  bounded lookup for missing places. They are protected from candidate filtering
+  and are not added to persisted `must_visit_places` or the base Redis cache.
+  Missing, ambiguous or incompatible visits fail before a DB write; the service
+  does not silently replace them. This is an internal analysis-schema change,
+  with no public API or storage migration;
+- logs report `Trip edit period actions parsed`, `Trip edit applied locally` and
+  `Grounded edit periods applied`, using only mode flags and counts. Edit-eval
+  reports retain the analysis and actual call list; check both to distinguish
+  local execution from regeneration. Natural-language classification can still
+  be wrong, and analysis calls remain subject to provider rate limits;
 - local correction of optional afternoon visits in newly generated multi-day plans:
   a visit over 4 km from another concrete stop can be replaced with an unused,
   documented candidate supporting the same activity focus and day period, within

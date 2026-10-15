@@ -136,6 +136,8 @@ async def test_unrelated_edit_preserves_saved_rest_rules(
 
     async def analyze(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
+            period_actions=[],
+            requires_regeneration=True,
             supported=True,
             interests_changed=True,
             interests="Музеи",
@@ -180,6 +182,8 @@ async def test_rest_conflict_leaves_saved_trip_unchanged(
 
     async def analyze(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
+            period_actions=[],
+            requires_regeneration=True,
             supported=True,
             interests_changed=False,
             interests=None,
@@ -229,6 +233,8 @@ async def test_edit_rebuilds_context_and_saves_full_version(
         interests="Архитектура",
     )
     analysis = TripEditAnalysis(
+        period_actions=[],
+        requires_regeneration=True,
         supported=True,
         interests_changed=True,
         interests="Архитектура и музеи",
@@ -249,6 +255,7 @@ async def test_edit_rebuilds_context_and_saves_full_version(
         travel_context: TravelContext,
         current_plan: TripPlanResponse,
         instruction: str,
+        analysis: TripEditAnalysis,
     ) -> TripPlanResponse:
         captured["generation_preferences"] = preferences
         captured["generation_current_preferences"] = current_preferences
@@ -343,6 +350,8 @@ async def test_edit_rejects_destination_or_duration_change(
 
     async def fake_analyze_trip_edit(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
+            period_actions=[],
+            requires_regeneration=True,
             supported=False,
             interests_changed=False,
             interests=None,

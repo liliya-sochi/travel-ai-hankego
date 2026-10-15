@@ -187,6 +187,8 @@ async def test_edit_eval_retries_scope_error_and_keeps_actual_state(
             turn += 1
             generation_attempt = 0
             content = {
+                "period_actions": [],
+                "requires_regeneration": True,
                 "supported": True,
                 "interests_changed": False,
                 "interests": None,

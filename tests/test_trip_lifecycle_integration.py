@@ -92,6 +92,8 @@ def edit_analysis(
     """Даёт полный список обязательных мест при смене интересов."""
 
     return {
+        "period_actions": [],
+        "requires_regeneration": True,
         "supported": supported,
         "interests_changed": supported,
         "interests": "Музеи" if supported else None,
@@ -143,11 +145,19 @@ class ContextReplay:
     """Возвращает новый контекст с учётом обновлённых предпочтений."""
 
     calls: list[TripPreferences] = field(default_factory=list)
+    preserved_names: list[list[str]] = field(default_factory=list)
+    missing_place_id: str | None = None
 
-    async def enrich(self, trip_preferences: TripPreferences) -> TravelContext:
+    async def enrich(
+        self,
+        trip_preferences: TripPreferences,
+        *,
+        preserved_place_names: list[str] | None = None,
+    ) -> TravelContext:
         """Подменяет внешние геоданные, сохраняя реальную форму TravelContext."""
 
         self.calls.append(trip_preferences.model_copy(deep=True))
+        self.preserved_names.append(preserved_place_names or [])
         place_data = [
             ("required", REQUIRED_MUSEUM, "entertainment.museum"),
             ("second-museum", "Тестовый музей", "entertainment.museum"),
@@ -161,6 +171,7 @@ class ContextReplay:
                 ]
             )
             categories.append("leisure.park")
+        place_data = [item for item in place_data if item[0] != self.missing_place_id]
         return TravelContext(
             location=DestinationLocation(
                 formatted_name="Токио",
@@ -353,6 +364,82 @@ async def test_create_edit_and_reopen_keep_required_place_and_same_trip(
     assert second_preferences["rest_periods"] == [{"day": None, "period": "evening"}]
     assert second_count == 1
     assert not case.model.replies
+
+
+async def test_local_rest_edit_persists_same_visits_without_generation(
+    lifecycle_case: LifecycleCase, database_session: AsyncSession
+) -> None:
+    """Настоящие HTTP и PostgreSQL сохраняют только локальную правку отдыха."""
+
+    case = lifecycle_case
+    created = await case.create()
+    trip_id = created["trip_id"]
+    before = await case.details(trip_id)
+    parsed = {
+        **edit_analysis(),
+        "interests_changed": False,
+        "interests": None,
+        "requires_regeneration": False,
+    }
+    case.model.replies.append(("trip_edit_analysis", parsed))
+    response = await case.client.post(
+        "/api/v1/trip-edit",
+        json={
+            "telegram_id": OWNER_ID,
+            "trip_id": trip_id,
+            "instruction": "Вечером спокойный отдых. Остальное оставь.",
+        },
+    )
+    assert response.status_code == 200, response.text
+    edited = response.json()
+    assert edited["days"][0]["morning"] == before["days"][0]["morning"]
+    assert edited["days"][0]["afternoon"] == before["days"][0]["afternoon"]
+    assert edited["days"][0]["evening"] == ["Спокойный отдых."]
+    assert case.model.calls == ["trip_plan", "trip_edit_analysis"]
+    assert case.context.preserved_names[-1] == [
+        REQUIRED_MUSEUM,
+        "Тестовый дневной парк",
+    ]
+    _, saved_preferences, count = await stored_state(database_session, trip_id)
+    assert count == 1
+    assert saved_preferences["must_visit_places"] == preferences().must_visit_places
+    assert saved_preferences["rest_periods"] == [{"day": None, "period": "evening"}]
+    assert (await case.details(trip_id))["days"] == edited["days"]
+
+
+async def test_unverifiable_local_edit_does_not_write_database(
+    lifecycle_case: LifecycleCase, database_session: AsyncSession
+) -> None:
+    """Неподтверждённое посещение не заменяется и не меняет сохранённый маршрут."""
+
+    case = lifecycle_case
+    created = await case.create()
+    trip_id = created["trip_id"]
+    before = await stored_state(database_session, trip_id)
+    case.context.missing_place_id = "day-park"
+    case.model.replies.append(
+        (
+            "trip_edit_analysis",
+            {
+                **edit_analysis(),
+                "interests_changed": False,
+                "interests": None,
+                "requires_regeneration": False,
+            },
+        )
+    )
+    response = await case.client.post(
+        "/api/v1/trip-edit",
+        json={
+            "telegram_id": OWNER_ID,
+            "trip_id": trip_id,
+            "instruction": "Вечером спокойный отдых. Остальное оставь.",
+        },
+    )
+    assert response.status_code == 502, response.text
+    assert "Маршрут не изменён" in response.text
+    assert await stored_state(database_session, trip_id) == before
+    assert case.model.calls == ["trip_plan", "trip_edit_analysis"]
 
 
 async def test_duration_change_stops_before_enrichment_and_preserves_database(

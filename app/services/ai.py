@@ -51,6 +51,15 @@ from app.services.place_geography import (
     format_place_area_group,
 )
 from app.services.place_matching import required_place_name_matches
+from app.services.trip_editing import (
+    QUIET_WALK_DESCRIPTION,
+    PeriodKey,
+    PreservedActivityUnavailableError,
+    period_action_map,
+    preserved_cells,
+    requires_full_generation,
+    resolve_preserved_activities,
+)
 from app.services.trip_enrichment import (
     place_matches_category,
     select_interest_categories,
@@ -353,6 +362,20 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
 - не извлекай изменения отдыха из current_trip_plan или current_preferences;
 - не повторяй сохранённые правила; приложение сохранит их само;
 - если инструкция не меняет отдых, верни rest_period_changes=[];
+- period_actions содержит явные просьбы сохранить период (action=preserve)
+  или сделать спокойную прогулку (action=quiet_walk); day=null — все дни;
+- «музеи утром и днём оставь» — preserve для morning и afternoon, day=null;
+- «во второй день утром и днём ничего не меняй» — два preserve с day=2;
+- «второй вечер вместо отдыха спокойная прогулка» — quiet_walk с day=2,
+  period=evening и rest=false для этого же периода в rest_period_changes;
+- «остальные активности оставь» не требует перечислять их, если
+  requires_regeneration=false: приложение сохраняет все незатронутые периоды;
+- requires_regeneration=false только если ВСЯ инструкция сводится к
+  сохранению активностей, добавлению/отмене отдыха и спокойной прогулке;
+- любой выбор/замена/перенос места, другой тип общей активности, другой вариант
+  маршрута, изменение тем или интересов требует requires_regeneration=true;
+- изменение отдыха или прогулки в конкретном периоде само по себе
+  не меняет общие interests; period_actions=[] при отсутствии таких действий;
 - общее правило может иметь исключение для отдельного дня; такое исключение
   уточняет общее правило независимо от порядка изменений в списке;
 - для одинаковых day и period верни только одно изменение.
@@ -1285,6 +1308,7 @@ def _build_grounded_user_message(
     *,
     preferences: TripPreferences,
     travel_context: TravelContext,
+    preserved_place_ids: list[str] | None = None,
 ) -> str:
     """
     Передаёт LLM предпочтения и разрешённый список мест.
@@ -1301,7 +1325,7 @@ def _build_grounded_user_message(
     planning_places = _select_planning_places(
         preferences=preferences,
         travel_context=travel_context,
-        must_visit_place_ids=must_visit_place_ids,
+        must_visit_place_ids=[*must_visit_place_ids, *(preserved_place_ids or [])],
     )
     planning_context = travel_context.model_copy(
         update={"places": planning_places},
@@ -1510,6 +1534,7 @@ def _validate_trip_edit_analysis(
             for item in analysis.rest_period_changes
         ):
             raise ValueError("LLM returned a rest day outside the trip.")
+        period_action_map(analysis, current_preferences.duration_days)
 
     for index, place_name in enumerate(returned_places):
         if _place_name_matches_any(place_name, returned_places[:index]):
@@ -1546,6 +1571,7 @@ def _build_grounded_edit_user_message(
     travel_context: TravelContext,
     current_plan: TripPlanResponse,
     instruction: str,
+    preserved_activities: dict[PeriodKey, list[GroundedActivity]] | None = None,
 ) -> str:
     """Добавляет старый маршрут и изменение к свежему grounded-контексту."""
 
@@ -1553,6 +1579,7 @@ def _build_grounded_edit_user_message(
         _build_grounded_user_message(
             preferences=preferences,
             travel_context=travel_context,
+            preserved_place_ids=_preserved_place_ids(preserved_activities),
         )
     )
     payload["current_trip_plan"] = _compact_trip_plan_for_edit(current_plan)
@@ -1560,6 +1587,10 @@ def _build_grounded_edit_user_message(
         rule.model_dump(mode="json") for rule in current_preferences.rest_periods
     ]
     payload["edit_instruction"] = instruction
+    payload["preserved_periods"] = [
+        {"day": day, "period": period}
+        for day, period in sorted(preserved_activities or {})
+    ]
 
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -1738,6 +1769,21 @@ def _validate_edited_rest_scope(
             raise ValueError("LLM added quiet rest outside its edited scope.")
 
 
+def _preserved_place_ids(
+    activities: dict[PeriodKey, list[GroundedActivity]] | None,
+) -> list[str]:
+    """Защищает ID сохраняемых посещений от исключения из списка кандидатов."""
+
+    return list(
+        dict.fromkeys(
+            activity.source_place_id
+            for items in (activities or {}).values()
+            for activity in items
+            if activity.source_place_id is not None
+        )
+    )
+
+
 def _validate_grounded_trip_plan(
     model_text: str,
     *,
@@ -1746,6 +1792,7 @@ def _validate_grounded_trip_plan(
     shorten_afternoons: bool = True,
     current_preferences: TripPreferences | None = None,
     current_plan: TripPlanResponse | None = None,
+    preserved_activities: dict[PeriodKey, list[GroundedActivity]] | None = None,
 ) -> TripPlanResponse:
     """
     Проверяет grounded Structured Output и ссылки на места.
@@ -1763,6 +1810,12 @@ def _validate_grounded_trip_plan(
     if grounded_plan.destination.casefold() != preferences.destination.casefold():
         raise ValueError("LLM destination does not match trip preferences.")
 
+    for (day, period), activities in (preserved_activities or {}).items():
+        setattr(
+            grounded_plan.days[day - 1],
+            period,
+            [item.model_copy() for item in activities],
+        )
     rest_replacement_count = _apply_rest_periods(grounded_plan, preferences)
     if current_preferences is not None and current_plan is not None:
         _validate_edited_rest_scope(
@@ -1778,7 +1831,10 @@ def _validate_grounded_trip_plan(
     planning_places = _select_planning_places(
         preferences=preferences,
         travel_context=travel_context,
-        must_visit_place_ids=resolved_must_visit_place_ids,
+        must_visit_place_ids=[
+            *resolved_must_visit_place_ids,
+            *_preserved_place_ids(preserved_activities),
+        ],
     )
     planning_context = travel_context.model_copy(
         update={"places": planning_places},
@@ -1961,6 +2017,10 @@ def _validate_grounded_trip_plan(
             "Grounded rest periods applied | replacement_count=%s",
             rest_replacement_count,
         )
+    if preserved_activities:
+        logger.info(
+            "Grounded edit periods applied | period_count=%s", len(preserved_activities)
+        )
 
     if shorten_afternoons and preferences.duration_days > 1:
         adjusted_plan = grounded_plan.model_copy(deep=True)
@@ -1978,6 +2038,7 @@ def _validate_grounded_trip_plan(
                     shorten_afternoons=False,
                     current_preferences=current_preferences,
                     current_plan=current_plan,
+                    preserved_activities=preserved_activities,
                 )
             except (ValidationError, ValueError) as error:
                 reason, _ = _grounded_validation_hint(error)
@@ -2406,6 +2467,7 @@ async def _generate_grounded_plan(
     shorten_afternoons: bool = True,
     current_preferences: TripPreferences | None = None,
     current_plan: TripPlanResponse | None = None,
+    preserved_activities: dict[PeriodKey, list[GroundedActivity]] | None = None,
 ) -> TripPlanResponse:
     """
     Запрашивает и проверяет полный grounded-план.
@@ -2448,6 +2510,7 @@ async def _generate_grounded_plan(
             shorten_afternoons=shorten_afternoons,
             current_preferences=current_preferences,
             current_plan=current_plan,
+            preserved_activities=preserved_activities,
         )
         logger.info("Grounded rest plan created")
         return result
@@ -2461,7 +2524,10 @@ async def _generate_grounded_plan(
     planning_places = _select_planning_places(
         preferences=preferences,
         travel_context=travel_context,
-        must_visit_place_ids=must_visit_place_ids,
+        must_visit_place_ids=[
+            *must_visit_place_ids,
+            *_preserved_place_ids(preserved_activities),
+        ],
     )
     allowed_place_ids = [place.source_place_id for place in planning_places]
 
@@ -2543,6 +2609,7 @@ async def _generate_grounded_plan(
                     shorten_afternoons=shorten_afternoons,
                     current_preferences=current_preferences,
                     current_plan=current_plan,
+                    preserved_activities=preserved_activities,
                 )
 
             except (ValidationError, ValueError) as error:
@@ -2623,8 +2690,98 @@ async def generate_edited_trip_plan(
     travel_context: TravelContext,
     current_plan: TripPlanResponse,
     instruction: str,
+    analysis: TripEditAnalysis | None = None,
 ) -> TripPlanResponse:
     """Создаёт маршрут с контролем прежней и итоговой области отдыха."""
+
+    preserved: dict[PeriodKey, list[GroundedActivity]] = {}
+    walks: dict[PeriodKey, str] = {}
+    if analysis is not None:
+        try:
+            cells = preserved_cells(analysis, current_preferences, preferences)
+            preserved = resolve_preserved_activities(
+                current_plan, cells, travel_context
+            )
+            places_by_id = {
+                place.source_place_id: place for place in travel_context.places
+            }
+            for (_day, period), activities in preserved.items():
+                for activity in activities:
+                    _validate_grounded_activity(
+                        activity=activity,
+                        places_by_id=places_by_id,
+                        period=period,
+                    )
+            walks = {
+                cell: action
+                for cell, action in period_action_map(
+                    analysis, preferences.duration_days
+                ).items()
+                if action == "quiet_walk"
+            }
+            if any(preferences.is_rest_period(*cell) for cell in walks):
+                raise PreservedActivityUnavailableError(
+                    "Walk conflicts with reserved rest."
+                )
+        except (ValidationError, ValueError) as error:
+            logger.warning("Trip edit preservation unavailable")
+            raise AIServiceError(
+                "Не удалось подтвердить сохраняемые активности по свежим данным. "
+                "Маршрут не изменён. Уточните пожелания."
+            ) from error
+
+        for cell in walks:
+            preserved[cell] = [
+                GroundedActivity(
+                    source_place_id=None,
+                    place_name=None,
+                    activity_focus=None,
+                    description=QUIET_WALK_DESCRIPTION,
+                )
+            ]
+
+        if not requires_full_generation(analysis, current_preferences, preferences):
+            rest = GroundedActivity(
+                source_place_id=None,
+                place_name=None,
+                activity_focus=None,
+                description=REST_PERIOD_DESCRIPTION,
+            )
+            local_plan = GroundedTripPlanResponse(
+                destination=preferences.destination,
+                duration_days=preferences.duration_days,
+                summary="План поездки",
+                days=[
+                    GroundedDayPlan(
+                        day=day.day,
+                        title="План дня",
+                        morning=[rest.model_copy()],
+                        afternoon=[rest.model_copy()],
+                        evening=[rest.model_copy()],
+                    )
+                    for day in current_plan.days
+                ],
+            )
+            try:
+                result = _validate_grounded_trip_plan(
+                    local_plan.model_dump_json(),
+                    preferences=preferences,
+                    travel_context=travel_context,
+                    shorten_afternoons=False,
+                    current_preferences=current_preferences,
+                    current_plan=current_plan,
+                    preserved_activities=preserved,
+                )
+            except (ValidationError, ValueError) as error:
+                logger.warning("Trip edit local validation failed")
+                raise AIServiceError(
+                    "Сохраняемые активности несовместимы со свежими данными или пожеланиями. "
+                    "Маршрут не изменён. Уточните изменение."
+                ) from error
+            logger.info(
+                "Trip edit applied locally | preserved_period_count=%s", len(cells)
+            )
+            return result
 
     messages = [
         {
@@ -2639,6 +2796,7 @@ async def generate_edited_trip_plan(
                 travel_context=travel_context,
                 current_plan=current_plan,
                 instruction=instruction,
+                preserved_activities=preserved,
             ),
         },
     ]
@@ -2650,6 +2808,7 @@ async def generate_edited_trip_plan(
         shorten_afternoons=False,
         current_preferences=current_preferences,
         current_plan=current_plan,
+        preserved_activities=preserved,
     )
 
 
@@ -2873,6 +3032,11 @@ async def analyze_trip_edit(
             logger.info(
                 "Trip edit rest changes parsed | change_count=%s",
                 len(analysis.rest_period_changes),
+            )
+            logger.info(
+                "Trip edit period actions parsed | action_count=%s | requires_regeneration=%s",
+                len(analysis.period_actions),
+                analysis.requires_regeneration,
             )
             return analysis
 

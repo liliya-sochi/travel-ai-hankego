@@ -59,6 +59,8 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                 ]
             )
             content = {
+                "period_actions": [],
+                "requires_regeneration": True,
                 "supported": True,
                 "interests_changed": True,
                 "interests": f"Музеи; фактическая метка {turn}",
@@ -239,6 +241,8 @@ async def test_bad_analysis_stops_before_generation_and_next_step(
     suite, monkeypatch: pytest.MonkeyPatch, supported: bool
 ) -> None:
     analysis = TripEditAnalysis(
+        period_actions=[],
+        requires_regeneration=True,
         supported=supported,
         interests_changed=False,
         interests=None,
@@ -267,6 +271,8 @@ async def test_second_step_failure_keeps_first_actual_result_and_private_error_h
     analyzer = AsyncMock(
         side_effect=[
             TripEditAnalysis(
+                period_actions=[],
+                requires_regeneration=True,
                 supported=True,
                 interests_changed=False,
                 interests=None,
@@ -306,6 +312,8 @@ async def test_merged_preferences_are_checked_independently_before_generation(
 
     case = suite.cases[0]
     analysis = TripEditAnalysis(
+        period_actions=[],
+        requires_regeneration=True,
         supported=True,
         interests_changed=False,
         interests=None,

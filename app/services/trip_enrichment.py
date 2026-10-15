@@ -820,9 +820,35 @@ class TripEnrichmentService:
 
         return context.model_copy(update={"places": enriched_places})
 
+    async def _ensure_edit_places(
+        self,
+        context: TravelContext,
+        required_names: list[str],
+        preserved_names: list[str],
+    ) -> TravelContext:
+        """Проверяет сохраняемые места отдельно от постоянных обязательных пожеланий."""
+
+        context = await self._ensure_must_visit_places(
+            context=context, required_names=required_names
+        )
+        if not preserved_names:
+            return context
+        try:
+            return await self._ensure_must_visit_places(
+                context=context,
+                required_names=list(dict.fromkeys([*required_names, *preserved_names])),
+            )
+        except TripEnrichmentError as error:
+            raise TripEnrichmentError(
+                "Не удалось подтвердить сохраняемые посещения. "
+                "Маршрут не изменён. Попробуйте позже или уточните изменение."
+            ) from error
+
     async def enrich(
         self,
         preferences: TripPreferences,
+        *,
+        preserved_place_names: list[str] | None = None,
     ) -> TravelContext:
         """Обогащает параметры поездки актуальными местами."""
 
@@ -837,9 +863,10 @@ class TripEnrichmentService:
             )
 
             if cached_context is not None:
-                context = await self._ensure_must_visit_places(
+                context = await self._ensure_edit_places(
                     context=cached_context,
                     required_names=preferences.must_visit_places,
+                    preserved_names=preserved_place_names or [],
                 )
 
                 return await self._enrich_missing_opening_hours(context)
@@ -887,9 +914,10 @@ class TripEnrichmentService:
                 priority_categories=priority_categories,
             )
 
-        context = await self._ensure_must_visit_places(
+        context = await self._ensure_edit_places(
             context=context,
             required_names=preferences.must_visit_places,
+            preserved_names=preserved_place_names or [],
         )
 
         return await self._enrich_missing_opening_hours(context)
