@@ -38,15 +38,25 @@ TripDayPeriod = Literal["morning", "afternoon", "evening"]
 MAX_ACTIVITIES_PER_PERIOD = 2
 
 
-class RestPeriod(StrictSchema):
-    """Явно запрошенный отдых в одном периоде дня или во всех днях."""
+class TripPeriodScope(StrictSchema):
+    """Период конкретного дня или всех дней текущей поездки."""
 
     day: int | None = Field(
         ge=1,
         le=30,
-        description="Номер дня поездки или null, если отдых относится ко всем дням.",
+        description="Номер дня поездки или null для всех дней.",
     )
     period: TripDayPeriod
+
+
+class RestPeriod(TripPeriodScope):
+    """Явно запрошенный отдых в одном периоде дня или во всех днях."""
+
+
+class TripPeriodAction(TripPeriodScope):
+    """Сохранение периода или явно запрошенная спокойная прогулка."""
+
+    action: Literal["preserve", "quiet_walk"]
 
 
 class RestPeriodChange(RestPeriod):
@@ -386,6 +396,33 @@ class TripEditAnalysis(StrictSchema):
         max_length=90,
         description="Только явно запрошенные добавления и отмены отдыха; [] без изменений.",
     )
+
+    period_actions: list[TripPeriodAction] = Field(
+        max_length=90,
+        description="Явные просьбы сохранить период или сделать спокойную прогулку.",
+    )
+    requires_regeneration: bool = Field(
+        description="Нужна ли генерация для изменений, не покрытых отдыхом и period_actions.",
+    )
+
+    @field_validator("period_actions")
+    @classmethod
+    def validate_period_actions(
+        cls, actions: list[TripPeriodAction]
+    ) -> list[TripPeriodAction]:
+        if len({(item.day, item.period) for item in actions}) != len(actions):
+            raise ValueError("Действия одного периода не должны повторяться.")
+        return actions
+
+    @model_validator(mode="after")
+    def validate_local_edit(self) -> Self:
+        if not self.requires_regeneration and (
+            self.interests_changed or self.must_visit_places_changed
+        ):
+            raise ValueError(
+                "Изменение интересов или обязательных мест требует генерации."
+            )
+        return self
 
     @field_validator("rest_period_changes")
     @classmethod

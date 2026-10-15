@@ -174,6 +174,8 @@ def test_day_exception_overrides_general_change_in_any_order(reverse: bool) -> N
 def test_conflicting_changes_for_same_scope_are_rejected() -> None:
     with pytest.raises(ValidationError):
         TripEditAnalysis(
+            period_actions=[],
+            requires_regeneration=True,
             supported=True,
             interests_changed=False,
             interests=None,
@@ -322,6 +324,8 @@ async def test_edit_analysis_and_generation_apply_rest_without_extra_calls(
     current = validate(preferences(), context, plan)
     requests: list[dict[str, Any]] = []
     analysis_data = {
+        "period_actions": [],
+        "requires_regeneration": True,
         "supported": True,
         "interests_changed": False,
         "interests": None,

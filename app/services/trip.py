@@ -25,6 +25,7 @@ from app.services.ai import (
     generate_edited_trip_plan,
     generate_trip_plan,
 )
+from app.services.trip_editing import preserved_cells, preserved_place_names
 from app.services.trip_enrichment import TripEnrichmentService
 
 logger = logging.getLogger(__name__)
@@ -213,8 +214,10 @@ class TripService:
 
         # Все данные мест получаем заново. Сохранённый публичный текст
         # не используется как источник фактов.
+        cells = preserved_cells(analysis, current_preferences, updated_preferences)
+        names = preserved_place_names(current_plan, cells)
         travel_context = await enrichment_service.enrich(
-            updated_preferences,
+            updated_preferences, **({"preserved_place_names": names} if names else {})
         )
         edited_plan = await generate_edited_trip_plan(
             preferences=updated_preferences,
@@ -222,6 +225,7 @@ class TripService:
             travel_context=travel_context,
             current_plan=current_plan,
             instruction=instruction,
+            analysis=analysis,
         )
 
         try:

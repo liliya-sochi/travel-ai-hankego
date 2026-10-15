@@ -1307,3 +1307,44 @@ async def test_google_error_does_not_cancel_trip_enrichment() -> None:
     )
 
     assert context.places[0].opening_hours is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("found", [True, False])
+async def test_preserved_lookup_does_not_change_preferences_or_cache(
+    found: bool,
+) -> None:
+    """Отсутствующее сохраняемое место проверяется отдельно от must_visit_places."""
+
+    cached = build_context()
+    cache = FakeTravelContextCache(cached_context=cached)
+    name = "Сохраняемый музей"
+    place = build_place(
+        name=name,
+        source_place_id="google:preserved",
+        categories=["entertainment.museum"],
+    ).model_copy(update={"opening_hours": "Mo-Su 09:00-17:00"})
+    provider = FakeOpeningHoursFallbackProvider(
+        required_places={name: place if found else None}
+    )
+    budget = FakeOpeningHoursBudget()
+    service = TripEnrichmentService(
+        places_provider=FakePlacesProvider(),
+        travel_context_cache=cache,
+        opening_hours_fallback_provider=provider,
+        opening_hours_budget=budget,
+    )
+    prefs = TripPreferences(destination="Стамбул", duration_days=1)
+    before = prefs.model_dump_json()
+    if found:
+        result = await service.enrich(prefs, preserved_place_names=[name])
+        assert result.places[-1] == place
+    else:
+        with pytest.raises(TripEnrichmentError, match="сохраняемые посещения"):
+            await service.enrich(prefs, preserved_place_names=[name])
+    assert provider.received_required_names == [name]
+    assert budget.calls == 1
+    assert prefs.model_dump_json() == before
+    assert prefs.must_visit_places == []
+    assert cached.places == [build_place()]
+    assert cache.saved_context is None

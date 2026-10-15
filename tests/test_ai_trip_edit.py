@@ -62,6 +62,8 @@ async def test_analyze_trip_edit_returns_full_preference_patch(
                         "message": {
                             "content": json.dumps(
                                 {
+                                    "period_actions": [],
+                                    "requires_regeneration": True,
                                     "supported": True,
                                     "interests_changed": True,
                                     "interests": "Архитектура и музеи",
@@ -147,6 +149,8 @@ async def test_analyze_trip_edit_retries_old_plan_place_promotion(
                         "message": {
                             "content": json.dumps(
                                 {
+                                    "period_actions": [],
+                                    "requires_regeneration": True,
                                     "supported": True,
                                     "interests_changed": True,
                                     "interests": "Архитектура, парки и музеи",

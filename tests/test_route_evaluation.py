@@ -143,6 +143,8 @@ async def test_rejected_edit_stops_after_analysis(
     case = case_by_id(suite, "tokyo_duration_edit_rejected")
     analyzer = AsyncMock(
         return_value=TripEditAnalysis(
+            period_actions=[],
+            requires_regeneration=True,
             supported=supported,
             interests_changed=False,
             interests=None,
@@ -508,6 +510,8 @@ async def test_live_edit_path_updates_interests_and_uses_fixed_original_plan(
         }
 
     analysis = {
+        "period_actions": [],
+        "requires_regeneration": True,
         "supported": True,
         "interests_changed": True,
         "interests": "Музеи, вечером спокойный отдых",
