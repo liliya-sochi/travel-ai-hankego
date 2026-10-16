@@ -1,6 +1,7 @@
 """Сохранение посещений и локальные правки через настоящие AI-функции."""
 
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -8,6 +9,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from app.schemas.geoapify import DestinationLocation, PlaceCandidate, TravelContext
 from app.schemas.trip import TripEditAnalysis, TripPreferences
 from app.services import ai
 from app.services.trip_editing import (
@@ -650,3 +652,127 @@ def test_invalid_replacement_analysis_is_rejected(defect):
             current_plan=suite.plans[case.current_plan],
             instruction=case.steps[0].user_message,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra_park", [False, True])
+@pytest.mark.parametrize("explicit_replacement", [False, True])
+async def test_one_day_afternoon_replacement_can_override_initial_interest(
+    monkeypatch, caplog, extra_park, explicit_replacement
+):
+    """Явная замена парка на музей не меняет общий интерес и соседние периоды."""
+
+    place_data = [
+        ("required", "Обязательный музей", "entertainment.museum"),
+        ("new-museum", "Другой музей", "entertainment.museum"),
+        ("day-park", "Дневной парк", "leisure.park"),
+        ("evening-park", "Вечерний парк", "leisure.park"),
+    ]
+    if extra_park:
+        place_data.append(("extra-park", "Запасной парк", "leisure.park"))
+    context = TravelContext(
+        location=DestinationLocation(
+            formatted_name="Токио",
+            latitude=35.68,
+            longitude=139.76,
+            source_place_id="test-tokyo",
+        ),
+        requested_categories=["leisure.park", "entertainment.museum"],
+        places=[
+            PlaceCandidate(
+                source_place_id=place_id,
+                name=name,
+                formatted_address="Условный тестовый адрес",
+                latitude=35.68 + index * 0.001,
+                longitude=139.76,
+                categories=[category],
+                opening_hours="24/7"
+                if category == "leisure.park"
+                else "Mo-Su 10:00-18:00",
+            )
+            for index, (place_id, name, category) in enumerate(place_data)
+        ],
+        fetched_at=datetime(2026, 10, 7, tzinfo=UTC),
+    )
+    prefs = TripPreferences(
+        destination="Токио",
+        duration_days=1,
+        interests="Парки",
+        must_visit_places=["Обязательный музей"],
+    )
+
+    def visit(place_id, name, focus):
+        return dict(
+            source_place_id=place_id,
+            place_name=name,
+            activity_focus=focus,
+            description=None,
+        )
+
+    original = dict(
+        destination="Токио",
+        duration_days=1,
+        summary="План поездки",
+        days=[
+            dict(
+                day=1,
+                title="План дня",
+                morning=[visit("required", "Обязательный музей", "museum")],
+                afternoon=[visit("day-park", "Дневной парк", "park")],
+                evening=[visit("evening-park", "Вечерний парк", "park")],
+            )
+        ],
+    )
+    saved = ai._validate_grounded_trip_plan(
+        json.dumps(original), preferences=prefs, travel_context=context
+    )
+    before = saved.model_dump_json(), prefs.model_dump_json(), context.model_dump_json()
+
+    def response(payload):
+        proposed = json.loads(json.dumps(original))
+        # Первая попытка игнорирует обязательную замену, вторая выполняет её.
+        if not explicit_replacement or len(requests) == 2:
+            proposed["days"][0]["afternoon"] = [
+                visit("new-museum", "Другой музей", "museum")
+            ]
+        return proposed
+
+    requests = install_provider(monkeypatch, response)
+    parsed = analysis(
+        must_visit_places=prefs.must_visit_places,
+        requires_regeneration=True,
+        regeneration_periods=[{"day": 1, "period": "afternoon"}],
+        place_replacements=[
+            {"day": 1, "period": "afternoon", "place_name": "Дневной парк"}
+        ]
+        if explicit_replacement
+        else [],
+    )
+
+    async def generate():
+        return await ai.generate_edited_trip_plan(
+            preferences=prefs,
+            current_preferences=prefs,
+            travel_context=context,
+            current_plan=saved,
+            instruction="Днём замени парк на музей. Остальные активности оставь.",
+            analysis=parsed,
+        )
+
+    if explicit_replacement:
+        result = await generate()
+        assert result.days[0].afternoon[0].startswith("Другой музей: посетить музей.")
+        assert result.days[0].morning == saved.days[0].morning
+        assert result.days[0].evening == saved.days[0].evening
+        assert "unfulfilled_place_replacement" in caplog.text
+    else:
+        # Без структурированной замены обычное правило интересов остаётся в силе.
+        with pytest.raises(ai.AIServiceError):
+            await generate()
+        assert "missing_afternoon_interest" in caplog.text
+    assert len(requests) == 2
+    assert before == (
+        saved.model_dump_json(),
+        prefs.model_dump_json(),
+        context.model_dump_json(),
+    )

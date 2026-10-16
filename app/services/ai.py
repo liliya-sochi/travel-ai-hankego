@@ -459,6 +459,9 @@ EDIT_SYSTEM_PROMPT = (
   excluded_source_place_ids; включи minimum_new_places мест с ID, которых не было
   в previous_source_place_ids этого периода. Общее занятие и смена текста
   у прежнего места не считаются заменой;
+- явная дневная замена в place_replacements имеет приоритет над автоматическим
+  заполнением однодневного маршрута по исходным интересам; соблюдай запрошенную
+  замену, категории места, расписание и остальные ограничения маршрута;
 - если прежнее необязательное место отсутствует в свежем контексте,
   замени его разрешённым местом или общей активностью;
 - если инструкция конфликтует с проверенными данными,
@@ -2000,8 +2003,11 @@ def _validate_grounded_trip_plan(
     if len(selected_place_ids) < grounding_requirements["minimum_unique_places"]:
         raise ValueError("LLM used too few unique grounded places.")
 
-    if preferences.duration_days == 1 and not preferences.is_rest_period(
-        1, "afternoon"
+    # Явную замену уже проверили выше; исходный интерес не отменяет эту правку.
+    if (
+        preferences.duration_days == 1
+        and not preferences.is_rest_period(1, "afternoon")
+        and (1, "afternoon") not in (replacement_constraints or {})
     ):
         day = grounded_plan.days[0]
         afternoon_place_ids = {
