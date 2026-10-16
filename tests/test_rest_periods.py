@@ -175,6 +175,7 @@ def test_conflicting_changes_for_same_scope_are_rejected() -> None:
     with pytest.raises(ValidationError):
         TripEditAnalysis(
             period_actions=[],
+            place_replacements=[],
             requires_regeneration=True,
             regeneration_periods=[
                 {"day": None, "period": period}
@@ -329,6 +330,7 @@ async def test_edit_analysis_and_generation_apply_rest_without_extra_calls(
     requests: list[dict[str, Any]] = []
     analysis_data = {
         "period_actions": [],
+        "place_replacements": [],
         "requires_regeneration": True,
         "regeneration_periods": [
             {"day": None, "period": period}

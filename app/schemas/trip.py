@@ -59,6 +59,16 @@ class TripPeriodAction(TripPeriodScope):
     action: Literal["preserve", "quiet_walk"]
 
 
+class TripPlaceReplacement(StrictSchema):
+    """Прежнее посещение, для которого явно требуется выбрать другое место."""
+
+    day: int = Field(ge=1, le=30)
+    period: TripDayPeriod
+    place_name: MustVisitPlaceName = Field(
+        description="Название заменяемого места из current_trip_plan, не нового места.",
+    )
+
+
 class RestPeriodChange(RestPeriod):
     """Одно явное добавление или отмена отдыха из текущей инструкции."""
 
@@ -411,6 +421,26 @@ class TripEditAnalysis(StrictSchema):
             "day=null — все дни. [] без генерации. Остальные периоды сохраняются."
         ),
     )
+    place_replacements: list[TripPlaceReplacement] = Field(
+        max_length=180,
+        description=(
+            "Прежние конкретные посещения, которые нужно заменить другими местами; "
+            "[] при отсутствии такой просьбы. Не является списком обязательных мест."
+        ),
+    )
+
+    @field_validator("place_replacements")
+    @classmethod
+    def validate_place_replacements(
+        cls, replacements: list[TripPlaceReplacement]
+    ) -> list[TripPlaceReplacement]:
+        keys = {
+            (item.day, item.period, " ".join(item.place_name.casefold().split()))
+            for item in replacements
+        }
+        if len(keys) != len(replacements):
+            raise ValueError("Заменяемые посещения не должны повторяться.")
+        return replacements
 
     @field_validator("regeneration_periods")
     @classmethod
@@ -437,10 +467,12 @@ class TripEditAnalysis(StrictSchema):
         ):
             raise ValueError("Режим генерации должен соответствовать её периодам.")
         if not self.requires_regeneration and (
-            self.interests_changed or self.must_visit_places_changed
+            self.interests_changed
+            or self.must_visit_places_changed
+            or self.place_replacements
         ):
             raise ValueError(
-                "Изменение интересов или обязательных мест требует генерации."
+                "Изменение интересов, обязательных мест или замена посещения требует генерации."
             )
         return self
 

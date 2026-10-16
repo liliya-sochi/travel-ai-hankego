@@ -144,6 +144,7 @@ async def test_rejected_edit_stops_after_analysis(
     analyzer = AsyncMock(
         return_value=TripEditAnalysis(
             period_actions=[],
+            place_replacements=[],
             requires_regeneration=True,
             regeneration_periods=[
                 {"day": None, "period": period}
@@ -515,6 +516,7 @@ async def test_live_edit_path_updates_interests_and_uses_fixed_original_plan(
 
     analysis = {
         "period_actions": [],
+        "place_replacements": [],
         "requires_regeneration": True,
         "regeneration_periods": [
             {"day": None, "period": period}

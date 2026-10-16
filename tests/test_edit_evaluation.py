@@ -62,6 +62,7 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             )
             content = {
                 "period_actions": [],
+                "place_replacements": [],
                 "requires_regeneration": True,
                 "regeneration_periods": [
                     {"day": None, "period": period}
@@ -82,6 +83,13 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                     interests=None,
                     rest_period_changes=[],
                     regeneration_periods=[{"day": 2, "period": "afternoon"}],
+                    place_replacements=[
+                        {
+                            "day": 2,
+                            "period": "afternoon",
+                            "place_name": "Тестовый музей 4",
+                        }
+                    ],
                 )
         else:
             duration = incoming["trip_preferences"]["duration_days"]
@@ -262,6 +270,7 @@ async def test_bad_analysis_stops_before_generation_and_next_step(
 ) -> None:
     analysis = TripEditAnalysis(
         period_actions=[],
+        place_replacements=[],
         requires_regeneration=True,
         regeneration_periods=[
             {"day": None, "period": period}
@@ -296,6 +305,7 @@ async def test_second_step_failure_keeps_first_actual_result_and_private_error_h
         side_effect=[
             TripEditAnalysis(
                 period_actions=[],
+                place_replacements=[],
                 requires_regeneration=True,
                 regeneration_periods=[
                     {"day": None, "period": period}
@@ -341,6 +351,7 @@ async def test_merged_preferences_are_checked_independently_before_generation(
     case = suite.cases[0]
     analysis = TripEditAnalysis(
         period_actions=[],
+        place_replacements=[],
         requires_regeneration=True,
         regeneration_periods=[
             {"day": None, "period": period}

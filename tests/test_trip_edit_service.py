@@ -143,6 +143,7 @@ async def test_scoped_generation_requests_fresh_preserved_visits_without_promoti
         must_visit_places=case.preferences.must_visit_places,
         rest_period_changes=[],
         period_actions=[],
+        place_replacements=[],
         requires_regeneration=True,
         regeneration_periods=[{"day": 2, "period": "afternoon"}],
     )
@@ -196,6 +197,7 @@ async def test_unrelated_edit_preserves_saved_rest_rules(
     async def analyze(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_replacements=[],
             requires_regeneration=True,
             regeneration_periods=[
                 {"day": None, "period": period}
@@ -246,6 +248,7 @@ async def test_rest_conflict_leaves_saved_trip_unchanged(
     async def analyze(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_replacements=[],
             requires_regeneration=True,
             regeneration_periods=[
                 {"day": None, "period": period}
@@ -301,6 +304,7 @@ async def test_edit_rebuilds_context_and_saves_full_version(
     )
     analysis = TripEditAnalysis(
         period_actions=[],
+        place_replacements=[],
         requires_regeneration=True,
         regeneration_periods=[
             {"day": None, "period": period}
@@ -422,6 +426,7 @@ async def test_edit_rejects_destination_or_duration_change(
     async def fake_analyze_trip_edit(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_replacements=[],
             requires_regeneration=True,
             regeneration_periods=[
                 {"day": None, "period": period}

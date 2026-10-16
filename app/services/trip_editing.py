@@ -1,5 +1,7 @@
 """Детерминированные изменения периодов и проверяемое сохранение посещений."""
 
+from dataclasses import dataclass
+
 from app.schemas.geoapify import TravelContext
 from app.schemas.grounded_trip import (
     ACTIVITY_FOCUS_DESCRIPTIONS,
@@ -20,6 +22,15 @@ from app.services.place_matching import (
 PERIODS: tuple[TripDayPeriod, ...] = ("morning", "afternoon", "evening")
 QUIET_WALK_DESCRIPTION = "Спокойная прогулка."
 PeriodKey = tuple[int, TripDayPeriod]
+
+
+@dataclass(frozen=True)
+class VisitReplacementConstraint:
+    """Какие прежние ID запрещены и сколько новых посещений требуется в периоде."""
+
+    excluded_ids: frozenset[str]
+    previous_ids: frozenset[str]
+    minimum_new_visits: int
 
 
 class PreservedActivityUnavailableError(ValueError):
@@ -136,6 +147,82 @@ def preserved_place_names(plan: TripPlanResponse, cells: set[PeriodKey]) -> list
                             normalize_place_name(reference[0]), reference[0]
                         )
     return list(names.values())
+
+
+def replacement_visit_names(
+    plan: TripPlanResponse, analysis: TripEditAnalysis
+) -> dict[PeriodKey, set[str]]:
+    """Проверяет, что анализ заменяет реальные посещения внутри области генерации."""
+
+    allowed = regeneration_cells(analysis, plan.duration_days)
+    actions = period_action_map(analysis, plan.duration_days)
+    result: dict[PeriodKey, set[str]] = {}
+    by_day = {day.day: day for day in plan.days}
+    for replacement in analysis.place_replacements:
+        cell = replacement.day, replacement.period
+        if cell not in allowed or cell in actions:
+            raise ValueError(
+                "Replacement conflicts with generation scope or period action."
+            )
+        names = [
+            reference[0]
+            for line in getattr(by_day[replacement.day], replacement.period)
+            if (reference := saved_visit_reference(line)) is not None
+        ]
+        exact = [
+            name
+            for name in names
+            if normalize_place_name(name)
+            == normalize_place_name(replacement.place_name)
+        ]
+        matches = exact or [
+            name
+            for name in names
+            if required_place_name_matches(
+                required_name=replacement.place_name, candidate_name=name
+            )
+        ]
+        if len(matches) != 1:
+            raise ValueError("Replacement does not identify one saved visit.")
+        result.setdefault(cell, set()).add(matches[0])
+    return result
+
+
+def resolve_visit_replacements(
+    plan: TripPlanResponse, analysis: TripEditAnalysis, context: TravelContext
+) -> dict[PeriodKey, VisitReplacementConstraint]:
+    """Связывает прежние названия со свежими ID; отсутствие старого места допустимо."""
+
+    by_day = {day.day: day for day in plan.days}
+    result: dict[PeriodKey, VisitReplacementConstraint] = {}
+
+    def matching_ids(names: set[str]) -> frozenset[str]:
+        return frozenset(
+            place.source_place_id
+            for name in names
+            for place in context.places
+            if normalize_place_name(name)
+            in {
+                normalize_place_name(place.name),
+                normalize_place_name(place.display_name),
+            }
+            or required_place_name_matches(
+                required_name=name, candidate_name=place.display_name
+            )
+        )
+
+    for (day, period), names in replacement_visit_names(plan, analysis).items():
+        previous_names = {
+            reference[0]
+            for line in getattr(by_day[day], period)
+            if (reference := saved_visit_reference(line)) is not None
+        }
+        result[day, period] = VisitReplacementConstraint(
+            excluded_ids=matching_ids(names),
+            previous_ids=matching_ids(previous_names),
+            minimum_new_visits=len(names),
+        )
+    return result
 
 
 def resolve_preserved_activities(

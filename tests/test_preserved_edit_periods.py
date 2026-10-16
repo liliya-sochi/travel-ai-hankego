@@ -29,6 +29,7 @@ def analysis(**updates: Any) -> TripEditAnalysis:
             "must_visit_places": ["Art Aquarium Museum GINZA"],
             "rest_period_changes": [],
             "period_actions": [],
+            "place_replacements": [],
             "requires_regeneration": False,
             "regeneration_periods": [],
             **updates,
@@ -417,3 +418,235 @@ async def test_empty_regeneration_scope_uses_existing_bounded_analysis_retry(
     )
     assert len(requests) == 2
     assert regeneration_cells(parsed, 2) == {(2, "afternoon")}
+
+
+def replacement_analysis(**updates):
+    return analysis(
+        requires_regeneration=True,
+        regeneration_periods=[{"day": 2, "period": "afternoon"}],
+        place_replacements=[
+            {"day": 2, "period": "afternoon", "place_name": "Тестовый музей 4"}
+        ],
+        **updates,
+    )
+
+
+def replacement_plan(context, target_id, first_afternoon_id="eval-edit-aida"):
+    by_id = {place.source_place_id: place for place in context.places}
+
+    def visit(place_id):
+        place = by_id[place_id]
+        return dict(
+            source_place_id=place_id,
+            place_name=place.name,
+            activity_focus="museum",
+            description=None,
+        )
+
+    def general():
+        return dict(
+            source_place_id=None,
+            place_name=None,
+            activity_focus=None,
+            description="Другая прогулка.",
+        )
+
+    return dict(
+        destination="Токио",
+        duration_days=2,
+        summary="План поездки",
+        days=[
+            dict(
+                day=1,
+                title="План дня",
+                morning=[visit("eval-edit-aquarium")],
+                afternoon=[visit(first_afternoon_id)],
+                evening=[general()],
+            ),
+            dict(
+                day=2,
+                title="План дня",
+                morning=[visit("eval-edit-museum-3")],
+                afternoon=[visit(target_id)],
+                evening=[general()],
+            ),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_preserved_elsewhere", [False, True])
+async def test_replacement_excludes_old_id_and_validates_final_period(
+    monkeypatch, old_preserved_elsewhere, caplog
+):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[2]
+    context = suite.contexts[case.context]
+    saved = suite.plans[case.current_plan].model_copy(deep=True)
+    first_afternoon_id = "eval-edit-aida"
+    if old_preserved_elsewhere:
+        saved.days[0].afternoon = ["Тестовый музей 4: посетить музей."]
+        first_afternoon_id = "eval-edit-museum-4"
+    before = saved.model_dump_json()
+    context_before = context.model_dump_json()
+    count = 0
+
+    def response(payload):
+        nonlocal count
+        count += 1
+        ids = payload["response_format"]["json_schema"]["schema"]["$defs"][
+            "GroundedActivity"
+        ]["properties"]["source_place_id"]["anyOf"][0]["enum"]
+        assert ("eval-edit-museum-4" in ids) == old_preserved_elsewhere
+        assert {
+            "eval-edit-aquarium",
+            "eval-edit-museum-3",
+            "eval-edit-museum-5",
+        } <= set(ids)
+        incoming = json.loads(payload["messages"][1]["content"])
+        assert incoming["place_replacements"] == [
+            {
+                "day": 2,
+                "period": "afternoon",
+                "excluded_source_place_ids": ["eval-edit-museum-4"],
+                "previous_source_place_ids": ["eval-edit-museum-4"],
+                "minimum_new_places": 1,
+            }
+        ]
+        if count == 2:
+            assert "place_replacements" in payload["messages"][-1]["content"]
+        # Имитируем игнорирование схемы провайдером на первой попытке.
+        return replacement_plan(
+            context,
+            "eval-edit-museum-4" if count == 1 else "eval-edit-museum-5",
+            first_afternoon_id,
+        )
+
+    requests = install_provider(monkeypatch, response)
+    result = await ai.generate_edited_trip_plan(
+        preferences=case.preferences,
+        current_preferences=case.preferences,
+        travel_context=context,
+        current_plan=saved,
+        instruction=case.steps[0].user_message,
+        analysis=replacement_analysis(),
+    )
+    assert len(requests) == 2
+    assert result.days[1].afternoon[0].startswith("Тестовый музей 5: посетить музей.")
+    assert result.days[0].afternoon[0].startswith(saved.days[0].afternoon[0])
+    assert all(
+        new.evening == old.evening
+        for new, old in zip(result.days, saved.days, strict=True)
+    )
+    assert saved.model_dump_json() == before
+    assert context.model_dump_json() == context_before
+    assert any(
+        "unfulfilled_place_replacement" in record.message for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defect",
+    ["no_alternative", "closed_alternative", "general_instead", "old_id_twice"],
+)
+async def test_unfulfilled_replacement_fails_without_mutating_saved_plan(
+    monkeypatch, defect
+):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[2]
+    context = suite.contexts[case.context].model_copy(deep=True)
+    saved = suite.plans[case.current_plan]
+    before = saved.model_dump_json()
+    if defect == "no_alternative":
+        context.places.pop()
+    elif defect == "closed_alternative":
+        context.places[-1].opening_hours = "off"
+
+    def response(_):
+        if defect in {"no_alternative", "closed_alternative"}:
+            pytest.fail("Без подтверждённой альтернативы генерация не нужна.")
+        result = replacement_plan(context, "eval-edit-museum-4")
+        if defect == "general_instead":
+            result["days"][1]["afternoon"] = [
+                dict(
+                    source_place_id=None,
+                    place_name=None,
+                    activity_focus=None,
+                    description="Отдохнуть.",
+                )
+            ]
+        return result
+
+    requests = install_provider(monkeypatch, response)
+    with pytest.raises(ai.AIServiceError):
+        await ai.generate_edited_trip_plan(
+            preferences=case.preferences,
+            current_preferences=case.preferences,
+            travel_context=context,
+            current_plan=saved,
+            instruction=case.steps[0].user_message,
+            analysis=replacement_analysis(),
+        )
+    assert len(requests) == (
+        0 if defect in {"no_alternative", "closed_alternative"} else 2
+    )
+    assert saved.model_dump_json() == before
+
+
+@pytest.mark.asyncio
+async def test_replacement_can_proceed_when_old_venue_is_absent_from_fresh_context(
+    monkeypatch,
+):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[2]
+    context = suite.contexts[case.context].model_copy(deep=True)
+    context.places = [
+        p for p in context.places if p.source_place_id != "eval-edit-museum-4"
+    ]
+    requests = install_provider(
+        monkeypatch, lambda _: replacement_plan(context, "eval-edit-museum-5")
+    )
+    result = await ai.generate_edited_trip_plan(
+        preferences=case.preferences,
+        current_preferences=case.preferences,
+        travel_context=context,
+        current_plan=suite.plans[case.current_plan],
+        instruction=case.steps[0].user_message,
+        analysis=replacement_analysis(),
+    )
+    assert len(requests) == 1
+    assert result.days[1].afternoon[0].startswith("Тестовый музей 5:")
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["missing_field", "wrong_name", "wrong_scope", "preserve", "duplicate", "local"],
+)
+def test_invalid_replacement_analysis_is_rejected(defect):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[2]
+    data = replacement_analysis().model_dump()
+    if defect == "missing_field":
+        data.pop("place_replacements")
+    elif defect == "wrong_name":
+        data["place_replacements"][0]["place_name"] = "Неназванное в маршруте место"
+    elif defect == "wrong_scope":
+        data["regeneration_periods"][0]["period"] = "evening"
+    elif defect == "preserve":
+        data["period_actions"] = [
+            {"day": 2, "period": "afternoon", "action": "preserve"}
+        ]
+    elif defect == "duplicate":
+        data["place_replacements"] *= 2
+    elif defect == "local":
+        data["requires_regeneration"] = False
+        data["regeneration_periods"] = []
+    with pytest.raises((ValidationError, ValueError)):
+        parsed = TripEditAnalysis.model_validate(data)
+        ai._validate_trip_edit_analysis(
+            analysis=parsed,
+            current_preferences=case.preferences,
+            current_plan=suite.plans[case.current_plan],
+            instruction=case.steps[0].user_message,
+        )
