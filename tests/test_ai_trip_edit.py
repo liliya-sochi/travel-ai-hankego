@@ -64,6 +64,14 @@ async def test_analyze_trip_edit_returns_full_preference_patch(
                                 {
                                     "period_actions": [],
                                     "requires_regeneration": True,
+                                    "regeneration_periods": [
+                                        {"day": None, "period": period}
+                                        for period in (
+                                            "morning",
+                                            "afternoon",
+                                            "evening",
+                                        )
+                                    ],
                                     "supported": True,
                                     "interests_changed": True,
                                     "interests": "Архитектура и музеи",
@@ -151,6 +159,14 @@ async def test_analyze_trip_edit_retries_old_plan_place_promotion(
                                 {
                                     "period_actions": [],
                                     "requires_regeneration": True,
+                                    "regeneration_periods": [
+                                        {"day": None, "period": period}
+                                        for period in (
+                                            "morning",
+                                            "afternoon",
+                                            "evening",
+                                        )
+                                    ],
                                     "supported": True,
                                     "interests_changed": True,
                                     "interests": "Архитектура, парки и музеи",

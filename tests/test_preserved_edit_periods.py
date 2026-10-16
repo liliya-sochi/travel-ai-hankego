@@ -13,6 +13,7 @@ from app.services import ai
 from app.services.trip_editing import (
     period_action_map,
     preserved_cells,
+    regeneration_cells,
     saved_visit_reference,
 )
 from scripts import evaluate_routes as evaluation
@@ -29,6 +30,7 @@ def analysis(**updates: Any) -> TripEditAnalysis:
             "rest_period_changes": [],
             "period_actions": [],
             "requires_regeneration": False,
+            "regeneration_periods": [],
             **updates,
         }
     )
@@ -187,7 +189,10 @@ async def test_local_edit_protects_sparse_saved_visit_from_candidate_filtering(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("defect", ["missing", "ambiguous", "closed", "category"])
-async def test_unverifiable_saved_visit_fails_before_generation(monkeypatch, defect):
+@pytest.mark.parametrize("regenerate", [False, True])
+async def test_unverifiable_saved_visit_fails_before_generation(
+    monkeypatch, defect, regenerate
+):
     suite = evaluation.load_edit_suite()
     case = suite.cases[1]
     saved = suite.plans[case.current_plan]
@@ -215,7 +220,12 @@ async def test_unverifiable_saved_visit_fails_before_generation(monkeypatch, def
             current_plan=saved,
             travel_context=context,
             instruction="Остальное оставь.",
-            analysis=analysis(),
+            analysis=analysis(
+                requires_regeneration=regenerate,
+                regeneration_periods=[{"day": 2, "period": "evening"}]
+                if regenerate
+                else [],
+            ),
         )
     assert saved.model_dump_json() == before
 
@@ -274,6 +284,10 @@ async def test_full_generation_cannot_replace_explicitly_preserved_museum(monkey
         instruction="Музеи утром и днём оставь. Вечер поменяй.",
         analysis=analysis(
             requires_regeneration=True,
+            regeneration_periods=[
+                {"day": None, "period": period}
+                for period in ("morning", "afternoon", "evening")
+            ],
             period_actions=[
                 {"day": None, "period": period, "action": "preserve"}
                 for period in ("morning", "afternoon")
@@ -325,3 +339,81 @@ def test_saved_reference_keeps_colons_in_name_and_discards_only_provider_suffix(
     ) == ("Музей: главный корпус", "museum")
     assert saved_visit_reference("Спокойная прогулка.") is None
     assert saved_visit_reference("Музей: посетить музей. Потом другое занятие.") is None
+
+
+@pytest.mark.parametrize("duration", [2, 30])
+def test_regeneration_preserves_complement_without_explicit_preserve_actions(duration):
+    parsed = analysis(
+        requires_regeneration=True,
+        regeneration_periods=[{"day": 2, "period": "afternoon"}],
+    )
+    prefs = TripPreferences(destination="Токио", duration_days=duration)
+    cells = preserved_cells(parsed, prefs, prefs)
+    assert len(cells) == duration * 3 - 1
+    assert (2, "afternoon") not in cells
+    assert {(1, "afternoon"), (2, "morning"), (2, "evening")} <= cells
+
+
+def test_general_generation_scope_can_have_explicit_preserved_exception():
+    parsed = analysis(
+        requires_regeneration=True,
+        regeneration_periods=[{"day": None, "period": "afternoon"}],
+        period_actions=[{"day": 1, "period": "afternoon", "action": "preserve"}],
+    )
+    prefs = TripPreferences(destination="Токио", duration_days=2)
+    assert regeneration_cells(parsed, 2) == {(1, "afternoon"), (2, "afternoon")}
+    assert len(preserved_cells(parsed, prefs, prefs)) == 5
+
+
+@pytest.mark.parametrize(
+    "defect", ["missing", "empty", "local", "duplicate", "wrong_day"]
+)
+def test_regeneration_scope_must_be_explicit_and_consistent(defect):
+    data = analysis().model_dump()
+    data.update(
+        requires_regeneration=defect != "local",
+        regeneration_periods=[
+            {"day": 3 if defect == "wrong_day" else 2, "period": "afternoon"}
+        ],
+    )
+    if defect == "missing":
+        data.pop("regeneration_periods")
+    elif defect == "empty":
+        data["regeneration_periods"] = []
+    elif defect == "duplicate":
+        data["regeneration_periods"] *= 2
+    with pytest.raises((ValidationError, ValueError)):
+        parsed = TripEditAnalysis.model_validate(data)
+        ai._validate_trip_edit_analysis(
+            analysis=parsed,
+            current_preferences=TripPreferences(destination="Токио", duration_days=2),
+            instruction="Во второй день днём замени музей. Остальное оставь.",
+        )
+
+
+@pytest.mark.asyncio
+async def test_empty_regeneration_scope_uses_existing_bounded_analysis_retry(
+    monkeypatch,
+):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[2]
+    valid = analysis(
+        requires_regeneration=True,
+        regeneration_periods=[{"day": 2, "period": "afternoon"}],
+    ).model_dump()
+    count = 0
+
+    def response(payload):
+        nonlocal count
+        count += 1
+        assert payload["response_format"]["json_schema"]["name"] == "trip_edit_analysis"
+        return {**valid, "regeneration_periods": []} if count == 1 else valid
+
+    requests = install_provider(monkeypatch, response)
+    parsed = await ai.analyze_trip_edit(
+        current_preferences=case.preferences,
+        current_plan=suite.plans[case.current_plan],
+        instruction=case.steps[0].user_message,
+    )
+    assert len(requests) == 2
+    assert regeneration_cells(parsed, 2) == {(2, "afternoon")}

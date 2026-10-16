@@ -94,6 +94,10 @@ def edit_analysis(
     return {
         "period_actions": [],
         "requires_regeneration": True,
+        "regeneration_periods": [
+            {"day": None, "period": period}
+            for period in ("morning", "afternoon", "evening")
+        ],
         "supported": supported,
         "interests_changed": supported,
         "interests": "Музеи" if supported else None,
@@ -380,6 +384,7 @@ async def test_local_rest_edit_persists_same_visits_without_generation(
         "interests_changed": False,
         "interests": None,
         "requires_regeneration": False,
+        "regeneration_periods": [],
     }
     case.model.replies.append(("trip_edit_analysis", parsed))
     response = await case.client.post(
@@ -425,6 +430,7 @@ async def test_unverifiable_local_edit_does_not_write_database(
                 "interests_changed": False,
                 "interests": None,
                 "requires_regeneration": False,
+                "regeneration_periods": [],
             },
         )
     )

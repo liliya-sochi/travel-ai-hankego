@@ -24,6 +24,7 @@ from app.services.trip import (
     TripEditUnsupportedError,
     TripService,
 )
+from scripts import evaluate_routes as evaluation
 
 
 def build_plan() -> TripPlanResponse:
@@ -123,6 +124,64 @@ class FakeTripRepository:
 
 
 @pytest.mark.asyncio
+async def test_scoped_generation_requests_fresh_preserved_visits_without_promoting_them(
+    monkeypatch,
+):
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[2]
+    old = suite.plans[case.current_plan]
+    session = FakeSession()
+    repository = FakeTripRepository(
+        preferences_data=case.preferences.model_dump(mode="json")
+    )
+    repository.trip.plan_data = old.model_dump(mode="json")
+    parsed = TripEditAnalysis(
+        supported=True,
+        interests_changed=False,
+        interests=None,
+        must_visit_places_changed=False,
+        must_visit_places=case.preferences.must_visit_places,
+        rest_period_changes=[],
+        period_actions=[],
+        requires_regeneration=True,
+        regeneration_periods=[{"day": 2, "period": "afternoon"}],
+    )
+
+    async def analyze(**_):
+        return parsed
+
+    async def generate(**arguments):
+        assert arguments["analysis"] == parsed
+        return old
+
+    class Enrichment:
+        async def enrich(self, preferences, *, preserved_place_names):
+            assert set(preserved_place_names) == {
+                "Art Aquarium Museum GINZA",
+                "Mitsuo Aida Museum",
+                "Тестовый музей 3",
+            }
+            assert preferences.must_visit_places == ["Art Aquarium Museum GINZA"]
+            return suite.contexts[case.context]
+
+    monkeypatch.setattr(trip_service_module, "analyze_trip_edit", analyze)
+    monkeypatch.setattr(trip_service_module, "generate_edited_trip_plan", generate)
+    service = TripService(session)  # type: ignore[arg-type]
+    service._user_repository = FakeUserRepository()
+    service._trip_repository = repository
+    await service.edit_trip_plan(
+        telegram_id=9000000001,
+        trip_id=7,
+        instruction=case.steps[0].user_message,
+        enrichment_service=Enrichment(),
+    )
+    assert repository.update_arguments["preferences_data"]["must_visit_places"] == [
+        "Art Aquarium Museum GINZA"
+    ]
+    assert session.commit_count == 1
+
+
+@pytest.mark.asyncio
 async def test_unrelated_edit_preserves_saved_rest_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -138,6 +197,10 @@ async def test_unrelated_edit_preserves_saved_rest_rules(
         return TripEditAnalysis(
             period_actions=[],
             requires_regeneration=True,
+            regeneration_periods=[
+                {"day": None, "period": period}
+                for period in ("morning", "afternoon", "evening")
+            ],
             supported=True,
             interests_changed=True,
             interests="Музеи",
@@ -184,6 +247,10 @@ async def test_rest_conflict_leaves_saved_trip_unchanged(
         return TripEditAnalysis(
             period_actions=[],
             requires_regeneration=True,
+            regeneration_periods=[
+                {"day": None, "period": period}
+                for period in ("morning", "afternoon", "evening")
+            ],
             supported=True,
             interests_changed=False,
             interests=None,
@@ -235,6 +302,10 @@ async def test_edit_rebuilds_context_and_saves_full_version(
     analysis = TripEditAnalysis(
         period_actions=[],
         requires_regeneration=True,
+        regeneration_periods=[
+            {"day": None, "period": period}
+            for period in ("morning", "afternoon", "evening")
+        ],
         supported=True,
         interests_changed=True,
         interests="Архитектура и музеи",
@@ -352,6 +423,10 @@ async def test_edit_rejects_destination_or_duration_change(
         return TripEditAnalysis(
             period_actions=[],
             requires_regeneration=True,
+            regeneration_periods=[
+                {"day": None, "period": period}
+                for period in ("morning", "afternoon", "evening")
+            ],
             supported=False,
             interests_changed=False,
             interests=None,

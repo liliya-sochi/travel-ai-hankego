@@ -145,6 +145,10 @@ async def test_rejected_edit_stops_after_analysis(
         return_value=TripEditAnalysis(
             period_actions=[],
             requires_regeneration=True,
+            regeneration_periods=[
+                {"day": None, "period": period}
+                for period in ("morning", "afternoon", "evening")
+            ],
             supported=supported,
             interests_changed=False,
             interests=None,
@@ -512,6 +516,10 @@ async def test_live_edit_path_updates_interests_and_uses_fixed_original_plan(
     analysis = {
         "period_actions": [],
         "requires_regeneration": True,
+        "regeneration_periods": [
+            {"day": None, "period": period}
+            for period in ("morning", "afternoon", "evening")
+        ],
         "supported": True,
         "interests_changed": True,
         "interests": "Музеи, вечером спокойный отдых",

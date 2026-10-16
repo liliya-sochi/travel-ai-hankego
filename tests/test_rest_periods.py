@@ -176,6 +176,10 @@ def test_conflicting_changes_for_same_scope_are_rejected() -> None:
         TripEditAnalysis(
             period_actions=[],
             requires_regeneration=True,
+            regeneration_periods=[
+                {"day": None, "period": period}
+                for period in ("morning", "afternoon", "evening")
+            ],
             supported=True,
             interests_changed=False,
             interests=None,
@@ -326,6 +330,10 @@ async def test_edit_analysis_and_generation_apply_rest_without_extra_calls(
     analysis_data = {
         "period_actions": [],
         "requires_regeneration": True,
+        "regeneration_periods": [
+            {"day": None, "period": period}
+            for period in ("morning", "afternoon", "evening")
+        ],
         "supported": True,
         "interests_changed": False,
         "interests": None,

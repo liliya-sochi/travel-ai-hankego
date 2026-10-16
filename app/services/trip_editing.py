@@ -53,21 +53,30 @@ def cancelled_rest_cells(
     }
 
 
+def regeneration_cells(analysis: TripEditAnalysis, duration: int) -> set[PeriodKey]:
+    """Разворачивает разрешённую область генерации, проверяя границы поездки."""
+
+    cells: set[PeriodKey] = set()
+    for item in analysis.regeneration_periods:
+        days = range(1, duration + 1) if item.day is None else [item.day]
+        for day in days:
+            if day > duration:
+                raise ValueError("Regeneration day exceeds trip duration.")
+            cells.add((day, item.period))
+    return cells
+
+
 def preserved_cells(
     analysis: TripEditAnalysis, current: TripPreferences, updated: TripPreferences
 ) -> set[PeriodKey]:
-    """В локальной правке сохраняет всё, кроме явно изменённых клеток."""
+    """Сохраняет все периоды вне разрешённой области генерации и локальной правки."""
 
     actions = period_action_map(analysis, updated.duration_days)
-    cells = (
-        set()
-        if analysis.requires_regeneration
-        else {
-            (day, period)
-            for day in range(1, updated.duration_days + 1)
-            for period in PERIODS
-        }
-    )
+    cells = {
+        (day, period)
+        for day in range(1, updated.duration_days + 1)
+        for period in PERIODS
+    } - regeneration_cells(analysis, updated.duration_days)
     cells -= cancelled_rest_cells(current, updated)
     for cell, action in actions.items():
         if action == "preserve":

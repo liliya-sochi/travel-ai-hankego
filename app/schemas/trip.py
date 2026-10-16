@@ -404,6 +404,22 @@ class TripEditAnalysis(StrictSchema):
     requires_regeneration: bool = Field(
         description="Нужна ли генерация для изменений, не покрытых отдыхом и period_actions.",
     )
+    regeneration_periods: list[TripPeriodScope] = Field(
+        max_length=90,
+        description=(
+            "Только периоды, которые разрешено изменить генератору; "
+            "day=null — все дни. [] без генерации. Остальные периоды сохраняются."
+        ),
+    )
+
+    @field_validator("regeneration_periods")
+    @classmethod
+    def validate_regeneration_periods(
+        cls, periods: list[TripPeriodScope]
+    ) -> list[TripPeriodScope]:
+        if len({(item.day, item.period) for item in periods}) != len(periods):
+            raise ValueError("Периоды генерации не должны повторяться.")
+        return periods
 
     @field_validator("period_actions")
     @classmethod
@@ -416,6 +432,10 @@ class TripEditAnalysis(StrictSchema):
 
     @model_validator(mode="after")
     def validate_local_edit(self) -> Self:
+        if self.supported and self.requires_regeneration != bool(
+            self.regeneration_periods
+        ):
+            raise ValueError("Режим генерации должен соответствовать её периодам.")
         if not self.requires_regeneration and (
             self.interests_changed or self.must_visit_places_changed
         ):
