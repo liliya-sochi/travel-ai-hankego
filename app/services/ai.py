@@ -57,6 +57,7 @@ from app.services.trip_editing import (
     PreservedActivityUnavailableError,
     period_action_map,
     preserved_cells,
+    regeneration_cells,
     requires_full_generation,
     resolve_preserved_activities,
 )
@@ -368,8 +369,19 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
 - «во второй день утром и днём ничего не меняй» — два preserve с day=2;
 - «второй вечер вместо отдыха спокойная прогулка» — quiet_walk с day=2,
   period=evening и rest=false для этого же периода в rest_period_changes;
-- «остальные активности оставь» не требует перечислять их, если
-  requires_regeneration=false: приложение сохраняет все незатронутые периоды;
+- regeneration_periods содержит ТОЛЬКО периоды, которые инструкция разрешает
+  изменить генератору. Все остальные периоды приложение сохраняет само,
+  даже при requires_regeneration=true и period_actions=[];
+- «во второй день днём замени музей на другой поблизости, остальное оставь»:
+  requires_regeneration=true, regeneration_periods=[{"day":2,"period":"afternoon"}],
+  interests_changed=false; названия нового музея нет — must_visit_places не меняй;
+- не расширяй область генерации из-за слов «остальное оставь»:
+  это просьба сохранить все периоды за пределами явно изменяемых;
+- если меняются все утренние посещения, верни morning с day=null;
+  если меняются темы всего маршрута или нужен другой вариант целиком,
+  разреши все три периода с day=null; явно сохраняемые периоды отметь preserve;
+- requires_regeneration=true требует непустого regeneration_periods;
+  requires_regeneration=false требует regeneration_periods=[];
 - requires_regeneration=false только если ВСЯ инструкция сводится к
   сохранению активностей, добавлению/отмене отдыха и спокойной прогулке;
 - любой выбор/замена/перенос места, другой тип общей активности, другой вариант
@@ -394,6 +406,9 @@ EDIT_ANALYSIS_RETRY_PROMPT = """
 - не удаляй прежнее обязательное место, если оно не названо
   в edit_instruction;
 - верни rest_period_changes только для явно затронутых периодов отдыха;
+- верни regeneration_periods только для периодов, которые разрешено изменить;
+- при requires_regeneration=true область генерации не может быть пустой;
+- при requires_regeneration=false верни regeneration_periods=[];
 - номер дня отдыха не может превышать current_preferences.duration_days;
 - не меняй правила отдыха, которые не затронуты edit_instruction;
 - не добавляй неизвестные поля и обычный текст.
@@ -1535,6 +1550,7 @@ def _validate_trip_edit_analysis(
         ):
             raise ValueError("LLM returned a rest day outside the trip.")
         period_action_map(analysis, current_preferences.duration_days)
+        regeneration_cells(analysis, current_preferences.duration_days)
 
     for index, place_name in enumerate(returned_places):
         if _place_name_matches_any(place_name, returned_places[:index]):
@@ -3037,6 +3053,12 @@ async def analyze_trip_edit(
                 "Trip edit period actions parsed | action_count=%s | requires_regeneration=%s",
                 len(analysis.period_actions),
                 analysis.requires_regeneration,
+            )
+            logger.info(
+                "Trip edit regeneration scope parsed | period_count=%s",
+                len(regeneration_cells(analysis, current_preferences.duration_days))
+                if analysis.supported
+                else 0,
             )
             return analysis
 

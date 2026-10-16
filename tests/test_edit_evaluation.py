@@ -37,14 +37,16 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
     requests: list[dict[str, Any]] = []
     turn = 0
+    replacement_mode = False
 
     async def request(**arguments: Any) -> ai.LLMProviderResponse:
-        nonlocal turn
+        nonlocal turn, replacement_mode
         payload = arguments["payload"]
         incoming = json.loads(payload["messages"][1]["content"])
         requests.append(incoming)
         if "current_preferences" in incoming:
             turn += 1
+            replacement_mode = "замени музей" in incoming["edit_instruction"]
             duration = incoming["current_preferences"]["duration_days"]
             stage = (turn - 1) % 3
             changes = (
@@ -61,6 +63,10 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             content = {
                 "period_actions": [],
                 "requires_regeneration": True,
+                "regeneration_periods": [
+                    {"day": None, "period": period}
+                    for period in ("morning", "afternoon", "evening")
+                ],
                 "supported": True,
                 "interests_changed": True,
                 "interests": f"Музеи; фактическая метка {turn}",
@@ -70,6 +76,13 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                 ],
                 "rest_period_changes": changes,
             }
+            if replacement_mode:
+                content.update(
+                    interests_changed=False,
+                    interests=None,
+                    rest_period_changes=[],
+                    regeneration_periods=[{"day": 2, "period": "afternoon"}],
+                )
         else:
             duration = incoming["trip_preferences"]["duration_days"]
             places = incoming["travel_context"]["places"]
@@ -80,6 +93,8 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                 "Тестовый музей 3",
                 "Тестовый музей 4",
             ]
+            if replacement_mode:
+                names[-1] = "Тестовый музей 5"
 
             def visit(index: int) -> dict[str, Any]:
                 place = by_name[names[index]]
@@ -116,6 +131,10 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                     for day in range(1, duration + 1)
                 ],
             }
+            if replacement_mode:
+                for day in content["days"]:
+                    day["afternoon"] = day["afternoon"][:1]
+                content["days"][0]["afternoon"][0]["activity_focus"] = "architecture"
         return ai.LLMProviderResponse(
             data={
                 "model": payload["model"],
@@ -148,12 +167,13 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return requests
 
 
-def test_edit_corpus_has_two_independent_three_step_cycles(suite) -> None:
+def test_edit_corpus_has_rest_cycles_and_scoped_replacement(suite) -> None:
     assert [case.id for case in suite.cases] == [
         "tokyo_rest_edit_cycle",
         "tokyo_rest_second_day",
+        "tokyo_replace_second_afternoon",
     ]
-    assert [len(case.steps) for case in suite.cases] == [3, 3]
+    assert [len(case.steps) for case in suite.cases] == [3, 3, 1]
     assert suite.contexts["tokyo_museums"].fetched_at.tzinfo is not None
 
 
@@ -243,6 +263,10 @@ async def test_bad_analysis_stops_before_generation_and_next_step(
     analysis = TripEditAnalysis(
         period_actions=[],
         requires_regeneration=True,
+        regeneration_periods=[
+            {"day": None, "period": period}
+            for period in ("morning", "afternoon", "evening")
+        ],
         supported=supported,
         interests_changed=False,
         interests=None,
@@ -273,6 +297,10 @@ async def test_second_step_failure_keeps_first_actual_result_and_private_error_h
             TripEditAnalysis(
                 period_actions=[],
                 requires_regeneration=True,
+                regeneration_periods=[
+                    {"day": None, "period": period}
+                    for period in ("morning", "afternoon", "evening")
+                ],
                 supported=True,
                 interests_changed=False,
                 interests=None,
@@ -314,6 +342,10 @@ async def test_merged_preferences_are_checked_independently_before_generation(
     analysis = TripEditAnalysis(
         period_actions=[],
         requires_regeneration=True,
+        regeneration_periods=[
+            {"day": None, "period": period}
+            for period in ("morning", "afternoon", "evening")
+        ],
         supported=True,
         interests_changed=False,
         interests=None,
@@ -415,11 +447,11 @@ def test_live_edit_cli_reports_all_turns_and_interval(
     )
     report = json.loads(path.read_text(encoding="utf-8"))
     assert report["completed"]
-    assert report["planned_runs"] == 2 and report["planned_messages"] == 6
-    assert report["summary"] == {"passed": 2}
-    assert len(requests) == 12
-    assert pauses == [65] * 5
-    assert all(len(row["steps"]) == 3 for row in report["results"])
+    assert report["planned_runs"] == 3 and report["planned_messages"] == 7
+    assert report["summary"] == {"passed": 3}
+    assert len(requests) == 14
+    assert pauses == [65] * 6
+    assert [len(row["steps"]) for row in report["results"]] == [3, 3, 1]
     assert "fixture-secret" not in path.read_text(encoding="utf-8")
 
 
@@ -444,3 +476,63 @@ def test_quota_diagnostics_accept_only_numbers_and_drop_private_fields() -> None
     assert "provider_tokens_remaining" not in collector.calls[0]
     assert "retry_after_ms" not in collector.calls[0]
     assert "sentinel-secret" not in json.dumps(collector.calls)
+
+
+@pytest.mark.asyncio
+async def test_scoped_replacement_preserves_focus_and_general_periods(
+    suite, monkeypatch
+):
+    requests = mock_provider(monkeypatch)
+    case = suite.cases[2]
+    result = await evaluation.evaluate_case(case, suite)
+    assert result["status"] == "passed", result
+    assert len(requests) == len(result["calls"]) == 2
+    assert not result["retry_used"]
+    turn = result["steps"][0]
+    assert turn["analysis"]["period_actions"] == []
+    assert turn["checks"]["regeneration_scope"]
+    assert turn["checks"]["preserved_focus:1:afternoon"]
+    assert turn["checks"]["replacement:2:afternoon"]
+    assert turn["plan"]["days"][1]["afternoon"][0].startswith("Тестовый музей 5:")
+    for old, new in zip(turn["input_plan"]["days"], turn["plan"]["days"], strict=True):
+        assert old["evening"] == new["evening"]
+    assert {
+        (item["day"], item["period"]) for item in requests[1]["preserved_periods"]
+    } == {
+        (1, "morning"),
+        (1, "afternoon"),
+        (1, "evening"),
+        (2, "morning"),
+        (2, "evening"),
+    }
+
+
+def test_replacement_eval_detects_unchanged_target_and_changed_preserved_focus(suite):
+    case = suite.cases[2]
+    plan = suite.plans[case.current_plan].model_copy(deep=True)
+    plan.days[0].afternoon = ["Mitsuo Aida Museum: осмотреть архитектурный объект."]
+    checks = evaluation.assess_edit_periods(
+        plan, case, case.steps[0].expectations, suite.contexts[case.context]
+    )
+    assert checks["preserved:1:afternoon"]
+    assert not checks["preserved_focus:1:afternoon"]
+    assert not checks["replacement:2:afternoon"]
+
+
+@pytest.mark.parametrize(
+    "defect", ["scope_day", "scope_duplicate", "unknown_id", "preserved_conflict"]
+)
+def test_invalid_scoped_replacement_corpus_is_rejected(suite, defect):
+    data = suite.model_dump(mode="json")
+    case = data["cases"][2]
+    expected = case["steps"][0]["expectations"]
+    if defect == "scope_day":
+        expected["regeneration_periods"][0]["day"] = 3
+    elif defect == "scope_duplicate":
+        expected["regeneration_periods"] *= 2
+    elif defect == "unknown_id":
+        expected["replacement_visits"][0]["place_ids"] = ["unknown"]
+    else:
+        expected["replacement_visits"][0]["period"] = "morning"
+    with pytest.raises(ValueError):
+        evaluation.EditEvaluationSuite.model_validate_json(json.dumps(data))

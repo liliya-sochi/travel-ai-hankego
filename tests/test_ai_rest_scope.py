@@ -189,6 +189,10 @@ async def test_edit_eval_retries_scope_error_and_keeps_actual_state(
             content = {
                 "period_actions": [],
                 "requires_regeneration": True,
+                "regeneration_periods": [
+                    {"day": None, "period": period}
+                    for period in ("morning", "afternoon", "evening")
+                ],
                 "supported": True,
                 "interests_changed": False,
                 "interests": None,

@@ -15,6 +15,7 @@ import logging
 import math
 import platform
 from collections import Counter
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from itertools import combinations
 from pathlib import Path
@@ -25,7 +26,11 @@ from pydantic import Field, ValidationError, model_validator
 
 from app.config import get_settings
 from app.schemas.geoapify import PlaceCandidate, TravelContext
-from app.schemas.grounded_trip import REST_PERIOD_DESCRIPTION
+from app.schemas.grounded_trip import (
+    ACTIVITY_FOCUS_DESCRIPTIONS,
+    REST_PERIOD_DESCRIPTION,
+    GroundedActivityFocus,
+)
 from app.schemas.trip import (
     RequiredTripField,
     RestPeriod,
@@ -36,6 +41,7 @@ from app.schemas.trip import (
     TripEditAnalysis,
     TripIntakeResponse,
     TripIntent,
+    TripPeriodScope,
     TripPlanResponse,
     TripPreferences,
 )
@@ -214,11 +220,12 @@ def load_intake_suite() -> IntakeEvaluationSuite:
 
 
 class EditPeriodVisits(StrictSchema):
-    """Конкретные посещения, которые инструкция просит сохранить в периоде."""
+    """Ожидаемые посещения периода и необязательная проверка типа действия."""
 
     day: int = Field(ge=1, le=30)
     period: TripDayPeriod
     place_ids: list[str] = Field(min_length=1, max_length=2)
+    activity_focus: GroundedActivityFocus | None = None
 
 
 class EditPeriodTerms(StrictSchema):
@@ -242,6 +249,8 @@ class EditExpectations(StrictSchema):
     rest_period_changes: list[RestPeriodChange]
     rest_periods: list[RestPeriod]
     general_activities: list[EditPeriodTerms] = Field(default_factory=list)
+    regeneration_periods: list[TripPeriodScope] | None = None
+    replacement_visits: list[EditPeriodVisits] = Field(default_factory=list)
 
 
 class EditStep(StrictSchema):
@@ -251,7 +260,9 @@ class EditStep(StrictSchema):
     expectations: EditExpectations
 
 
-def expanded_rest_rules(rules: list[RestPeriod], duration: int) -> set[tuple[int, str]]:
+def expanded_period_scopes(
+    rules: Sequence[TripPeriodScope], duration: int
+) -> set[tuple[int, str]]:
     """Сравнивает смысл правил независимо от общей или подневной записи."""
 
     return {
@@ -292,12 +303,24 @@ class EditEvaluationCase(StrictSchema):
             raise ValueError("Проверки сохранения периодов не должны повторяться.")
         if any(day > duration for day, _ in scopes):
             raise ValueError("Период сохранения вне поездки.")
-        state = expanded_rest_rules(self.preferences.rest_periods, duration)
+        state = expanded_period_scopes(self.preferences.rest_periods, duration)
         for step in self.steps:
             expected = step.expectations
+            if expected.regeneration_periods is not None:
+                keys = [
+                    (rule.day, rule.period) for rule in expected.regeneration_periods
+                ]
+                if len(keys) != len(set(keys)) or any(
+                    day is not None and day > duration for day, _ in keys
+                ):
+                    raise ValueError("Некорректная ожидаемая область генерации.")
             TripEditAnalysis(
                 period_actions=[],
                 requires_regeneration=True,
+                regeneration_periods=[
+                    {"day": None, "period": period}
+                    for period in ("morning", "afternoon", "evening")
+                ],
                 supported=True,
                 interests_changed=False,
                 interests=None,
@@ -320,7 +343,7 @@ class EditEvaluationCase(StrictSchema):
                     state.add(cell)
                 else:
                     state.discard(cell)
-            if state != expanded_rest_rules(expected.rest_periods, duration):
+            if state != expanded_period_scopes(expected.rest_periods, duration):
                 raise ValueError("Ожидаемые изменения и правила отдыха противоречат.")
             if state.intersection(scopes):
                 raise ValueError("Отдых конфликтует с сохранением посещения.")
@@ -332,6 +355,17 @@ class EditEvaluationCase(StrictSchema):
                 for day, period in text_scopes
             ):
                 raise ValueError("Некорректная проверка общей активности.")
+            replacement_scopes = [
+                (visit.day, visit.period) for visit in expected.replacement_visits
+            ]
+            if len(replacement_scopes) != len(set(replacement_scopes)) or any(
+                day > duration
+                or (day, period) in state
+                or (day, period) in scopes
+                or (day, period) in text_scopes
+                for day, period in replacement_scopes
+            ):
+                raise ValueError("Некорректная проверка заменяемых посещений.")
         return self
 
 
@@ -369,7 +403,14 @@ class EditEvaluationSuite(StrictSchema):
             if any(
                 len(visit.place_ids) != len(set(visit.place_ids))
                 or not set(visit.place_ids).issubset(available)
-                for visit in case.preserved_visits
+                for visit in [
+                    *case.preserved_visits,
+                    *(
+                        visit
+                        for step in case.steps
+                        for visit in step.expectations.replacement_visits
+                    ),
+                ]
             ):
                 raise ValueError("Неверные ID сохраняемых посещений.")
         return self
@@ -596,7 +637,28 @@ def assess_edit_periods(
         checks[f"preserved:{visit.day}:{visit.period}"] = [
             place.source_place_id for place in actual
         ] == visit.place_ids
-    reserved = expanded_rest_rules(
+    for kind, visits in (
+        ("preserved", case.preserved_visits),
+        ("replacement", expected.replacement_visits),
+    ):
+        for visit in visits:
+            lines = activities(visit.day, visit.period)
+            places = selected_places(lines, context)
+            if kind == "replacement":
+                checks[f"replacement:{visit.day}:{visit.period}"] = [
+                    place.source_place_id for place in places
+                ] == visit.place_ids
+            if visit.activity_focus is not None:
+                checks[f"{kind}_focus:{visit.day}:{visit.period}"] = len(lines) == len(
+                    places
+                ) == len(visit.place_ids) and all(
+                    line.startswith(
+                        f"{place.display_name}: "
+                        f"{ACTIVITY_FOCUS_DESCRIPTIONS[visit.activity_focus]}."
+                    )
+                    for line, place in zip(lines, places, strict=True)
+                )
+    reserved = expanded_period_scopes(
         expected.rest_periods, case.preferences.duration_days
     )
     for day, period in sorted(reserved):
@@ -678,6 +740,14 @@ async def evaluate_edit_dialogue(
                     step.expectations.rest_period_changes, preferences.duration_days
                 ),
             }
+            expected_scope = step.expectations.regeneration_periods
+            if expected_scope is not None:
+                turn["checks"]["regeneration_scope"] = expanded_period_scopes(
+                    analysis.regeneration_periods, preferences.duration_days
+                ) == expanded_period_scopes(expected_scope, preferences.duration_days)
+                turn["checks"]["regeneration_required"] = (
+                    analysis.requires_regeneration == bool(expected_scope)
+                )
             if not record_checks(turn):
                 return finish_checks(result)
             try:
@@ -687,9 +757,9 @@ async def evaluate_edit_dialogue(
                 record_checks(turn)
                 return finish_checks(result)
             turn["updated_preferences"] = updated.model_dump(mode="json")
-            turn["checks"]["rest_preferences"] = expanded_rest_rules(
+            turn["checks"]["rest_preferences"] = expanded_period_scopes(
                 updated.rest_periods, preferences.duration_days
-            ) == expanded_rest_rules(
+            ) == expanded_period_scopes(
                 step.expectations.rest_periods, preferences.duration_days
             )
             turn["checks"]["required_preferences"] = Counter(

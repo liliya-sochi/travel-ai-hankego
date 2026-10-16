@@ -60,6 +60,77 @@
       ],
       "fetched_at": "2026-10-14T00:00:00Z",
       "attribution": "Evaluation fixture: coordinates, IDs, addresses and opening hours are synthetic; not travel advice."
+    },
+    "tokyo_museums_replacement": {
+      "location": {
+        "formatted_name": "Токио",
+        "latitude": 35.68,
+        "longitude": 139.76,
+        "source_place_id": "eval-edit-tokyo"
+      },
+      "requested_categories": [
+        "entertainment.museum"
+      ],
+      "places": [
+        {
+          "name": "Art Aquarium Museum GINZA",
+          "source_place_id": "eval-edit-aquarium",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.68,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Mitsuo Aida Museum",
+          "source_place_id": "eval-edit-aida",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.681,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum",
+            "building.tourism"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Тестовый музей 3",
+          "source_place_id": "eval-edit-museum-3",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.682,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Тестовый музей 4",
+          "source_place_id": "eval-edit-museum-4",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.683,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Тестовый музей 5",
+          "source_place_id": "eval-edit-museum-5",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.684,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        }
+      ],
+      "fetched_at": "2026-10-14T00:00:00Z",
+      "attribution": "Evaluation fixture: coordinates, IDs, addresses and opening hours are synthetic; not travel advice."
     }
   },
   "plans": {
@@ -338,6 +409,93 @@
                 "period": "evening",
                 "contains": [
                   "прогул"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "tokyo_replace_second_afternoon",
+      "kind": "edit_dialogue",
+      "preferences": {
+        "destination": "Токио",
+        "duration_days": 2,
+        "interests": "Музеи; вечером спокойная прогулка",
+        "must_visit_places": [
+          "Art Aquarium Museum GINZA"
+        ]
+      },
+      "context": "tokyo_museums_replacement",
+      "current_plan": "tokyo_2_days",
+      "preserved_visits": [
+        {
+          "day": 1,
+          "period": "morning",
+          "place_ids": [
+            "eval-edit-aquarium"
+          ],
+          "activity_focus": "museum"
+        },
+        {
+          "day": 1,
+          "period": "afternoon",
+          "place_ids": [
+            "eval-edit-aida"
+          ],
+          "activity_focus": "museum"
+        },
+        {
+          "day": 2,
+          "period": "morning",
+          "place_ids": [
+            "eval-edit-museum-3"
+          ],
+          "activity_focus": "museum"
+        }
+      ],
+      "steps": [
+        {
+          "user_message": "Во второй день днём замени музей на другой музей поблизости. Все остальные активности оставь без изменений.",
+          "expectations": {
+            "rest_period_changes": [],
+            "rest_periods": [],
+            "regeneration_periods": [
+              {
+                "day": 2,
+                "period": "afternoon"
+              }
+            ],
+            "replacement_visits": [
+              {
+                "day": 2,
+                "period": "afternoon",
+                "place_ids": [
+                  "eval-edit-museum-5"
+                ],
+                "activity_focus": "museum"
+              }
+            ],
+            "general_activities": [
+              {
+                "day": 1,
+                "period": "evening",
+                "contains": [
+                  "спокойная прогулка"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              },
+              {
+                "day": 2,
+                "period": "evening",
+                "contains": [
+                  "спокойная прогулка"
                 ],
                 "excludes": [
                   "отдых"

@@ -146,20 +146,26 @@ Redis is used for:
   Canonical quiet rest (ignoring case, spacing and final punctuation) newly added
   outside reserved periods, or retained after cancellation, fails validation with
   `unexpected_rest_period` and uses the existing bounded semantic retry. Previously
-  saved optional quiet rest outside structured rules remains allowed. No old visit
-  text is copied into the new plan; all places still require fresh validation.
+  saved optional quiet rest outside structured rules remains allowed. Old provider
+  facts are not copied into the new plan; all visits still require fresh validation.
   Other general descriptions are not classified semantically as rest by this guard;
 - fully reserved rest-only plans are built and validated locally without a
   generation-model call, including long trips; edit analysis still parses the
   instruction before these preferences are applied;
 - edit analysis includes scoped `period_actions` (`preserve` or `quiet_walk`)
-  and `requires_regeneration`. When the whole request consists of keeping
+  and `requires_regeneration`, plus required `regeneration_periods`. The latter
+  lists only periods the generator may change (`day=null` covers all days).
+  It must be non-empty when regeneration is required and empty for local edits;
+  duplicate scopes and days outside the trip are rejected. When the request consists of keeping
   activities, changing rest rules and calm walks, Python applies it locally
   after the analysis call. Cancellation without a replacement activity still
   uses generation; changed interests, required places and other edits do too.
   This reduces generation-model requests, without changing provider retry limits;
-- periods explicitly marked `preserve` are enforced even during full generation.
-  Local edits also preserve every untouched period. Saved visit names and focuses
+- periods outside `regeneration_periods` are preserved even during full generation,
+  including requests such as "replace the second afternoon's museum; keep everything
+  else" with no individual `preserve` actions. Explicit `preserve` actions can also
+  protect an exception inside a broader generation scope. Local edits preserve
+  every untouched period. Saved visit names and focuses
   are extracted only from the known formatter layout, resolved unambiguously in
   fresh candidates and checked for category and available period. Old hours,
   addresses and links are discarded; formatting uses the current candidate.
@@ -170,7 +176,8 @@ Redis is used for:
   Missing, ambiguous or incompatible visits fail before a DB write; the service
   does not silently replace them. This is an internal analysis-schema change,
   with no public API or storage migration;
-- logs report `Trip edit period actions parsed`, `Trip edit applied locally` and
+- logs report `Trip edit period actions parsed`, `Trip edit regeneration scope parsed`,
+  `Trip edit applied locally` and
   `Grounded edit periods applied`, using only mode flags and counts. Edit-eval
   reports retain the analysis and actual call list; check both to distinguish
   local execution from regeneration. Natural-language classification can still
@@ -519,7 +526,13 @@ Start with one three-step dialogue against the configured models:
 python -m scripts.evaluate_routes --suite edits --live --case tokyo_rest_edit_cycle --repeat 1
 ```
 
-Run both dialogues explicitly, with a new report path:
+Check one scoped replacement with full generation:
+
+```bash
+python -m scripts.evaluate_routes --suite edits --live --case tokyo_replace_second_afternoon --repeat 1
+```
+
+Run the complete corpus explicitly, with a new report path:
 
 ```bash
 python -m scripts.evaluate_routes --suite edits --live --case all --repeat 1 --output evals/results/rest-edit-baseline.json
@@ -527,7 +540,12 @@ python -m scripts.evaluate_routes --suite edits --live --case all --repeat 1 --o
 
 `evals/edit_cases.json` contains two independent dialogues with three edits each:
 adding evening rest, preserving it during an unrelated edit, and cancelling it;
-the second dialogue reserves only the second day's evening. All coordinates,
+the second dialogue reserves only the second day's evening. A separate one-turn
+case replaces only the second afternoon's museum. It independently checks the
+analysis generation scope, the replacement venue, and both the IDs and activity
+focuses of preserved visits. The extra candidate is available only in this case's
+own context. The two evening walks must still pass the general-activity checks.
+All coordinates,
 IDs, addresses, and opening hours are synthetic. Venue names are fixture labels,
 not assertions about currently available museums.
 
@@ -544,8 +562,9 @@ establish semantic equivalence, calm pacing, or overall itinerary appeal.
 The dialogue stops on its first failed criterion or service error. Reports retain
 completed turns and the failed turn's available analysis and metadata. They include
 actual input/output states, per-turn calls, safe numeric quota diagnostics, and
-`planned_messages`. A successful dialogue normally uses six LLM calls; existing
-bounded retries can increase that count. The configured interval applies between
+`planned_messages`. The rest cycles can run locally with three analysis calls
+each; the replacement case needs analysis and generation. Existing bounded retries
+can increase these counts. The configured interval applies between
 turns as well as between dialogues (65 seconds by default). As with other corpora,
 only completed case results are written to disk; interruption mid-dialogue does
 not provide resumable state. No database persistence or Telegram FSM is exercised.
