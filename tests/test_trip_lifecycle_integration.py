@@ -93,6 +93,7 @@ def edit_analysis(
 
     return {
         "period_actions": [],
+        "place_replacements": [],
         "requires_regeneration": True,
         "regeneration_periods": [
             {"day": None, "period": period}
@@ -540,4 +541,70 @@ async def test_other_user_cannot_read_or_edit_saved_trip(
     assert await stored_state(database_session, trip_id) == before
     assert len(case.context.calls) == 1
     assert case.model.calls == ["trip_plan"]
+    assert not case.model.replies
+
+
+@pytest.mark.parametrize("replacement_succeeds", [False, True])
+async def test_visit_replacement_never_saves_unchanged_target(
+    lifecycle_case: LifecycleCase,
+    database_session: AsyncSession,
+    replacement_succeeds: bool,
+) -> None:
+    """Реальная БД принимает только выполненную замену после ограниченной проверки."""
+
+    case = lifecycle_case
+    created = await case.create()
+    trip_id = created["trip_id"]
+    before = await stored_state(database_session, trip_id)
+    parsed = {
+        **edit_analysis(change_rest=False),
+        "interests_changed": False,
+        "interests": None,
+        "regeneration_periods": [{"day": 1, "period": "afternoon"}],
+        "place_replacements": [
+            {"day": 1, "period": "afternoon", "place_name": "Тестовый дневной парк"}
+        ],
+    }
+    replacement = grounded_plan()
+    replacement["days"][0]["afternoon"] = [
+        {
+            "source_place_id": "second-museum",
+            "place_name": "Тестовый музей",
+            "activity_focus": "museum",
+            "description": None,
+        }
+    ]
+    case.model.replies.extend(
+        [
+            ("trip_edit_analysis", parsed),
+            ("trip_plan", grounded_plan()),
+            ("trip_plan", replacement if replacement_succeeds else grounded_plan()),
+        ]
+    )
+    response = await case.client.post(
+        "/api/v1/trip-edit",
+        json={
+            "telegram_id": OWNER_ID,
+            "trip_id": trip_id,
+            "instruction": "Днём замени парк на музей. Все остальные активности оставь.",
+        },
+    )
+    assert response.status_code == (200 if replacement_succeeds else 502), response.text
+    after = await stored_state(database_session, trip_id)
+    assert after[1:] == before[1:]
+    if replacement_succeeds:
+        assert after[0]["days"][0]["afternoon"][0].startswith(
+            "Тестовый музей: посетить музей."
+        )
+        for period in ("morning", "evening"):
+            assert after[0]["days"][0][period] == before[0]["days"][0][period]
+    else:
+        assert after == before
+    assert (await case.details(trip_id))["days"] == after[0]["days"]
+    assert case.model.calls == [
+        "trip_plan",
+        "trip_edit_analysis",
+        "trip_plan",
+        "trip_plan",
+    ]
     assert not case.model.replies

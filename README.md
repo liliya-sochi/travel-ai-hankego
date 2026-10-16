@@ -170,6 +170,22 @@ Redis is used for:
   fresh candidates and checked for category and available period. Old hours,
   addresses and links are discarded; formatting uses the current candidate.
   General activities remain text rather than proof of a concrete visit;
+- edit analysis also returns required `place_replacements`: the previous visit's
+  day, period and name for explicit requests to choose a different venue. These
+  names must identify actual saved visits inside the generation scope and cannot
+  conflict with a preserve/walk action. They are not promoted to required places;
+  the field is empty for rest, keep-only requests, changed descriptions and broad
+  theme changes without specific replacements;
+- replacement names are resolved against current candidates. Obsolete IDs are
+  removed from the generation context and its request-scoped ID enum, except IDs
+  still needed by required or preserved visits. The final validator always rejects
+  the old ID in the replacement period and requires new concrete visits there;
+  a changed description or a general activity cannot substitute for a new venue.
+  A rejected response uses the existing bounded semantic retry and reason
+  `unfulfilled_place_replacement`, without increasing retry budgets. If no unused
+  available alternative can be confirmed, generation is skipped and the saved
+  route remains intact. An old venue absent from fresh candidates does not prevent
+  selecting a new one. Changes stay internal: no public API or DB migration;
 - names of preserved visits are supplied temporarily to enrichment, including
   bounded lookup for missing places. They are protected from candidate filtering
   and are not added to persisted `must_visit_places` or the base Redis cache.
@@ -177,6 +193,7 @@ Redis is used for:
   does not silently replace them. This is an internal analysis-schema change,
   with no public API or storage migration;
 - logs report `Trip edit period actions parsed`, `Trip edit regeneration scope parsed`,
+  `Trip edit place replacements parsed`, `Grounded edit replacements checked`,
   `Trip edit applied locally` and
   `Grounded edit periods applied`, using only mode flags and counts. Edit-eval
   reports retain the analysis and actual call list; check both to distinguish
@@ -545,6 +562,8 @@ case replaces only the second afternoon's museum. It independently checks the
 analysis generation scope, the replacement venue, and both the IDs and activity
 focuses of preserved visits. The extra candidate is available only in this case's
 own context. The two evening walks must still pass the general-activity checks.
+The runner also checks that analysis explicitly declares the replacement period;
+its expected venue IDs are used only for evaluation, never as generation input.
 All coordinates,
 IDs, addresses, and opening hours are synthetic. Venue names are fixture labels,
 not assertions about currently available museums.

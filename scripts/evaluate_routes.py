@@ -316,6 +316,7 @@ class EditEvaluationCase(StrictSchema):
                     raise ValueError("Некорректная ожидаемая область генерации.")
             TripEditAnalysis(
                 period_actions=[],
+                place_replacements=[],
                 requires_regeneration=True,
                 regeneration_periods=[
                     {"day": None, "period": period}
@@ -748,6 +749,13 @@ async def evaluate_edit_dialogue(
                 turn["checks"]["regeneration_required"] = (
                     analysis.requires_regeneration == bool(expected_scope)
                 )
+            if step.expectations.replacement_visits:
+                turn["checks"]["replacement_requests"] = {
+                    (item.day, item.period) for item in analysis.place_replacements
+                } == {
+                    (item.day, item.period)
+                    for item in step.expectations.replacement_visits
+                }
             if not record_checks(turn):
                 return finish_checks(result)
             try:
