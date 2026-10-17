@@ -7,13 +7,16 @@ from app.schemas.grounded_trip import (
     ACTIVITY_FOCUS_DESCRIPTIONS,
     GroundedActivity,
     GroundedActivityFocus,
+    get_supported_activity_focuses,
 )
 from app.schemas.trip import (
     TripDayPeriod,
     TripEditAnalysis,
+    TripPlaceReplacement,
     TripPlanResponse,
     TripPreferences,
 )
+from app.services.place_geography import calculate_distance_meters
 from app.services.place_matching import (
     normalize_place_name,
     required_place_name_matches,
@@ -22,6 +25,16 @@ from app.services.place_matching import (
 PERIODS: tuple[TripDayPeriod, ...] = ("morning", "afternoon", "evening")
 QUIET_WALK_DESCRIPTION = "Спокойная прогулка."
 PeriodKey = tuple[int, TripDayPeriod]
+MAX_NEARBY_REPLACEMENT_DISTANCE_METERS = 2_000
+
+
+@dataclass(frozen=True)
+class ReplacementVisitRequirement:
+    """Проверенные кандидаты для одного нового посещения и его запрошенный фокус."""
+
+    activity_focus: GroundedActivityFocus | None
+    nearby: bool
+    allowed_ids: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -31,6 +44,24 @@ class VisitReplacementConstraint:
     excluded_ids: frozenset[str]
     previous_ids: frozenset[str]
     minimum_new_visits: int
+    requirements: tuple[ReplacementVisitRequirement, ...]
+
+
+class ReplacementReferenceUnavailableError(ValueError):
+    """Свежие координаты прежнего места не удалось определить однозначно."""
+
+
+def distinct_replacement_choices(choices: list[set[str]]) -> bool:
+    """Проверяет, что для каждой замены есть своё подходящее новое место."""
+
+    def assign(index: int, used: set[str]) -> bool:
+        if index == len(choices):
+            return True
+        return any(
+            assign(index + 1, used | {place_id}) for place_id in choices[index] - used
+        )
+
+    return assign(0, set())
 
 
 class PreservedActivityUnavailableError(ValueError):
@@ -149,14 +180,15 @@ def preserved_place_names(plan: TripPlanResponse, cells: set[PeriodKey]) -> list
     return list(names.values())
 
 
-def replacement_visit_names(
+def _saved_replacement_requests(
     plan: TripPlanResponse, analysis: TripEditAnalysis
-) -> dict[PeriodKey, set[str]]:
+) -> list[tuple[TripPlaceReplacement, str]]:
     """Проверяет, что анализ заменяет реальные посещения внутри области генерации."""
 
     allowed = regeneration_cells(analysis, plan.duration_days)
     actions = period_action_map(analysis, plan.duration_days)
-    result: dict[PeriodKey, set[str]] = {}
+    result: list[tuple[TripPlaceReplacement, str]] = []
+    seen: set[tuple[PeriodKey, str]] = set()
     by_day = {day.day: day for day in plan.days}
     for replacement in analysis.place_replacements:
         cell = replacement.day, replacement.period
@@ -184,8 +216,37 @@ def replacement_visit_names(
         ]
         if len(matches) != 1:
             raise ValueError("Replacement does not identify one saved visit.")
-        result.setdefault(cell, set()).add(matches[0])
+        key = cell, normalize_place_name(matches[0])
+        if key in seen:
+            raise ValueError("Replacement identifies the same saved visit twice.")
+        seen.add(key)
+        result.append((replacement, matches[0]))
     return result
+
+
+def replacement_visit_names(
+    plan: TripPlanResponse, analysis: TripEditAnalysis
+) -> dict[PeriodKey, set[str]]:
+    """Возвращает проверенные прежние названия с группировкой по периодам."""
+
+    result: dict[PeriodKey, set[str]] = {}
+    for request, name in _saved_replacement_requests(plan, analysis):
+        result.setdefault((request.day, request.period), set()).add(name)
+    return result
+
+
+def replacement_reference_names(
+    plan: TripPlanResponse, analysis: TripEditAnalysis
+) -> list[str]:
+    """Запрашивает свежие данные прежних мест только для замен поблизости."""
+
+    return list(
+        dict.fromkeys(
+            name
+            for request, name in _saved_replacement_requests(plan, analysis)
+            if request.nearby
+        )
+    )
 
 
 def resolve_visit_replacements(
@@ -211,16 +272,71 @@ def resolve_visit_replacements(
             )
         )
 
-    for (day, period), names in replacement_visit_names(plan, analysis).items():
+    requests: dict[PeriodKey, list[tuple[TripPlaceReplacement, str]]] = {}
+    for request, name in _saved_replacement_requests(plan, analysis):
+        requests.setdefault((request.day, request.period), []).append((request, name))
+    for (day, period), items in requests.items():
+        names = {name for _, name in items}
         previous_names = {
             reference[0]
             for line in getattr(by_day[day], period)
             if (reference := saved_visit_reference(line)) is not None
         }
+        requirements: list[ReplacementVisitRequirement] = []
+        for request, name in items:
+            anchor = None
+            if request.nearby:
+                exact = [
+                    place
+                    for place in context.places
+                    if normalize_place_name(name)
+                    in {
+                        normalize_place_name(place.name),
+                        normalize_place_name(place.display_name),
+                    }
+                ]
+                matches = exact or [
+                    place
+                    for place in context.places
+                    if required_place_name_matches(
+                        required_name=name, candidate_name=place.display_name
+                    )
+                ]
+                if len(matches) != 1:
+                    raise ReplacementReferenceUnavailableError(
+                        "Replacement reference is missing or ambiguous."
+                    )
+                anchor = matches[0]
+            allowed = frozenset(
+                place.source_place_id
+                for place in context.places
+                if (
+                    request.activity_focus is None
+                    or request.activity_focus in get_supported_activity_focuses(place)
+                )
+                and (
+                    anchor is None
+                    or calculate_distance_meters(
+                        first_latitude=anchor.latitude,
+                        first_longitude=anchor.longitude,
+                        second_latitude=place.latitude,
+                        second_longitude=place.longitude,
+                    )
+                    <= MAX_NEARBY_REPLACEMENT_DISTANCE_METERS
+                )
+            )
+            requirements.append(
+                ReplacementVisitRequirement(
+                    activity_focus=request.activity_focus,
+                    nearby=request.nearby,
+                    allowed_ids=allowed,
+                )
+            )
         result[day, period] = VisitReplacementConstraint(
             excluded_ids=matching_ids(names),
             previous_ids=matching_ids(previous_names),
             minimum_new_visits=len(names),
+            requirements=tuple(requirements),
         )
     return result
 

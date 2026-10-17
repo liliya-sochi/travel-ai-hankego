@@ -152,6 +152,7 @@ class ContextReplay:
     calls: list[TripPreferences] = field(default_factory=list)
     preserved_names: list[list[str]] = field(default_factory=list)
     missing_place_id: str | None = None
+    replacement_defect: str | None = None
 
     async def enrich(
         self,
@@ -177,7 +178,7 @@ class ContextReplay:
             )
             categories.append("leisure.park")
         place_data = [item for item in place_data if item[0] != self.missing_place_id]
-        return TravelContext(
+        context = TravelContext(
             location=DestinationLocation(
                 formatted_name="Токио",
                 latitude=35.68,
@@ -201,6 +202,26 @@ class ContextReplay:
             ],
             fetched_at=datetime(2026, 10, 7, tzinfo=UTC),
         )
+        if self.replacement_defect is not None:
+            candidate = next(
+                p for p in context.places if p.source_place_id == "second-museum"
+            )
+            if self.replacement_defect == "far":
+                candidate.latitude = 35.8
+            else:
+                candidate.categories = ["leisure.park"]
+            context.places.append(
+                PlaceCandidate(
+                    source_place_id="near-museum",
+                    name="Близкий тестовый музей",
+                    formatted_address="Условный тестовый адрес",
+                    latitude=35.684,
+                    longitude=139.76,
+                    categories=["entertainment.museum"],
+                    opening_hours="Mo-Su 10:00-18:00",
+                )
+            )
+        return context
 
 
 @dataclass
@@ -545,10 +566,12 @@ async def test_other_user_cannot_read_or_edit_saved_trip(
 
 
 @pytest.mark.parametrize("replacement_succeeds", [False, True])
+@pytest.mark.parametrize("defect", ["old_id", "far", "wrong_category"])
 async def test_visit_replacement_never_saves_unchanged_target(
     lifecycle_case: LifecycleCase,
     database_session: AsyncSession,
     replacement_succeeds: bool,
+    defect: str,
 ) -> None:
     """Реальная БД принимает только выполненную замену после ограниченной проверки."""
 
@@ -556,29 +579,50 @@ async def test_visit_replacement_never_saves_unchanged_target(
     created = await case.create()
     trip_id = created["trip_id"]
     before = await stored_state(database_session, trip_id)
+    if defect != "old_id":
+        case.context.replacement_defect = defect
     parsed = {
         **edit_analysis(change_rest=False),
         "interests_changed": False,
         "interests": None,
         "regeneration_periods": [{"day": 1, "period": "afternoon"}],
         "place_replacements": [
-            {"day": 1, "period": "afternoon", "place_name": "Тестовый дневной парк"}
+            {
+                "day": 1,
+                "period": "afternoon",
+                "place_name": "Тестовый дневной парк",
+                "activity_focus": "museum",
+                "nearby": defect != "old_id",
+            }
         ],
     }
     replacement = grounded_plan()
+    replacement_name = (
+        "Тестовый музей" if defect == "old_id" else "Близкий тестовый музей"
+    )
     replacement["days"][0]["afternoon"] = [
         {
-            "source_place_id": "second-museum",
-            "place_name": "Тестовый музей",
+            "source_place_id": "second-museum" if defect == "old_id" else "near-museum",
+            "place_name": replacement_name,
             "activity_focus": "museum",
             "description": None,
         }
     ]
+    rejected = grounded_plan()
+    if defect != "old_id":
+        rejected["days"][0]["afternoon"] = [
+            {
+                "source_place_id": "second-museum",
+                "place_name": "Тестовый музей",
+                "activity_focus": "park" if defect == "wrong_category" else "museum",
+                "description": None,
+            }
+        ]
     case.model.replies.extend(
         [
             ("trip_edit_analysis", parsed),
-            ("trip_plan", grounded_plan()),
-            ("trip_plan", replacement if replacement_succeeds else grounded_plan()),
+            ("trip_plan", rejected),
+            ("trip_plan", replacement if replacement_succeeds else rejected),
         ]
     )
     response = await case.client.post(
@@ -586,7 +630,11 @@ async def test_visit_replacement_never_saves_unchanged_target(
         json={
             "telegram_id": OWNER_ID,
             "trip_id": trip_id,
-            "instruction": "Днём замени парк на музей. Все остальные активности оставь.",
+            "instruction": (
+                "Днём замени парк на музей поблизости. Остальные активности оставь."
+                if defect != "old_id"
+                else "Днём замени парк на музей. Все остальные активности оставь."
+            ),
         },
     )
     assert response.status_code == (200 if replacement_succeeds else 502), response.text
@@ -594,7 +642,7 @@ async def test_visit_replacement_never_saves_unchanged_target(
     assert after[1:] == before[1:]
     if replacement_succeeds:
         assert after[0]["days"][0]["afternoon"][0].startswith(
-            "Тестовый музей: посетить музей."
+            f"{replacement_name}: посетить музей."
         )
         for period in ("morning", "evening"):
             assert after[0]["days"][0][period] == before[0]["days"][0][period]
@@ -608,3 +656,5 @@ async def test_visit_replacement_never_saves_unchanged_target(
         "trip_plan",
     ]
     assert not case.model.replies
+    if defect != "old_id":
+        assert "Тестовый дневной парк" in case.context.preserved_names[-1]

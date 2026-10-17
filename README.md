@@ -176,6 +176,20 @@ Redis is used for:
   conflict with a preserve/walk action. They are not promoted to required places;
   the field is empty for rest, keep-only requests, changed descriptions and broad
   theme changes without specific replacements;
+- each replacement also requires `activity_focus` (the explicitly requested new
+  type, or `null`) and `nearby` (an explicit request for proximity to the old venue,
+  otherwise `false`). These are internal analysis fields, not persisted
+  preferences. Old venue names for nearby replacements are supplied temporarily
+  to enrichment alongside preserved visits, without changing required places or
+  the base cache. A missing or ambiguous current reference stops the edit;
+- nearby replacements must be within 2,000 metres of the old venue's current
+  coordinates, using great-circle distance. This application policy for "nearby"
+  is not a walking route or travel-time estimate. The new venue must support the
+  requested focus and day period. Python prepares per-visit allowed IDs before
+  generation, protects these candidates from filtering by old interests or sparse
+  metadata, and checks the chosen IDs and focuses after generation. Two requested
+  replacements require two distinct suitable venues. Interest alignment cannot
+  change the activity focus of preserved visits;
 - replacement names are resolved against current candidates. Obsolete IDs are
   removed from the generation context and its request-scoped ID enum, except IDs
   still needed by required or preserved visits. The final validator always rejects
@@ -185,7 +199,10 @@ Redis is used for:
   `unfulfilled_place_replacement`, without increasing retry budgets. If no unused
   available alternative can be confirmed, generation is skipped and the saved
   route remains intact. An old venue absent from fresh candidates does not prevent
-  selecting a new one. Changes stay internal: no public API or DB migration;
+  selecting a new one unless its coordinates are needed for a nearby condition.
+  Wrong requested types or out-of-radius choices are rejected with
+  `invalid_replacement_choice`, using the same bounded retry. Changes stay
+  internal: no public API or DB migration;
 - names of preserved visits are supplied temporarily to enrichment, including
   bounded lookup for missing places. They are protected from candidate filtering
   and are not added to persisted `must_visit_places` or the base Redis cache.
@@ -564,6 +581,11 @@ focuses of preserved visits. The extra candidate is available only in this case'
 own context. The two evening walks must still pass the general-activity checks.
 The runner also checks that analysis explicitly declares the replacement period;
 its expected venue IDs are used only for evaluation, never as generation input.
+The replacement fixture includes a nearby museum, a distant museum and a nearby
+park. Independent criteria check the parsed type and nearby flag, and the output
+distance against a reference ID and radius stored in the corpus. These expected
+conditions are never passed to analysis or generation. Runtime and evaluation
+check the nearby policy separately rather than trusting the model's description.
 All coordinates,
 IDs, addresses, and opening hours are synthetic. Venue names are fixture labels,
 not assertions about currently available museums.

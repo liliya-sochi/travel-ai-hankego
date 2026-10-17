@@ -228,6 +228,19 @@ class EditPeriodVisits(StrictSchema):
     activity_focus: GroundedActivityFocus | None = None
 
 
+class EditReplacementVisits(EditPeriodVisits):
+    """Независимое условие близости к указанному месту тестового контекста."""
+
+    nearby_reference_id: str | None = None
+    maximum_distance_meters: float | None = Field(default=None, gt=0, le=100_000)
+
+    @model_validator(mode="after")
+    def validate_distance(self) -> Self:
+        if (self.nearby_reference_id is None) != (self.maximum_distance_meters is None):
+            raise ValueError("Для проверки близости нужны и опорный ID, и расстояние.")
+        return self
+
+
 class EditPeriodTerms(StrictSchema):
     """Ограниченная текстовая проверка общей активности, не оценка её качества."""
 
@@ -250,7 +263,7 @@ class EditExpectations(StrictSchema):
     rest_periods: list[RestPeriod]
     general_activities: list[EditPeriodTerms] = Field(default_factory=list)
     regeneration_periods: list[TripPeriodScope] | None = None
-    replacement_visits: list[EditPeriodVisits] = Field(default_factory=list)
+    replacement_visits: list[EditReplacementVisits] = Field(default_factory=list)
 
 
 class EditStep(StrictSchema):
@@ -414,6 +427,13 @@ class EditEvaluationSuite(StrictSchema):
                 ]
             ):
                 raise ValueError("Неверные ID сохраняемых посещений.")
+            if any(
+                visit.nearby_reference_id is not None
+                and visit.nearby_reference_id not in available
+                for step in case.steps
+                for visit in step.expectations.replacement_visits
+            ):
+                raise ValueError("Неизвестное опорное место для проверки близости.")
         return self
 
 
@@ -649,6 +669,24 @@ def assess_edit_periods(
                 checks[f"replacement:{visit.day}:{visit.period}"] = [
                     place.source_place_id for place in places
                 ] == visit.place_ids
+                if visit.nearby_reference_id is not None:
+                    anchor = next(
+                        place
+                        for place in context.places
+                        if place.source_place_id == visit.nearby_reference_id
+                    )
+                    checks[f"replacement_nearby:{visit.day}:{visit.period}"] = bool(
+                        places
+                    ) and all(
+                        calculate_distance_meters(
+                            first_latitude=anchor.latitude,
+                            first_longitude=anchor.longitude,
+                            second_latitude=place.latitude,
+                            second_longitude=place.longitude,
+                        )
+                        <= visit.maximum_distance_meters
+                        for place in places
+                    )
             if visit.activity_focus is not None:
                 checks[f"{kind}_focus:{visit.day}:{visit.period}"] = len(lines) == len(
                     places
@@ -756,6 +794,23 @@ async def evaluate_edit_dialogue(
                     (item.day, item.period)
                     for item in step.expectations.replacement_visits
                 }
+                for visit in step.expectations.replacement_visits:
+                    requests = [
+                        item
+                        for item in analysis.place_replacements
+                        if (item.day, item.period) == (visit.day, visit.period)
+                    ]
+                    if visit.activity_focus is not None:
+                        turn["checks"][
+                            f"replacement_requested_focus:{visit.day}:{visit.period}"
+                        ] = bool(requests) and all(
+                            item.activity_focus == visit.activity_focus
+                            for item in requests
+                        )
+                    if visit.nearby_reference_id is not None:
+                        turn["checks"][
+                            f"replacement_requested_nearby:{visit.day}:{visit.period}"
+                        ] = bool(requests) and all(item.nearby for item in requests)
             if not record_checks(turn):
                 return finish_checks(result)
             try:

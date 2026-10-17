@@ -422,12 +422,18 @@ async def test_empty_regeneration_scope_uses_existing_bounded_analysis_retry(
     assert regeneration_cells(parsed, 2) == {(2, "afternoon")}
 
 
-def replacement_analysis(**updates):
+def replacement_analysis(*, nearby=True, activity_focus="museum", **updates):
     return analysis(
         requires_regeneration=True,
         regeneration_periods=[{"day": 2, "period": "afternoon"}],
         place_replacements=[
-            {"day": 2, "period": "afternoon", "place_name": "Тестовый музей 4"}
+            {
+                "day": 2,
+                "period": "afternoon",
+                "place_name": "Тестовый музей 4",
+                "activity_focus": activity_focus,
+                "nearby": nearby,
+            }
         ],
         **updates,
     )
@@ -513,6 +519,18 @@ async def test_replacement_excludes_old_id_and_validates_final_period(
                 "excluded_source_place_ids": ["eval-edit-museum-4"],
                 "previous_source_place_ids": ["eval-edit-museum-4"],
                 "minimum_new_places": 1,
+                "visit_requirements": [
+                    {
+                        "activity_focus": "museum",
+                        "nearby": True,
+                        "maximum_distance_meters": 2000,
+                        "allowed_source_place_ids": (
+                            ["eval-edit-aida", "eval-edit-museum-5"]
+                            if old_preserved_elsewhere
+                            else ["eval-edit-museum-5"]
+                        ),
+                    }
+                ],
             }
         ]
         if count == 2:
@@ -561,9 +579,17 @@ async def test_unfulfilled_replacement_fails_without_mutating_saved_plan(
     saved = suite.plans[case.current_plan]
     before = saved.model_dump_json()
     if defect == "no_alternative":
-        context.places.pop()
+        context.places = [
+            place
+            for place in context.places
+            if place.source_place_id != "eval-edit-museum-5"
+        ]
     elif defect == "closed_alternative":
-        context.places[-1].opening_hours = "off"
+        next(
+            place
+            for place in context.places
+            if place.source_place_id == "eval-edit-museum-5"
+        ).opening_hours = "off"
 
     def response(_):
         if defect in {"no_alternative", "closed_alternative"}:
@@ -615,7 +641,7 @@ async def test_replacement_can_proceed_when_old_venue_is_absent_from_fresh_conte
         travel_context=context,
         current_plan=suite.plans[case.current_plan],
         instruction=case.steps[0].user_message,
-        analysis=replacement_analysis(),
+        analysis=replacement_analysis(nearby=False),
     )
     assert len(requests) == 1
     assert result.days[1].afternoon[0].startswith("Тестовый музей 5:")
@@ -656,9 +682,12 @@ def test_invalid_replacement_analysis_is_rejected(defect):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("extra_park", [False, True])
-@pytest.mark.parametrize("explicit_replacement", [False, True])
+@pytest.mark.parametrize(
+    ("explicit_replacement", "google_location"),
+    [(False, False), (True, False), (True, True)],
+)
 async def test_one_day_afternoon_replacement_can_override_initial_interest(
-    monkeypatch, caplog, extra_park, explicit_replacement
+    monkeypatch, caplog, extra_park, explicit_replacement, google_location
 ):
     """Явная замена парка на музей не меняет общий интерес и соседние периоды."""
 
@@ -694,6 +723,8 @@ async def test_one_day_afternoon_replacement_can_override_initial_interest(
         ],
         fetched_at=datetime(2026, 10, 7, tzinfo=UTC),
     )
+    if google_location:
+        context.places[1].location_source = "google"
     prefs = TripPreferences(
         destination="Токио",
         duration_days=1,
@@ -743,7 +774,13 @@ async def test_one_day_afternoon_replacement_can_override_initial_interest(
         requires_regeneration=True,
         regeneration_periods=[{"day": 1, "period": "afternoon"}],
         place_replacements=[
-            {"day": 1, "period": "afternoon", "place_name": "Дневной парк"}
+            {
+                "day": 1,
+                "period": "afternoon",
+                "place_name": "Дневной парк",
+                "activity_focus": "museum",
+                "nearby": False,
+            }
         ]
         if explicit_replacement
         else [],

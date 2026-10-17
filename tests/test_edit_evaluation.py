@@ -88,6 +88,8 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                             "day": 2,
                             "period": "afternoon",
                             "place_name": "Тестовый музей 4",
+                            "activity_focus": "museum",
+                            "nearby": True,
                         }
                     ],
                 )
@@ -504,6 +506,9 @@ async def test_scoped_replacement_preserves_focus_and_general_periods(
     assert turn["checks"]["regeneration_scope"]
     assert turn["checks"]["preserved_focus:1:afternoon"]
     assert turn["checks"]["replacement:2:afternoon"]
+    assert turn["checks"]["replacement_requested_focus:2:afternoon"]
+    assert turn["checks"]["replacement_requested_nearby:2:afternoon"]
+    assert turn["checks"]["replacement_nearby:2:afternoon"]
     assert turn["plan"]["days"][1]["afternoon"][0].startswith("Тестовый музей 5:")
     for old, new in zip(turn["input_plan"]["days"], turn["plan"]["days"], strict=True):
         assert old["evening"] == new["evening"]
@@ -547,3 +552,79 @@ def test_invalid_scoped_replacement_corpus_is_rejected(suite, defect):
         expected["replacement_visits"][0]["period"] = "morning"
     with pytest.raises(ValueError):
         evaluation.EditEvaluationSuite.model_validate_json(json.dumps(data))
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["unknown_reference", "missing_distance", "missing_reference", "invalid_distance"],
+)
+def test_invalid_nearby_replacement_criterion_is_rejected(suite, defect):
+    data = suite.model_dump(mode="json")
+    visit = data["cases"][2]["steps"][0]["expectations"]["replacement_visits"][0]
+    if defect == "unknown_reference":
+        visit["nearby_reference_id"] = "unknown"
+    elif defect == "missing_distance":
+        visit["maximum_distance_meters"] = None
+    elif defect == "missing_reference":
+        visit["nearby_reference_id"] = None
+    else:
+        visit["maximum_distance_meters"] = 0
+    with pytest.raises(ValueError):
+        evaluation.EditEvaluationSuite.model_validate_json(json.dumps(data))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defect", ["activity_focus", "nearby"])
+async def test_replacement_analysis_conditions_are_checked_before_generation(
+    suite, monkeypatch, defect
+):
+    case = suite.cases[2]
+    parsed = TripEditAnalysis(
+        supported=True,
+        interests_changed=False,
+        interests=None,
+        must_visit_places_changed=False,
+        must_visit_places=case.preferences.must_visit_places,
+        rest_period_changes=[],
+        period_actions=[],
+        requires_regeneration=True,
+        regeneration_periods=[{"day": 2, "period": "afternoon"}],
+        place_replacements=[
+            {
+                "day": 2,
+                "period": "afternoon",
+                "place_name": "Тестовый музей 4",
+                "activity_focus": None if defect == "activity_focus" else "museum",
+                "nearby": defect != "nearby",
+            }
+        ],
+    )
+    monkeypatch.setattr(ai, "analyze_trip_edit", AsyncMock(return_value=parsed))
+    generator = AsyncMock()
+    monkeypatch.setattr(ai, "generate_edited_trip_plan", generator)
+    result = await evaluation.evaluate_case(case, suite)
+    assert result["status"] == "quality_failed"
+    criterion = (
+        "replacement_requested_focus"
+        if defect == "activity_focus"
+        else "replacement_requested_nearby"
+    )
+    assert not result["checks"][f"step:1:{criterion}:2:afternoon"]
+    generator.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_distance_expectation_is_not_injected_into_generation(suite, monkeypatch):
+    requests = mock_provider(monkeypatch)
+    case = suite.cases[2].model_copy(deep=True)
+    case.steps[0].expectations.replacement_visits[0].maximum_distance_meters = 1
+    result = await evaluation.evaluate_case(case, suite)
+    assert result["status"] == "quality_failed"
+    assert result["checks"]["step:1:replacement:2:afternoon"]
+    assert not result["checks"]["step:1:replacement_nearby:2:afternoon"]
+    assert (
+        requests[1]["place_replacements"][0]["visit_requirements"][0][
+            "maximum_distance_meters"
+        ]
+        == 2000
+    )
