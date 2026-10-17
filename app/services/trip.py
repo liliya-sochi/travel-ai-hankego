@@ -25,7 +25,11 @@ from app.services.ai import (
     generate_edited_trip_plan,
     generate_trip_plan,
 )
-from app.services.trip_editing import preserved_cells, preserved_place_names
+from app.services.trip_editing import (
+    preserved_cells,
+    preserved_place_names,
+    replacement_reference_names,
+)
 from app.services.trip_enrichment import TripEnrichmentService
 
 logger = logging.getLogger(__name__)
@@ -216,6 +220,11 @@ class TripService:
         # не используется как источник фактов.
         cells = preserved_cells(analysis, current_preferences, updated_preferences)
         names = preserved_place_names(current_plan, cells)
+        names = list(
+            dict.fromkeys(
+                [*names, *replacement_reference_names(current_plan, analysis)]
+            )
+        )
         travel_context = await enrichment_service.enrich(
             updated_preferences, **({"preserved_place_names": names} if names else {})
         )

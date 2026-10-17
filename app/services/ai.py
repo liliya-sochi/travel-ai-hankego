@@ -52,10 +52,14 @@ from app.services.place_geography import (
 )
 from app.services.place_matching import required_place_name_matches
 from app.services.trip_editing import (
+    MAX_NEARBY_REPLACEMENT_DISTANCE_METERS,
     QUIET_WALK_DESCRIPTION,
     PeriodKey,
     PreservedActivityUnavailableError,
+    ReplacementReferenceUnavailableError,
+    ReplacementVisitRequirement,
     VisitReplacementConstraint,
+    distinct_replacement_choices,
     period_action_map,
     preserved_cells,
     regeneration_cells,
@@ -205,6 +209,11 @@ GROUNDED_VALIDATION_HINTS: dict[str, tuple[str, str]] = {
         "unfulfilled_place_replacement",
         "Выполни place_replacements: исключи прежние ID из указанных периодов "
         "и добавь новые конкретные места; простая смена описания не является заменой.",
+    ),
+    "LLM did not satisfy replacement visit requirements.": (
+        "invalid_replacement_choice",
+        "Для каждой замены выбери отдельное новое место из allowed_source_place_ids "
+        "с указанным activity_focus. Соблюдай условия каждой замены, а не только общий интерес.",
     ),
     "LLM place name does not match its place ID.": (
         "place_name_mismatch",
@@ -386,6 +395,14 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
 - place_replacements перечисляет прежние конкретные посещения, которые надо
   заменить ДРУГИМИ местами. Укажи day, period и прежнее place_name из current_trip_plan;
   для этого примера найди прежний музей второго дня днём и включи его сюда;
+- activity_focus внутри каждой замены — явно запрошенный тип НОВОГО посещения:
+  museum=музей, park=парк, food=ресторан, history=исторический объект,
+  architecture=архитектура, entertainment=развлечение, sight=достопримечательность;
+  «замени парк на музей» означает museum; «на другой музей» тоже museum;
+  если тип новой активности не указан, верни null, не копируй старый тип автоматически;
+- nearby=true только при явной просьбе о замене «поблизости», «рядом» или аналогичной
+  близости к прежнему месту; иначе false. Не извлекай это условие из старого плана;
+  для примера выше activity_focus= museum и nearby=true;
 - «замени утренний музей» тоже требует place_replacements с прежним названием,
   даже если пользователь не написал его. Это не добавление в must_visit_places;
 - «оставь музей», смена действия в том же месте, отдых и прогулка не являются
@@ -427,6 +444,8 @@ EDIT_ANALYSIS_RETRY_PROMPT = """
 - при requires_regeneration=true область генерации не может быть пустой;
 - при requires_regeneration=false верни regeneration_periods=[];
 - place_replacements должны указывать прежние посещения внутри regeneration_periods;
+  в каждой записи обязательны activity_focus (null без явного типа) и nearby
+  (false без явной просьбы подобрать место рядом);
 - номер дня отдыха не может превышать current_preferences.duration_days;
 - не меняй правила отдыха, которые не затронуты edit_instruction;
 - не добавляй неизвестные поля и обычный текст.
@@ -459,6 +478,11 @@ EDIT_SYSTEM_PROMPT = (
   excluded_source_place_ids; включи minimum_new_places мест с ID, которых не было
   в previous_source_place_ids этого периода. Общее занятие и смена текста
   у прежнего места не считаются заменой;
+- visit_requirements внутри каждой замены задаёт условия отдельных новых посещений:
+  выбирай для каждого отдельный ID из его allowed_source_place_ids, соблюдая
+  activity_focus, если он не null. Один ID не может выполнить две замены;
+  nearby=true ограничивает выбор местами не дальше 2000 м по прямой от прежнего
+  места по свежим координатам; это не длина пешего пути и не время перехода;
 - явная дневная замена в place_replacements имеет приоритет над автоматическим
   заполнением однодневного маршрута по исходным интересам; соблюдай запрошенную
   замену, категории места, расписание и остальные ограничения маршрута;
@@ -1626,7 +1650,10 @@ def _build_grounded_edit_user_message(
         _build_grounded_user_message(
             preferences=preferences,
             travel_context=travel_context,
-            preserved_place_ids=_preserved_place_ids(preserved_activities),
+            preserved_place_ids=[
+                *_preserved_place_ids(preserved_activities),
+                *_replacement_place_ids(replacement_constraints),
+            ],
         )
     )
     payload["current_trip_plan"] = _compact_trip_plan_for_edit(current_plan)
@@ -1645,6 +1672,17 @@ def _build_grounded_edit_user_message(
             "excluded_source_place_ids": sorted(rule.excluded_ids),
             "previous_source_place_ids": sorted(rule.previous_ids),
             "minimum_new_places": rule.minimum_new_visits,
+            "visit_requirements": [
+                {
+                    "activity_focus": requirement.activity_focus,
+                    "nearby": requirement.nearby,
+                    "maximum_distance_meters": MAX_NEARBY_REPLACEMENT_DISTANCE_METERS
+                    if requirement.nearby
+                    else None,
+                    "allowed_source_place_ids": sorted(requirement.allowed_ids),
+                }
+                for requirement in rule.requirements
+            ],
         }
         for (day, period), rule in sorted((replacement_constraints or {}).items())
     ]
@@ -1841,6 +1879,21 @@ def _preserved_place_ids(
     )
 
 
+def _replacement_place_ids(
+    constraints: dict[PeriodKey, VisitReplacementConstraint] | None,
+) -> list[str]:
+    """Защищает подходящие замены при отборе кандидатов, не делая их обязательными."""
+
+    return sorted(
+        {
+            place_id
+            for rule in (constraints or {}).values()
+            for requirement in rule.requirements
+            for place_id in requirement.allowed_ids
+        }
+    )
+
+
 def _validate_grounded_trip_plan(
     model_text: str,
     *,
@@ -1903,6 +1956,7 @@ def _validate_grounded_trip_plan(
         must_visit_place_ids=[
             *resolved_must_visit_place_ids,
             *_preserved_place_ids(preserved_activities),
+            *_replacement_place_ids(replacement_constraints),
         ],
     )
     planning_context = travel_context.model_copy(
@@ -1970,7 +2024,33 @@ def _validate_grounded_trip_plan(
         activities=selected_activities,
         requirements=interest_category_requirements,
         places_by_id=places_by_id,
+        locked_activity_ids={
+            id(activity)
+            for day, period in (preserved_activities or {})
+            for activity in getattr(grounded_plan.days[day - 1], period)
+        },
     )
+    for (day, period), rule in (replacement_constraints or {}).items():
+        new_activities = [
+            activity
+            for activity in getattr(grounded_plan.days[day - 1], period)
+            if activity.source_place_id is not None
+            and activity.source_place_id not in rule.previous_ids | rule.excluded_ids
+        ]
+        choices = [
+            {
+                activity.source_place_id
+                for activity in new_activities
+                if activity.source_place_id in requirement.allowed_ids
+                and (
+                    requirement.activity_focus is None
+                    or activity.activity_focus == requirement.activity_focus
+                )
+            }
+            for requirement in rule.requirements
+        ]
+        if not distinct_replacement_choices(choices):
+            raise ValueError("LLM did not satisfy replacement visit requirements.")
     selected_place_ids_by_focus: dict[str, set[str]] = {}
     for _, activity in selected_activities:
         if activity.activity_focus is not None and activity.source_place_id is not None:
@@ -2142,6 +2222,7 @@ def _align_grounded_interest_focuses(
     activities: list[tuple[DayPeriod, GroundedActivity]],
     requirements: dict[str, list[str]],
     places_by_id: dict[str, PlaceCandidate],
+    locked_activity_ids: set[int] | None = None,
 ) -> None:
     """Согласует фокус уже проверенных мест с интересами без нового LLM-вызова."""
 
@@ -2161,6 +2242,11 @@ def _align_grounded_interest_focuses(
         eligible: list[int] = []
         for index, (period, activity) in enumerate(activities):
             if activity.source_place_id not in place_ids:
+                continue
+            if (
+                id(activity) in (locked_activity_ids or set())
+                and activity.activity_focus != focus
+            ):
                 continue
             try:
                 _validate_grounded_activity(
@@ -2607,6 +2693,7 @@ async def _generate_grounded_plan(
         must_visit_place_ids=[
             *must_visit_place_ids,
             *_preserved_place_ids(preserved_activities),
+            *_replacement_place_ids(replacement_constraints),
         ],
     )
     allowed_place_ids = [place.source_place_id for place in planning_places]
@@ -2770,11 +2857,11 @@ def _context_for_visit_replacements(
     travel_context: TravelContext,
     preserved: dict[PeriodKey, list[GroundedActivity]],
     constraints: dict[PeriodKey, VisitReplacementConstraint],
-) -> TravelContext:
-    """Убирает заменяемые ID из выбора, сохраняя обязательные и защищённые места."""
+) -> tuple[TravelContext, dict[PeriodKey, VisitReplacementConstraint]]:
+    """Проверяет новые посещения до генерации, не меняя исходный контекст."""
 
     if not constraints:
-        return travel_context
+        return travel_context, constraints
     protected = set(_preserved_place_ids(preserved))
     required = set(
         _resolve_must_visit_place_ids(
@@ -2798,41 +2885,68 @@ def _context_for_visit_replacements(
     planning = _select_planning_places(
         preferences=preferences,
         travel_context=context,
-        must_visit_place_ids=list(required | protected),
+        must_visit_place_ids=sorted(
+            required | protected | set(_replacement_place_ids(constraints))
+        ),
     )
+    prepared: dict[PeriodKey, VisitReplacementConstraint] = {}
     for (day, period), rule in constraints.items():
         if preferences.is_rest_period(day, period):
             raise AIServiceError(
                 "Замена посещения несовместима с отдыхом в этом периоде. Маршрут не изменён."
             )
-        alternatives: set[str] = set()
-        for place in planning:
-            if (
-                place.source_place_id
-                in rule.previous_ids | protected | rule.excluded_ids
-            ):
-                continue
-            for focus in get_supported_activity_focuses(place):
-                try:
-                    _validate_grounded_activity(
-                        activity=GroundedActivity(
-                            source_place_id=place.source_place_id,
-                            place_name=place.name,
-                            activity_focus=focus,
-                            description=None,
-                        ),
-                        places_by_id={place.source_place_id: place},
-                        period=period,
-                    )
-                except ValueError:
+        choices: list[set[str]] = []
+        requirements: list[ReplacementVisitRequirement] = []
+        for requirement in rule.requirements:
+            alternatives: set[str] = set()
+            for place in planning:
+                if (
+                    place.source_place_id not in requirement.allowed_ids
+                    or place.source_place_id
+                    in rule.previous_ids | protected | rule.excluded_ids
+                ):
                     continue
-                alternatives.add(place.source_place_id)
-                break
-        if len(alternatives) < rule.minimum_new_visits:
-            raise AIServiceError(
-                "Не удалось подобрать новое подтверждённое посещение для замены. Маршрут не изменён. Уточните пожелания."
+                focuses = (
+                    [requirement.activity_focus]
+                    if requirement.activity_focus is not None
+                    else get_supported_activity_focuses(place)
+                )
+                for focus in focuses:
+                    try:
+                        _validate_grounded_activity(
+                            activity=GroundedActivity(
+                                source_place_id=place.source_place_id,
+                                place_name=place.name,
+                                activity_focus=focus,
+                                description=None,
+                            ),
+                            places_by_id={place.source_place_id: place},
+                            period=period,
+                        )
+                    except ValueError:
+                        continue
+                    alternatives.add(place.source_place_id)
+                    break
+            choices.append(alternatives)
+            requirements.append(
+                ReplacementVisitRequirement(
+                    activity_focus=requirement.activity_focus,
+                    nearby=requirement.nearby,
+                    allowed_ids=frozenset(alternatives),
+                )
             )
-    return context
+        if not distinct_replacement_choices(choices):
+            raise AIServiceError(
+                "Не удалось подобрать подтверждённые места, отвечающие условиям замены. "
+                "Маршрут не изменён. Уточните пожелания."
+            )
+        prepared[day, period] = VisitReplacementConstraint(
+            excluded_ids=rule.excluded_ids,
+            previous_ids=rule.previous_ids,
+            minimum_new_visits=rule.minimum_new_visits,
+            requirements=tuple(requirements),
+        )
+    return context, prepared
 
 
 async def generate_edited_trip_plan(
@@ -2879,6 +2993,12 @@ async def generate_edited_trip_plan(
                 raise PreservedActivityUnavailableError(
                     "Walk conflicts with reserved rest."
                 )
+        except ReplacementReferenceUnavailableError as error:
+            logger.warning("Trip edit replacement reference unavailable")
+            raise AIServiceError(
+                "Не удалось подтвердить свежее местоположение заменяемого места. "
+                "Замена поблизости не выполнена, маршрут не изменён. Уточните пожелания."
+            ) from error
         except (ValidationError, ValueError) as error:
             logger.warning("Trip edit preservation unavailable")
             raise AIServiceError(
@@ -2896,7 +3016,7 @@ async def generate_edited_trip_plan(
                 )
             ]
 
-        travel_context = _context_for_visit_replacements(
+        travel_context, replacements = _context_for_visit_replacements(
             preferences=preferences,
             travel_context=travel_context,
             preserved=preserved,
@@ -3211,8 +3331,13 @@ async def analyze_trip_edit(
                 else 0,
             )
             logger.info(
-                "Trip edit place replacements parsed | visit_count=%s",
+                "Trip edit place replacements parsed | visit_count=%s | nearby_count=%s | typed_count=%s",
                 len(analysis.place_replacements),
+                sum(item.nearby for item in analysis.place_replacements),
+                sum(
+                    item.activity_focus is not None
+                    for item in analysis.place_replacements
+                ),
             )
             return analysis
 

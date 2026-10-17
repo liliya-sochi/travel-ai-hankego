@@ -127,6 +127,28 @@
             "entertainment.museum"
           ],
           "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Далёкий тестовый музей",
+          "source_place_id": "eval-edit-far-museum",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.8,
+          "longitude": 139.76,
+          "categories": [
+            "entertainment.museum"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
+        },
+        {
+          "name": "Близкий тестовый парк",
+          "source_place_id": "eval-edit-near-park",
+          "formatted_address": "Синтетический адрес для evals",
+          "latitude": 35.6845,
+          "longitude": 139.76,
+          "categories": [
+            "leisure.park"
+          ],
+          "opening_hours": "Mo-Su 09:00-17:00"
         }
       ],
       "fetched_at": "2026-10-14T00:00:00Z",
@@ -477,7 +499,9 @@
                 "place_ids": [
                   "eval-edit-museum-5"
                 ],
-                "activity_focus": "museum"
+                "activity_focus": "museum",
+                "nearby_reference_id": "eval-edit-museum-4",
+                "maximum_distance_meters": 2000
               }
             ],
             "general_activities": [

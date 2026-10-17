@@ -6,7 +6,7 @@ LLM связывает конкретные места с идентификат
 в существующий публичный TripPlanResponse.
 """
 
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import Field, model_validator
 
@@ -14,21 +14,11 @@ from app.schemas.geoapify import PlaceCandidate
 from app.schemas.trip import (
     MAX_ACTIVITIES_PER_PERIOD,
     DayPlan,
+    GroundedActivityFocus,
     StrictSchema,
     TripPlanResponse,
 )
 from app.services.opening_hours import format_opening_hours
-
-GroundedActivityFocus = Literal[
-    "history",
-    "architecture",
-    "museum",
-    "food",
-    "park",
-    "entertainment",
-    "sight",
-    "place",
-]
 
 MAX_SUMMARY_DESCRIPTION_LENGTH = 200
 REST_PERIOD_DESCRIPTION = "Спокойный отдых."

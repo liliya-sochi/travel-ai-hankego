@@ -124,8 +124,10 @@ class FakeTripRepository:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("nearby", [False, True])
 async def test_scoped_generation_requests_fresh_preserved_visits_without_promoting_them(
     monkeypatch,
+    nearby,
 ):
     suite = evaluation.load_edit_suite()
     case = suite.cases[2]
@@ -143,7 +145,15 @@ async def test_scoped_generation_requests_fresh_preserved_visits_without_promoti
         must_visit_places=case.preferences.must_visit_places,
         rest_period_changes=[],
         period_actions=[],
-        place_replacements=[],
+        place_replacements=[
+            {
+                "day": 2,
+                "period": "afternoon",
+                "place_name": "Тестовый музей 4",
+                "activity_focus": "museum",
+                "nearby": nearby,
+            }
+        ],
         requires_regeneration=True,
         regeneration_periods=[{"day": 2, "period": "afternoon"}],
     )
@@ -161,7 +171,7 @@ async def test_scoped_generation_requests_fresh_preserved_visits_without_promoti
                 "Art Aquarium Museum GINZA",
                 "Mitsuo Aida Museum",
                 "Тестовый музей 3",
-            }
+            } | ({"Тестовый музей 4"} if nearby else set())
             assert preferences.must_visit_places == ["Art Aquarium Museum GINZA"]
             return suite.contexts[case.context]
 

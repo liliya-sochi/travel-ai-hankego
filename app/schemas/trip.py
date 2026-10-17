@@ -35,6 +35,16 @@ class StrictSchema(BaseModel):
 
 
 TripDayPeriod = Literal["morning", "afternoon", "evening"]
+GroundedActivityFocus = Literal[
+    "history",
+    "architecture",
+    "museum",
+    "food",
+    "park",
+    "entertainment",
+    "sight",
+    "place",
+]
 MAX_ACTIVITIES_PER_PERIOD = 2
 
 
@@ -66,6 +76,12 @@ class TripPlaceReplacement(StrictSchema):
     period: TripDayPeriod
     place_name: MustVisitPlaceName = Field(
         description="Название заменяемого места из current_trip_plan, не нового места.",
+    )
+    activity_focus: GroundedActivityFocus | None = Field(
+        description="Явно запрошенный тип нового посещения или null без такого условия.",
+    )
+    nearby: bool = Field(
+        description="true только при явной просьбе подобрать замену рядом с прежним местом.",
     )
 
 
