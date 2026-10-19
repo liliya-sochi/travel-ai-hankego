@@ -188,6 +188,7 @@ async def test_edit_eval_retries_scope_error_and_keeps_actual_state(
             generation_attempt = 0
             content = {
                 "period_actions": [],
+                "place_additions": [],
                 "place_replacements": [],
                 "requires_regeneration": True,
                 "regeneration_periods": [

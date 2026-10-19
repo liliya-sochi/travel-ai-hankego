@@ -62,6 +62,7 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             )
             content = {
                 "period_actions": [],
+                "place_additions": [],
                 "place_replacements": [],
                 "requires_regeneration": True,
                 "regeneration_periods": [
@@ -83,6 +84,7 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                     interests=None,
                     rest_period_changes=[],
                     regeneration_periods=[{"day": 2, "period": "afternoon"}],
+                    place_additions=[],
                     place_replacements=[
                         {
                             "day": 2,
@@ -90,6 +92,27 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                             "place_name": "Тестовый музей 4",
                             "activity_focus": "museum",
                             "nearby": True,
+                        }
+                    ],
+                )
+            if "добавь Тестовый музей 5" in incoming["edit_instruction"]:
+                content.update(
+                    interests_changed=False,
+                    interests=None,
+                    must_visit_places_changed=True,
+                    must_visit_places=[
+                        *incoming["current_preferences"]["must_visit_places"],
+                        "Тестовый музей 5",
+                    ],
+                    rest_period_changes=[],
+                    requires_regeneration=False,
+                    regeneration_periods=[],
+                    place_additions=[
+                        {
+                            "day": 2,
+                            "period": "afternoon",
+                            "place_name": "Тестовый музей 5",
+                            "activity_focus": "museum",
                         }
                     ],
                 )
@@ -182,8 +205,9 @@ def test_edit_corpus_has_rest_cycles_and_scoped_replacement(suite) -> None:
         "tokyo_rest_edit_cycle",
         "tokyo_rest_second_day",
         "tokyo_replace_second_afternoon",
+        "tokyo_add_second_afternoon",
     ]
-    assert [len(case.steps) for case in suite.cases] == [3, 3, 1]
+    assert [len(case.steps) for case in suite.cases] == [3, 3, 1, 1]
     assert suite.contexts["tokyo_museums"].fetched_at.tzinfo is not None
 
 
@@ -272,6 +296,7 @@ async def test_bad_analysis_stops_before_generation_and_next_step(
 ) -> None:
     analysis = TripEditAnalysis(
         period_actions=[],
+        place_additions=[],
         place_replacements=[],
         requires_regeneration=True,
         regeneration_periods=[
@@ -307,6 +332,7 @@ async def test_second_step_failure_keeps_first_actual_result_and_private_error_h
         side_effect=[
             TripEditAnalysis(
                 period_actions=[],
+                place_additions=[],
                 place_replacements=[],
                 requires_regeneration=True,
                 regeneration_periods=[
@@ -353,6 +379,7 @@ async def test_merged_preferences_are_checked_independently_before_generation(
     case = suite.cases[0]
     analysis = TripEditAnalysis(
         period_actions=[],
+        place_additions=[],
         place_replacements=[],
         requires_regeneration=True,
         regeneration_periods=[
@@ -460,11 +487,11 @@ def test_live_edit_cli_reports_all_turns_and_interval(
     )
     report = json.loads(path.read_text(encoding="utf-8"))
     assert report["completed"]
-    assert report["planned_runs"] == 3 and report["planned_messages"] == 7
-    assert report["summary"] == {"passed": 3}
-    assert len(requests) == 14
-    assert pauses == [65] * 6
-    assert [len(row["steps"]) for row in report["results"]] == [3, 3, 1]
+    assert report["planned_runs"] == 4 and report["planned_messages"] == 8
+    assert report["summary"] == {"passed": 4}
+    assert len(requests) == 15
+    assert pauses == [65] * 7
+    assert [len(row["steps"]) for row in report["results"]] == [3, 3, 1, 1]
     assert "fixture-secret" not in path.read_text(encoding="utf-8")
 
 
@@ -589,6 +616,7 @@ async def test_replacement_analysis_conditions_are_checked_before_generation(
         period_actions=[],
         requires_regeneration=True,
         regeneration_periods=[{"day": 2, "period": "afternoon"}],
+        place_additions=[],
         place_replacements=[
             {
                 "day": 2,
@@ -628,3 +656,40 @@ async def test_distance_expectation_is_not_injected_into_generation(suite, monke
         ]
         == 2000
     )
+
+
+@pytest.mark.asyncio
+async def test_named_addition_eval_uses_only_analysis_and_checks_full_target(
+    suite, monkeypatch
+):
+    requests = mock_provider(monkeypatch)
+    case = suite.cases[3]
+    result = await evaluation.evaluate_case(case, suite)
+    assert result["status"] == "passed", result
+    assert len(requests) == len(result["calls"]) == 1
+    turn = result["steps"][0]
+    assert turn["checks"]["addition:2:afternoon"]
+    assert turn["checks"]["generation_expected"]
+    assert turn["checks"]["required_preferences"]
+    assert turn["checks"]["addition_requests"]
+
+
+@pytest.mark.parametrize(
+    "defect", ["lost_old", "lost_new", "wrong_focus", "wrong_period"]
+)
+def test_addition_eval_independently_detects_bad_output(suite, defect):
+    case = suite.cases[3]
+    plan = suite.plans[case.current_plan].model_copy(deep=True)
+    plan.days[1].afternoon.append("Тестовый музей 5: посетить музей.")
+    if defect == "lost_old":
+        plan.days[1].afternoon.pop(0)
+    elif defect == "lost_new":
+        plan.days[1].afternoon.pop()
+    elif defect == "wrong_focus":
+        plan.days[1].afternoon[-1] = "Тестовый музей 5: посетить место."
+    else:
+        plan.days[0].afternoon.append(plan.days[1].afternoon.pop())
+    checks = evaluation.assess_edit_periods(
+        plan, case, case.steps[0].expectations, suite.contexts[case.context]
+    )
+    assert not all(checks.values())

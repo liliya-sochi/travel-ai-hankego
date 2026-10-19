@@ -85,6 +85,19 @@ class TripPlaceReplacement(StrictSchema):
     )
 
 
+class TripPlaceAddition(StrictSchema):
+    """Явно названное посещение, добавляемое к прежним активностям периода."""
+
+    day: int = Field(ge=1, le=30)
+    period: TripDayPeriod
+    place_name: MustVisitPlaceName = Field(
+        description="Название добавляемого места из edit_instruction, не из старого плана.",
+    )
+    activity_focus: GroundedActivityFocus | None = Field(
+        description="Явно запрошенный тип нового посещения или null без такого условия.",
+    )
+
+
 class RestPeriodChange(RestPeriod):
     """Одно явное добавление или отмена отдыха из текущей инструкции."""
 
@@ -428,7 +441,7 @@ class TripEditAnalysis(StrictSchema):
         description="Явные просьбы сохранить период или сделать спокойную прогулку.",
     )
     requires_regeneration: bool = Field(
-        description="Нужна ли генерация для изменений, не покрытых отдыхом и period_actions.",
+        description="Нужна ли генерация вне отдыха, period_actions и именованных place_additions.",
     )
     regeneration_periods: list[TripPeriodScope] = Field(
         max_length=90,
@@ -444,6 +457,26 @@ class TripEditAnalysis(StrictSchema):
             "[] при отсутствии такой просьбы. Не является списком обязательных мест."
         ),
     )
+    place_additions: list[TripPlaceAddition] = Field(
+        max_length=180,
+        description=(
+            "Именованные посещения, добавляемые к текущим активностям конкретного "
+            "дня и периода. [] без такого запроса. Прежние активности сохраняются."
+        ),
+    )
+
+    @field_validator("place_additions")
+    @classmethod
+    def validate_place_additions(
+        cls, additions: list[TripPlaceAddition]
+    ) -> list[TripPlaceAddition]:
+        keys = {
+            (item.day, item.period, " ".join(item.place_name.casefold().split()))
+            for item in additions
+        }
+        if len(keys) != len(additions):
+            raise ValueError("Добавляемые посещения не должны повторяться.")
+        return additions
 
     @field_validator("place_replacements")
     @classmethod
@@ -484,11 +517,11 @@ class TripEditAnalysis(StrictSchema):
             raise ValueError("Режим генерации должен соответствовать её периодам.")
         if not self.requires_regeneration and (
             self.interests_changed
-            or self.must_visit_places_changed
             or self.place_replacements
+            or (self.must_visit_places_changed and not self.place_additions)
         ):
             raise ValueError(
-                "Изменение интересов, обязательных мест или замена посещения требует генерации."
+                "Изменение интересов, замена или изменение обязательных мест без добавлений требует генерации."
             )
         return self
 

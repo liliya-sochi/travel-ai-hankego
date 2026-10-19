@@ -93,6 +93,7 @@ def edit_analysis(
 
     return {
         "period_actions": [],
+        "place_additions": [],
         "place_replacements": [],
         "requires_regeneration": True,
         "regeneration_periods": [
@@ -658,3 +659,64 @@ async def test_visit_replacement_never_saves_unchanged_target(
     assert not case.model.replies
     if defect != "old_id":
         assert "Тестовый дневной парк" in case.context.preserved_names[-1]
+
+
+@pytest.mark.parametrize("new_place_missing", [False, True])
+async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
+    lifecycle_case: LifecycleCase,
+    database_session: AsyncSession,
+    new_place_missing: bool,
+) -> None:
+    """Реальная SQL-запись сохраняет прежний парк и добавляет названный музей."""
+
+    case = lifecycle_case
+    created = await case.create()
+    trip_id = created["trip_id"]
+    before = await stored_state(database_session, trip_id)
+    if new_place_missing:
+        case.context.missing_place_id = "second-museum"
+    parsed = {
+        **edit_analysis(change_rest=False),
+        "interests_changed": False,
+        "interests": None,
+        "must_visit_places_changed": True,
+        "must_visit_places": [REQUIRED_MUSEUM, "Тестовый музей"],
+        "requires_regeneration": False,
+        "regeneration_periods": [],
+        "place_additions": [
+            {
+                "day": 1,
+                "period": "afternoon",
+                "place_name": "Тестовый музей",
+                "activity_focus": "museum",
+            }
+        ],
+    }
+    case.model.replies.append(("trip_edit_analysis", parsed))
+    response = await case.client.post(
+        "/api/v1/trip-edit",
+        json={
+            "telegram_id": OWNER_ID,
+            "trip_id": trip_id,
+            "instruction": "Днём добавь Тестовый музей к прежнему парку. Остальные активности оставь.",
+        },
+    )
+    assert response.status_code == (502 if new_place_missing else 200), response.text
+    after = await stored_state(database_session, trip_id)
+    if new_place_missing:
+        assert after == before
+    else:
+        assert after[2] == before[2]
+        assert after[1]["must_visit_places"] == [REQUIRED_MUSEUM, "Тестовый музей"]
+        assert after[1]["interests"] == "Парки"
+        assert (
+            after[0]["days"][0]["afternoon"][0] == before[0]["days"][0]["afternoon"][0]
+        )
+        assert after[0]["days"][0]["afternoon"][1].startswith(
+            "Тестовый музей: посетить музей."
+        )
+        for period in ("morning", "evening"):
+            assert after[0]["days"][0][period] == before[0]["days"][0][period]
+    assert (await case.details(trip_id))["days"] == after[0]["days"]
+    assert case.model.calls == ["trip_plan", "trip_edit_analysis"]
+    assert not case.model.replies

@@ -38,6 +38,7 @@ def replacement_case() -> ReplacementCase:
         period_actions=[],
         requires_regeneration=True,
         regeneration_periods=[{"day": 2, "period": "afternoon"}],
+        place_additions=[],
         place_replacements=[
             dict(
                 day=2,

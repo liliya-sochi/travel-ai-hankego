@@ -26,6 +26,7 @@ from app.services.ai import (
     generate_trip_plan,
 )
 from app.services.trip_editing import (
+    addition_cells,
     preserved_cells,
     preserved_place_names,
     replacement_reference_names,
@@ -219,7 +220,10 @@ class TripService:
         # Все данные мест получаем заново. Сохранённый публичный текст
         # не используется как источник фактов.
         cells = preserved_cells(analysis, current_preferences, updated_preferences)
-        names = preserved_place_names(current_plan, cells)
+        names = preserved_place_names(
+            current_plan,
+            cells | addition_cells(analysis, updated_preferences.duration_days),
+        )
         names = list(
             dict.fromkeys(
                 [*names, *replacement_reference_names(current_plan, analysis)]

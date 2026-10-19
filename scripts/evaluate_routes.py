@@ -32,6 +32,7 @@ from app.schemas.grounded_trip import (
     GroundedActivityFocus,
 )
 from app.schemas.trip import (
+    MustVisitPlaceName,
     RequiredTripField,
     RestPeriod,
     RestPeriodChange,
@@ -42,6 +43,7 @@ from app.schemas.trip import (
     TripIntakeResponse,
     TripIntent,
     TripPeriodScope,
+    TripPlaceAddition,
     TripPlanResponse,
     TripPreferences,
 )
@@ -264,6 +266,12 @@ class EditExpectations(StrictSchema):
     general_activities: list[EditPeriodTerms] = Field(default_factory=list)
     regeneration_periods: list[TripPeriodScope] | None = None
     replacement_visits: list[EditReplacementVisits] = Field(default_factory=list)
+    addition_requests: list[TripPlaceAddition] = Field(default_factory=list)
+    appended_periods: list[EditPeriodVisits] = Field(default_factory=list)
+    must_visit_places: list[MustVisitPlaceName] | None = Field(
+        default=None, max_length=5
+    )
+    generation_expected: bool | None = None
 
 
 class EditStep(StrictSchema):
@@ -329,6 +337,7 @@ class EditEvaluationCase(StrictSchema):
                     raise ValueError("Некорректная ожидаемая область генерации.")
             TripEditAnalysis(
                 period_actions=[],
+                place_additions=[],
                 place_replacements=[],
                 requires_regeneration=True,
                 regeneration_periods=[
@@ -369,6 +378,25 @@ class EditEvaluationCase(StrictSchema):
                 for day, period in text_scopes
             ):
                 raise ValueError("Некорректная проверка общей активности.")
+            added_scopes = [
+                (visit.day, visit.period) for visit in expected.appended_periods
+            ]
+            if len(added_scopes) != len(set(added_scopes)) or any(
+                day > duration
+                or (day, period) in state
+                or (day, period) in scopes
+                or (day, period) in text_scopes
+                for day, period in added_scopes
+            ):
+                raise ValueError("Некорректная проверка добавленных посещений.")
+            if any(item.day > duration for item in expected.addition_requests):
+                raise ValueError("Добавление вне поездки.")
+            if {(item.day, item.period) for item in expected.addition_requests} != set(
+                added_scopes
+            ):
+                raise ValueError(
+                    "Добавления и проверки итоговых периодов противоречат."
+                )
             replacement_scopes = [
                 (visit.day, visit.period) for visit in expected.replacement_visits
             ]
@@ -377,6 +405,7 @@ class EditEvaluationCase(StrictSchema):
                 or (day, period) in state
                 or (day, period) in scopes
                 or (day, period) in text_scopes
+                or (day, period) in added_scopes
                 for day, period in replacement_scopes
             ):
                 raise ValueError("Некорректная проверка заменяемых посещений.")
@@ -422,7 +451,10 @@ class EditEvaluationSuite(StrictSchema):
                     *(
                         visit
                         for step in case.steps
-                        for visit in step.expectations.replacement_visits
+                        for visit in [
+                            *step.expectations.replacement_visits,
+                            *step.expectations.appended_periods,
+                        ]
                     ),
                 ]
             ):
@@ -661,15 +693,16 @@ def assess_edit_periods(
     for kind, visits in (
         ("preserved", case.preserved_visits),
         ("replacement", expected.replacement_visits),
+        ("addition", expected.appended_periods),
     ):
         for visit in visits:
             lines = activities(visit.day, visit.period)
             places = selected_places(lines, context)
-            if kind == "replacement":
-                checks[f"replacement:{visit.day}:{visit.period}"] = [
+            if kind in {"replacement", "addition"}:
+                checks[f"{kind}:{visit.day}:{visit.period}"] = [
                     place.source_place_id for place in places
                 ] == visit.place_ids
-                if visit.nearby_reference_id is not None:
+                if kind == "replacement" and visit.nearby_reference_id is not None:
                     anchor = next(
                         place
                         for place in context.places
@@ -811,6 +844,20 @@ async def evaluate_edit_dialogue(
                         turn["checks"][
                             f"replacement_requested_nearby:{visit.day}:{visit.period}"
                         ] = bool(requests) and all(item.nearby for item in requests)
+
+            def addition_key(item: TripPlaceAddition) -> tuple:
+                return (
+                    item.day,
+                    item.period,
+                    normalize_text(item.place_name),
+                    item.activity_focus,
+                )
+
+            turn["checks"]["addition_requests"] = Counter(
+                addition_key(item) for item in analysis.place_additions
+            ) == Counter(
+                addition_key(item) for item in step.expectations.addition_requests
+            )
             if not record_checks(turn):
                 return finish_checks(result)
             try:
@@ -828,10 +875,16 @@ async def evaluate_edit_dialogue(
             turn["checks"]["required_preferences"] = Counter(
                 normalize_text(name) for name in updated.must_visit_places
             ) == Counter(
-                normalize_text(name) for name in case.preferences.must_visit_places
+                normalize_text(name)
+                for name in (
+                    step.expectations.must_visit_places
+                    if step.expectations.must_visit_places is not None
+                    else preferences.must_visit_places
+                )
             )
             if not record_checks(turn):
                 return finish_checks(result)
+            generation_start = len(calls)
             generated = await ai.generate_edited_trip_plan(
                 preferences=updated,
                 current_preferences=preferences,
@@ -840,7 +893,13 @@ async def evaluate_edit_dialogue(
                 instruction=step.user_message,
                 analysis=analysis,
             )
-            assessment = assess_plan(generated, case, context)
+            if step.expectations.generation_expected is not None:
+                turn["checks"]["generation_expected"] = (
+                    len(calls) > generation_start
+                ) == step.expectations.generation_expected
+            assessment = assess_plan(
+                generated, case.model_copy(update={"preferences": updated}), context
+            )
             turn["checks"].update(assessment.pop("checks"))
             turn.update(assessment)
             turn["checks"].update(
