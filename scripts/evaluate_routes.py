@@ -281,6 +281,27 @@ class EditStep(StrictSchema):
     expectations: EditExpectations
 
 
+def assess_addition_requests(
+    actual: list[TripPlaceAddition], expected: list[TripPlaceAddition]
+) -> bool:
+    """Проверяет имя и период; тип ограничивается только явным критерием корпуса."""
+
+    def key(item: TripPlaceAddition) -> tuple[int, str, str | None]:
+        return item.day, item.period, normalize_text(item.place_name)
+
+    if Counter(key(item) for item in actual) != Counter(key(item) for item in expected):
+        return False
+    return all(
+        item.activity_focus is None
+        or any(
+            key(candidate) == key(item)
+            and candidate.activity_focus == item.activity_focus
+            for candidate in actual
+        )
+        for item in expected
+    )
+
+
 def expanded_period_scopes(
     rules: Sequence[TripPeriodScope], duration: int
 ) -> set[tuple[int, str]]:
@@ -845,18 +866,8 @@ async def evaluate_edit_dialogue(
                             f"replacement_requested_nearby:{visit.day}:{visit.period}"
                         ] = bool(requests) and all(item.nearby for item in requests)
 
-            def addition_key(item: TripPlaceAddition) -> tuple:
-                return (
-                    item.day,
-                    item.period,
-                    normalize_text(item.place_name),
-                    item.activity_focus,
-                )
-
-            turn["checks"]["addition_requests"] = Counter(
-                addition_key(item) for item in analysis.place_additions
-            ) == Counter(
-                addition_key(item) for item in step.expectations.addition_requests
+            turn["checks"]["addition_requests"] = assess_addition_requests(
+                analysis.place_additions, step.expectations.addition_requests
             )
             if not record_checks(turn):
                 return finish_checks(result)
