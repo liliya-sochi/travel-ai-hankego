@@ -159,7 +159,7 @@ Redis is used for:
   duplicate scopes and days outside the trip are rejected. When the request consists of keeping
   activities, changing rest rules and calm walks, Python applies it locally
   after the analysis call. Cancellation without a replacement activity still
-  uses generation; changed interests, required places and other edits do too.
+  uses generation; changed interests and other required-place edits do too.
   This reduces generation-model requests, without changing provider retry limits;
 - periods outside `regeneration_periods` are preserved even during full generation,
   including requests such as "replace the second afternoon's museum; keep everything
@@ -170,6 +170,25 @@ Redis is used for:
   fresh candidates and checked for category and available period. Old hours,
   addresses and links are discarded; formatting uses the current candidate.
   General activities remain text rather than proof of a concrete visit;
+- required `place_additions` supports explicitly named visits added to a concrete
+  day and period, keeping its existing activities. Each entry has `day`, `period`,
+  `place_name` from the instruction and requested `activity_focus` (or `null`).
+  Named additions enter the full required-place list, retaining previous required
+  visits; saved optional venues are never promoted merely because they are kept.
+  A pure named addition is applied locally after analysis with
+  `requires_regeneration=false` and `regeneration_periods=[]`. It needs no
+  generation-model call. The local path rejects mandatory-place removals or other
+  mandatory changes disguised as additions;
+- the existing visits in an addition period are resolved against fresh candidates
+  and supplied temporarily to enrichment, even if generation is needed elsewhere.
+  Python appends the new visit after checking identity, focus and available period.
+  An already included venue is not duplicated or assigned a different focus.
+  The existing limit of two activities per period applies to visits and general
+  activities together. A full period, missing/ambiguous/closed venue or reserved
+  rest fails without changing the saved route; explicitly cancelled rest can be
+  filled by a named visit locally. Addition and replacement in the same period
+  must be sent separately. During mixed edits, application-composed addition
+  periods are protected just like all other preserved periods;
 - edit analysis also returns required `place_replacements`: the previous visit's
   day, period and name for explicit requests to choose a different venue. These
   names must identify actual saved visits inside the generation scope and cannot
@@ -210,7 +229,8 @@ Redis is used for:
   does not silently replace them. This is an internal analysis-schema change,
   with no public API or storage migration;
 - logs report `Trip edit period actions parsed`, `Trip edit regeneration scope parsed`,
-  `Trip edit place replacements parsed`, `Grounded edit replacements checked`,
+  `Trip edit place replacements parsed`, `Trip edit place additions parsed`,
+  `Trip edit place additions applied`, `Grounded edit replacements checked`,
   `Trip edit applied locally` and
   `Grounded edit periods applied`, using only mode flags and counts. Edit-eval
   reports retain the analysis and actual call list; check both to distinguish
@@ -586,6 +606,13 @@ park. Independent criteria check the parsed type and nearby flag, and the output
 distance against a reference ID and radius stored in the corpus. These expected
 conditions are never passed to analysis or generation. Runtime and evaluation
 check the nearby policy separately rather than trusting the model's description.
+A fourth, one-turn case `tokyo_add_second_afternoon` adds an explicitly named
+museum to the existing second-afternoon visit. Independent expectations check the
+parsed addition name/scope/focus, full updated required-place list, both old and new
+IDs and focuses in the target period, and all other visits and walks. It also
+checks that generation was skipped. These expectations are evaluation-only;
+the application receives actual analysis and prior state, without golden values.
+
 All coordinates,
 IDs, addresses, and opening hours are synthetic. Venue names are fixture labels,
 not assertions about currently available museums.
@@ -596,7 +623,8 @@ Independent checks compare the analysis rest changes, merged rest preferences,
 canonical reserved-rest activities, and preserved visits in their exact periods.
 An all-days rule and equivalent day-specific rules are compared by effective
 day/period scope; a specific change takes precedence over a general change.
-The required-place preferences must remain intact. Walk checks use non-empty
+The required-place preferences must remain intact unless the corpus explicitly
+expects an updated list; subsequent turns use the actual previous list. Walk checks use non-empty
 general activities, required substrings, and excluded substrings; they do not
 establish semantic equivalence, calm pacing, or overall itinerary appeal.
 
@@ -604,7 +632,8 @@ The dialogue stops on its first failed criterion or service error. Reports retai
 completed turns and the failed turn's available analysis and metadata. They include
 actual input/output states, per-turn calls, safe numeric quota diagnostics, and
 `planned_messages`. The rest cycles can run locally with three analysis calls
-each; the replacement case needs analysis and generation. Existing bounded retries
+each; the replacement case needs analysis and generation, and the named-addition
+case needs only analysis. Existing bounded retries
 can increase these counts. The configured interval applies between
 turns as well as between dialogues (65 seconds by default). As with other corpora,
 only completed case results are written to disk; interruption mid-dialogue does

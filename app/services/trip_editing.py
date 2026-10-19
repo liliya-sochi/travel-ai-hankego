@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from app.schemas.geoapify import TravelContext
 from app.schemas.grounded_trip import (
     ACTIVITY_FOCUS_DESCRIPTIONS,
+    REST_PERIOD_DESCRIPTION,
     GroundedActivity,
     GroundedActivityFocus,
     get_supported_activity_focuses,
 )
 from app.schemas.trip import (
+    MAX_ACTIVITIES_PER_PERIOD,
     TripDayPeriod,
     TripEditAnalysis,
     TripPlaceReplacement,
@@ -66,6 +68,18 @@ def distinct_replacement_choices(choices: list[set[str]]) -> bool:
 
 class PreservedActivityUnavailableError(ValueError):
     """Сохраняемое посещение не удалось однозначно связать со свежими данными."""
+
+
+class PlaceAdditionUnavailableError(ValueError):
+    """Безопасное объяснение невозможности добавить посещение без потерь."""
+
+
+def addition_cells(analysis: TripEditAnalysis, duration: int) -> set[PeriodKey]:
+    """Проверяет конкретные дни именованных добавлений."""
+
+    if any(item.day > duration for item in analysis.place_additions):
+        raise ValueError("Addition day exceeds trip duration.")
+    return {(item.day, item.period) for item in analysis.place_additions}
 
 
 def period_action_map(
@@ -139,7 +153,9 @@ def requires_full_generation(
         if action == "quiet_walk"
     }
     return analysis.requires_regeneration or bool(
-        cancelled_rest_cells(current, updated) - walks
+        cancelled_rest_cells(current, updated)
+        - walks
+        - addition_cells(analysis, updated.duration_days)
     )
 
 
@@ -397,3 +413,108 @@ def resolve_preserved_activities(
                 )
             result[cell] = activities
     return result
+
+
+def resolve_added_activities(
+    *,
+    plan: TripPlanResponse,
+    analysis: TripEditAnalysis,
+    context: TravelContext,
+    current: TripPreferences,
+    updated: TripPreferences,
+    preserved: dict[PeriodKey, list[GroundedActivity]],
+    preferred_focuses: list[GroundedActivityFocus],
+) -> tuple[dict[PeriodKey, list[GroundedActivity]], int]:
+    """Добавляет проверенные посещения к прежним, соблюдая вместимость периода."""
+
+    cells = addition_cells(analysis, updated.duration_days)
+    replacement_cells = {
+        (item.day, item.period) for item in analysis.place_replacements
+    }
+    if cells.intersection(replacement_cells):
+        raise PlaceAdditionUnavailableError(
+            "Добавление и замену в одном периоде отправьте отдельными сообщениями. "
+            "Маршрут не изменён."
+        )
+    if any(updated.is_rest_period(*cell) for cell in cells):
+        raise PlaceAdditionUnavailableError(
+            "В выбранном периоде запланирован отдых. Отмените его или выберите другое время. "
+            "Маршрут не изменён."
+        )
+    result = resolve_preserved_activities(plan, cells - preserved.keys(), context)
+    result.update(
+        {
+            cell: [activity.model_copy() for activity in preserved[cell]]
+            for cell in cells & preserved.keys()
+        }
+    )
+    for cell in cancelled_rest_cells(current, updated) & cells:
+        result[cell] = [
+            activity
+            for activity in result[cell]
+            if activity.description is None
+            or " ".join(activity.description.casefold().split()).rstrip(".!…")
+            != REST_PERIOD_DESCRIPTION.casefold().rstrip(".")
+        ]
+    added_count = 0
+    for request in analysis.place_additions:
+        cell = request.day, request.period
+        exact = [
+            place
+            for place in context.places
+            if normalize_place_name(request.place_name)
+            in {
+                normalize_place_name(place.name),
+                normalize_place_name(place.display_name),
+            }
+        ]
+        matches = exact or [
+            place
+            for place in context.places
+            if required_place_name_matches(
+                required_name=request.place_name, candidate_name=place.display_name
+            )
+        ]
+        if len(matches) != 1:
+            raise PlaceAdditionUnavailableError(
+                "Не удалось однозначно подтвердить добавляемое место. "
+                "Маршрут не изменён. Уточните название."
+            )
+        place = matches[0]
+        supported = get_supported_activity_focuses(place)
+        focus = request.activity_focus or next(
+            (f for f in preferred_focuses if f in supported), None
+        )
+        if focus not in supported:
+            raise PlaceAdditionUnavailableError(
+                "Добавляемое место не подходит для указанного вида активности. Маршрут не изменён."
+            )
+        existing = next(
+            (a for a in result[cell] if a.source_place_id == place.source_place_id),
+            None,
+        )
+        if existing is not None:
+            if (
+                request.activity_focus is not None
+                and existing.activity_focus != request.activity_focus
+            ):
+                raise PlaceAdditionUnavailableError(
+                    "Это место уже включено в период с другим действием. "
+                    "Уточните, нужно ли изменить посещение. Маршрут не изменён."
+                )
+            continue
+        if len(result[cell]) >= MAX_ACTIVITIES_PER_PERIOD:
+            raise PlaceAdditionUnavailableError(
+                "В выбранном периоде уже две активности. Выберите другой период или замену. "
+                "Маршрут не изменён."
+            )
+        result[cell].append(
+            GroundedActivity(
+                source_place_id=place.source_place_id,
+                place_name=place.name,
+                activity_focus=focus,
+                description=None,
+            )
+        )
+        added_count += 1
+    return result, added_count

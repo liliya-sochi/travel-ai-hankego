@@ -55,16 +55,19 @@ from app.services.trip_editing import (
     MAX_NEARBY_REPLACEMENT_DISTANCE_METERS,
     QUIET_WALK_DESCRIPTION,
     PeriodKey,
+    PlaceAdditionUnavailableError,
     PreservedActivityUnavailableError,
     ReplacementReferenceUnavailableError,
     ReplacementVisitRequirement,
     VisitReplacementConstraint,
+    addition_cells,
     distinct_replacement_choices,
     period_action_map,
     preserved_cells,
     regeneration_cells,
     replacement_visit_names,
     requires_full_generation,
+    resolve_added_activities,
     resolve_preserved_activities,
     resolve_visit_replacements,
 )
@@ -416,9 +419,26 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
   разреши все три периода с day=null; явно сохраняемые периоды отметь preserve;
 - requires_regeneration=true требует непустого regeneration_periods;
   requires_regeneration=false требует regeneration_periods=[];
+- place_additions перечисляет явно НАЗВАННЫЕ новые места, которые нужно ДОБАВИТЬ
+  к прежним активностям конкретного периода, а не заменить ими старое посещение.
+  Укажи day, period, place_name из edit_instruction и activity_focus
+  (явно запрошенный тип или null). Без такого запроса верни [];
+- для однодневной поездки указанный период означает day=1. Для нескольких дней
+  без указанного дня не выдумывай область: используй обычную генерацию;
+- «во второй день днём добавь музей «Город и время», остальные активности оставь»:
+  place_additions=[{"day":2,"period":"afternoon","place_name":"Город и время",
+  "activity_focus":"museum"}], must_visit_places_changed=true с полным новым списком,
+  interests_changed=false, requires_regeneration=false, regeneration_periods=[];
+- прежние посещения периода добавления приложение сохранит само. Не записывай
+  их в обязательные места. «Вместо музея» означает замену, не добавление;
+- явно названные добавления выполняет приложение локально. В regeneration_periods
+  включай только другие периоды, действительно требующие выбора генератором;
+- «вместо отдыха добавь <название>» также требует rest=false для этого периода.
+  Без явной отмены не снимай сохранённый отдых;
 - requires_regeneration=false только если ВСЯ инструкция сводится к
-  сохранению активностей, добавлению/отмене отдыха и спокойной прогулке;
-- любой выбор/замена/перенос места, другой тип общей активности, другой вариант
+  сохранению активностей, добавлению/отмене отдыха, спокойной прогулке
+  или именованным добавлениям в конкретный день и период;
+- любой другой выбор/замена/перенос места, другой тип общей активности, другой вариант
   маршрута, изменение тем или интересов требует requires_regeneration=true;
 - изменение отдыха или прогулки в конкретном периоде само по себе
   не меняет общие interests; period_actions=[] при отсутствии таких действий;
@@ -446,7 +466,11 @@ EDIT_ANALYSIS_RETRY_PROMPT = """
 - place_replacements должны указывать прежние посещения внутри regeneration_periods;
   в каждой записи обязательны activity_focus (null без явного типа) и nearby
   (false без явной просьбы подобрать место рядом);
-- номер дня отдыха не может превышать current_preferences.duration_days;
+- place_additions содержит явно названные новые посещения конкретного дня и периода;
+  activity_focus обязателен (null без явного типа). [] без именованного добавления;
+- для чистого именованного добавления requires_regeneration=false, regeneration_periods=[];
+  добавление входит в полный must_visit_places, прежние обязательные места сохраняются;
+- номер дня не может превышать current_preferences.duration_days;
 - не меняй правила отдыха, которые не затронуты edit_instruction;
 - не добавляй неизвестные поля и обычный текст.
 """.strip()
@@ -1601,6 +1625,7 @@ def _validate_trip_edit_analysis(
             raise ValueError("LLM returned a rest day outside the trip.")
         period_action_map(analysis, current_preferences.duration_days)
         regeneration_cells(analysis, current_preferences.duration_days)
+        addition_cells(analysis, current_preferences.duration_days)
         if analysis.place_replacements:
             if current_plan is None:
                 raise ValueError("Replacement validation needs the saved plan.")
@@ -1632,6 +1657,24 @@ def _validate_trip_edit_analysis(
             raise ValueError(
                 "LLM changed a required place absent from the instruction."
             )
+
+    addition_names = [item.place_name for item in analysis.place_additions]
+    for name in addition_names:
+        if not _place_name_matches_any(
+            name, returned_places
+        ) or not required_place_name_matches(
+            required_name=instruction, candidate_name=name
+        ):
+            raise ValueError("Added visit must be explicit and required.")
+    if not analysis.requires_regeneration and (
+        removed_places
+        or any(
+            not _place_name_matches_any(name, addition_names) for name in added_places
+        )
+    ):
+        raise ValueError(
+            "Local edit changes required places beyond declared additions."
+        )
 
 
 def _build_grounded_edit_user_message(
@@ -2972,16 +3015,6 @@ async def generate_edited_trip_plan(
             replacements = resolve_visit_replacements(
                 current_plan, analysis, travel_context
             )
-            places_by_id = {
-                place.source_place_id: place for place in travel_context.places
-            }
-            for (_day, period), activities in preserved.items():
-                for activity in activities:
-                    _validate_grounded_activity(
-                        activity=activity,
-                        places_by_id=places_by_id,
-                        period=period,
-                    )
             walks = {
                 cell: action
                 for cell, action in period_action_map(
@@ -2993,6 +3026,64 @@ async def generate_edited_trip_plan(
                 raise PreservedActivityUnavailableError(
                     "Walk conflicts with reserved rest."
                 )
+            for cell in walks:
+                preserved[cell] = [
+                    GroundedActivity(
+                        source_place_id=None,
+                        place_name=None,
+                        activity_focus=None,
+                        description=QUIET_WALK_DESCRIPTION,
+                    )
+                ]
+            preferred_focuses = list(
+                dict.fromkeys(
+                    [
+                        *(
+                            INTEREST_CATEGORY_ACTIVITY_FOCUSES[category]
+                            for category in select_interest_categories(
+                                preferences.interests
+                            )
+                        ),
+                        "museum",
+                        "history",
+                        "architecture",
+                        "park",
+                        "food",
+                        "entertainment",
+                        "sight",
+                        "place",
+                    ]
+                )
+            )
+            additions, added_count = resolve_added_activities(
+                plan=current_plan,
+                analysis=analysis,
+                context=travel_context,
+                current=current_preferences,
+                updated=preferences,
+                preserved=preserved,
+                preferred_focuses=preferred_focuses,
+            )
+            preserved.update(additions)
+            places_by_id = {
+                place.source_place_id: place for place in travel_context.places
+            }
+            for (_day, period), activities in preserved.items():
+                for activity in activities:
+                    _validate_grounded_activity(
+                        activity=activity,
+                        places_by_id=places_by_id,
+                        period=period,
+                    )
+            if analysis.place_additions:
+                logger.info(
+                    "Trip edit place additions applied | period_count=%s | added_visit_count=%s",
+                    len(additions),
+                    added_count,
+                )
+        except PlaceAdditionUnavailableError as error:
+            logger.warning("Trip edit addition unavailable")
+            raise AIServiceError(str(error)) from error
         except ReplacementReferenceUnavailableError as error:
             logger.warning("Trip edit replacement reference unavailable")
             raise AIServiceError(
@@ -3002,19 +3093,9 @@ async def generate_edited_trip_plan(
         except (ValidationError, ValueError) as error:
             logger.warning("Trip edit preservation unavailable")
             raise AIServiceError(
-                "Не удалось подтвердить сохраняемые активности по свежим данным. "
+                "Не удалось подтвердить добавляемые или сохраняемые активности по свежим данным. "
                 "Маршрут не изменён. Уточните пожелания."
             ) from error
-
-        for cell in walks:
-            preserved[cell] = [
-                GroundedActivity(
-                    source_place_id=None,
-                    place_name=None,
-                    activity_focus=None,
-                    description=QUIET_WALK_DESCRIPTION,
-                )
-            ]
 
         travel_context, replacements = _context_for_visit_replacements(
             preferences=preferences,
@@ -3338,6 +3419,10 @@ async def analyze_trip_edit(
                     item.activity_focus is not None
                     for item in analysis.place_replacements
                 ),
+            )
+            logger.info(
+                "Trip edit place additions parsed | visit_count=%s",
+                len(analysis.place_additions),
             )
             return analysis
 
