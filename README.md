@@ -608,9 +608,13 @@ conditions are never passed to analysis or generation. Runtime and evaluation
 check the nearby policy separately rather than trusting the model's description.
 A fourth, one-turn case `tokyo_add_second_afternoon` adds an explicitly named
 museum to the existing second-afternoon visit. Independent expectations check the
-parsed addition name/scope/focus, full updated required-place list, both old and new
+parsed addition name and scope, full updated required-place list, both old and new
 IDs and focuses in the target period, and all other visits and walks. It also
-checks that generation was skipped. These expectations are evaluation-only;
+checks that generation was skipped. A nullable expected addition focus means no
+separate type requirement on analysis: a venue name alone does not require that
+field to be filled. A non-null expected focus is checked strictly. The final
+appended visits must still have the expected `museum` focus regardless of the
+analysis field. These expectations are evaluation-only;
 the application receives actual analysis and prior state, without golden values.
 
 All coordinates,

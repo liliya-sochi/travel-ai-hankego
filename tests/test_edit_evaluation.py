@@ -693,3 +693,123 @@ def test_addition_eval_independently_detects_bad_output(suite, defect):
         plan, case, case.steps[0].expectations, suite.contexts[case.context]
     )
     assert not all(checks.values())
+
+
+@pytest.mark.parametrize(
+    ("expected_focus", "actual_focus", "accepted"),
+    [
+        (None, None, True),
+        (None, "museum", True),
+        ("museum", "museum", True),
+        ("museum", None, False),
+        ("museum", "architecture", False),
+    ],
+)
+def test_addition_analysis_focus_is_optional_only_without_explicit_criterion(
+    expected_focus, actual_focus, accepted
+):
+    """Не требует заполнения nullable-поля по одному названию, но проверяет явный тип."""
+
+    from app.schemas.trip import TripPlaceAddition
+
+    def request(focus):
+        return TripPlaceAddition(
+            day=2,
+            period="afternoon",
+            place_name="Тестовый музей 5",
+            activity_focus=focus,
+        )
+
+    assert (
+        evaluation.assess_addition_requests(
+            [request(actual_focus)], [request(expected_focus)]
+        )
+        is accepted
+    )
+
+
+@pytest.mark.parametrize("defect", ["name", "day", "period", "missing", "duplicate"])
+def test_optional_addition_focus_does_not_relax_identity_scope_or_count(suite, defect):
+    """Неверный запрос нельзя принять только потому, что фокус необязателен."""
+
+    expected = suite.cases[3].steps[0].expectations.addition_requests
+    actual = [item.model_copy(deep=True) for item in expected]
+    if defect == "name":
+        actual[0].place_name = "Другой музей"
+    elif defect == "day":
+        actual[0].day = 1
+    elif defect == "period":
+        actual[0].period = "morning"
+    elif defect == "missing":
+        actual = []
+    else:
+        actual.append(actual[0].model_copy())
+    assert not evaluation.assess_addition_requests(actual, expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_focus_required", [False, True])
+async def test_replay_live_nullable_addition_reply_through_real_analysis_and_local_builder(
+    suite, monkeypatch, explicit_focus_required
+):
+    """Ответ анализатора из live-отчёта 19.10.2026 проходит настоящие границы AI."""
+
+    requests = mock_provider(monkeypatch)
+    case = suite.cases[3].model_copy(deep=True)
+    if explicit_focus_required:
+        case.steps[0].expectations.addition_requests[0].activity_focus = "museum"
+    reply = {
+        "supported": True,
+        "interests_changed": False,
+        "interests": "Музеи; вечером спокойная прогулка",
+        "must_visit_places_changed": True,
+        "must_visit_places": ["Art Aquarium Museum GINZA", "Тестовый музей 5"],
+        "rest_period_changes": [],
+        "period_actions": [],
+        "requires_regeneration": False,
+        "regeneration_periods": [],
+        "place_replacements": [],
+        "place_additions": [
+            {
+                "day": 2,
+                "period": "afternoon",
+                "place_name": "Тестовый музей 5",
+                "activity_focus": None,
+            }
+        ],
+    }
+
+    async def provider(**arguments):
+        payload = arguments["payload"]
+        assert payload["response_format"]["json_schema"]["name"] == "trip_edit_analysis"
+        requests.append(payload)
+        return ai.LLMProviderResponse(
+            data={
+                "choices": [
+                    {
+                        "message": {"content": json.dumps(reply, ensure_ascii=False)},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+            duration_ms=1,
+            header_request_id="live-nullable-replay",
+        )
+
+    monkeypatch.setattr(ai, "_request_model", provider)
+    result = await evaluation.evaluate_case(case, suite)
+    assert len(requests) == len(result["calls"]) == 1
+    assert result["status"] == (
+        "quality_failed" if explicit_focus_required else "passed"
+    ), result
+    assert result["checks"]["step:1:addition_requests"] is not explicit_focus_required
+    if explicit_focus_required:
+        assert "plan" not in result["steps"][0]
+    else:
+        turn = result["steps"][0]
+        assert turn["checks"]["addition_focus:2:afternoon"]
+        assert turn["checks"]["generation_expected"]
+        assert turn["checks"]["required_preferences"]
+        assert [
+            line.split(":", 1)[0] for line in turn["plan"]["days"][1]["afternoon"]
+        ] == ["Тестовый музей 4", "Тестовый музей 5"]
