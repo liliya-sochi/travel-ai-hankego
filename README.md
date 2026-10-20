@@ -262,6 +262,22 @@ Redis is used for:
 - rolling production reports for LLM attempts and final AI API responses, with
   error-threshold alerts through the existing host monitor.
 - explicit validation reason codes for grounded-plan failures without logging model output.
+- safe intake/edit-analysis diagnostics on `invalid_output`: `validation_stage`
+  (`extraction`, `schema`, `semantic`), `validation_reason`, and at most five
+  distinct `validation_issues` (`field`, `error_type`, `reason`). Missing model text,
+  schema failures and known edit-rule violations have separate static codes.
+  Only schema field names are retained: list indices become `[]`, unknown field
+  names become `<other>`, and model-level errors use `<root>`. Input values,
+  Pydantic messages/context, model responses and arbitrary exception text are
+  excluded. Unknown exceptions use `other_analysis_validation`;
+- analysis diagnostics flow through the existing `llm_call` event into per-attempt
+  eval calls, including a failed analysis followed by HTTP 429 or another service
+  error. Existing grounded reason codes, retry limits, prompts and public API
+  responses remain compatible. Diagnostics are observational: they do not fix a
+  model response or alter whether an edit is accepted. Aggregate production
+  reports continue counting outcomes and ignore these extra diagnostic fields.
+  Deploy this runtime change by rebuilding/restarting API only; no DB migration,
+  bot or Redis restart is required.
 
 ### External Travel Data
 

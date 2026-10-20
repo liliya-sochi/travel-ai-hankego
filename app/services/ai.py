@@ -41,6 +41,11 @@ from app.schemas.trip import (
     TripPlanResponse,
     TripPreferences,
 )
+from app.services.ai_diagnostics import (
+    AnalysisValidationStage,
+    analysis_validation_details,
+    safe_analysis_validation_details,
+)
 from app.services.opening_hours import (
     DayPeriod,
     infer_available_periods,
@@ -643,6 +648,7 @@ def _log_llm_call(
     error_type: str | None = None,
     http_status: int | None = None,
     validation_reason: str | None = None,
+    validation_details: dict[str, Any] | None = None,
     provider_error_code: str | None = None,
     request_body_bytes: int | None = None,
     provider_token_limit: int | None = None,
@@ -651,7 +657,7 @@ def _log_llm_call(
 ) -> None:
     """Записывает одно событие вызова LLM по белому списку полей."""
 
-    event: dict[str, str | int | None] = {
+    event: dict[str, Any] = {
         "event": "llm_call",
         "outcome": outcome,
         "model": metadata.model,
@@ -675,6 +681,9 @@ def _log_llm_call(
 
     if validation_reason is not None:
         event["validation_reason"] = validation_reason
+
+    if validation_details is not None:
+        event.update(safe_analysis_validation_details(validation_details))
 
     if provider_error_code is not None:
         event["provider_error_code"] = provider_error_code
@@ -3248,11 +3257,13 @@ async def analyze_trip_message(
                 fallback_request_id=provider_response.header_request_id,
             )
 
+            validation_stage: AnalysisValidationStage = "extraction"
             try:
                 model_text = _extract_model_text(
                     provider_response.data,
                 )
 
+                validation_stage = "schema"
                 extraction = TripIntakeExtraction.model_validate_json(
                     model_text,
                 )
@@ -3266,6 +3277,9 @@ async def analyze_trip_message(
                     provider_attempt=provider_response.provider_attempt,
                     duration_ms=provider_response.duration_ms,
                     error_type=type(error).__name__,
+                    validation_details=analysis_validation_details(
+                        error, stage=validation_stage
+                    ),
                 )
 
                 if attempt == MAX_SEMANTIC_ATTEMPTS:
@@ -3352,9 +3366,12 @@ async def analyze_trip_edit(
                 fallback_request_id=provider_response.header_request_id,
             )
 
+            validation_stage: AnalysisValidationStage = "extraction"
             try:
                 model_text = _extract_model_text(provider_response.data)
+                validation_stage = "schema"
                 analysis = TripEditAnalysis.model_validate_json(model_text)
+                validation_stage = "semantic"
                 _validate_trip_edit_analysis(
                     analysis=analysis,
                     current_preferences=current_preferences,
@@ -3371,6 +3388,9 @@ async def analyze_trip_edit(
                     provider_attempt=provider_response.provider_attempt,
                     duration_ms=provider_response.duration_ms,
                     error_type=type(error).__name__,
+                    validation_details=analysis_validation_details(
+                        error, stage=validation_stage
+                    ),
                 )
 
                 if attempt == MAX_SEMANTIC_ATTEMPTS:

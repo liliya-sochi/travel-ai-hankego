@@ -48,6 +48,7 @@ from app.schemas.trip import (
     TripPreferences,
 )
 from app.services import ai, trip_intake
+from app.services.ai_diagnostics import safe_analysis_validation_details
 from app.services.place_geography import calculate_distance_meters
 from app.services.trip_enrichment import place_matches_category
 
@@ -959,10 +960,14 @@ class CallCollector(logging.Handler):
             "total_tokens",
             "finish_reason",
             "http_status",
-            "validation_reason",
             "provider_error_code",
         )
         call = {key: event[key] for key in allowed if key in event}
+        if "validation_stage" in event:
+            call.update(safe_analysis_validation_details(event))
+        elif "validation_reason" in event:
+            # Старые grounded-причины остаются совместимы с прежними отчётами.
+            call["validation_reason"] = event["validation_reason"]
         for key in (
             "request_body_bytes",
             "provider_token_limit",
