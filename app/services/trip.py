@@ -21,12 +21,15 @@ from app.schemas.trip import (
     TripSummaryResponse,
 )
 from app.services.ai import (
+    AIServiceError,
     analyze_trip_edit,
     generate_edited_trip_plan,
     generate_trip_plan,
 )
 from app.services.trip_editing import (
+    PlaceRemovalUnavailableError,
     addition_cells,
+    plan_without_removed_visits,
     preserved_cells,
     preserved_place_names,
     replacement_reference_names,
@@ -219,9 +222,13 @@ class TripService:
 
         # Все данные мест получаем заново. Сохранённый публичный текст
         # не используется как источник фактов.
+        try:
+            retained_plan = plan_without_removed_visits(current_plan, analysis)
+        except PlaceRemovalUnavailableError as error:
+            raise AIServiceError(str(error)) from error
         cells = preserved_cells(analysis, current_preferences, updated_preferences)
         names = preserved_place_names(
-            current_plan,
+            retained_plan,
             cells | addition_cells(analysis, updated_preferences.duration_days),
         )
         names = list(

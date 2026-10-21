@@ -27,6 +27,7 @@ def addition_analysis(**updates):
             "requires_regeneration": False,
             "regeneration_periods": [],
             "place_replacements": [],
+            "place_removals": [],
             "place_additions": [
                 {
                     "day": 2,

@@ -98,6 +98,16 @@ class TripPlaceAddition(StrictSchema):
     )
 
 
+class TripPlaceRemoval(StrictSchema):
+    """Явно названное прежнее посещение, удаляемое без замены остальных."""
+
+    day: int = Field(ge=1, le=30)
+    period: TripDayPeriod
+    place_name: MustVisitPlaceName = Field(
+        description="Название удаляемого посещения из edit_instruction и current_trip_plan.",
+    )
+
+
 class RestPeriodChange(RestPeriod):
     """Одно явное добавление или отмена отдыха из текущей инструкции."""
 
@@ -441,7 +451,7 @@ class TripEditAnalysis(StrictSchema):
         description="Явные просьбы сохранить период или сделать спокойную прогулку.",
     )
     requires_regeneration: bool = Field(
-        description="Нужна ли генерация вне отдыха, period_actions и именованных place_additions.",
+        description="Нужна ли генерация вне отдыха, period_actions, place_additions и place_removals.",
     )
     regeneration_periods: list[TripPeriodScope] = Field(
         max_length=90,
@@ -464,6 +474,26 @@ class TripEditAnalysis(StrictSchema):
             "дня и периода. [] без такого запроса. Прежние активности сохраняются."
         ),
     )
+    place_removals: list[TripPlaceRemoval] = Field(
+        max_length=180,
+        description=(
+            "Явно названные посещения, удаляемые из конкретного дня и периода. "
+            "[] без такого запроса. Другие активности периода сохраняются."
+        ),
+    )
+
+    @field_validator("place_removals")
+    @classmethod
+    def validate_place_removals(
+        cls, removals: list[TripPlaceRemoval]
+    ) -> list[TripPlaceRemoval]:
+        keys = {
+            (item.day, item.period, " ".join(item.place_name.casefold().split()))
+            for item in removals
+        }
+        if len(keys) != len(removals):
+            raise ValueError("Удаляемые посещения не должны повторяться.")
+        return removals
 
     @field_validator("place_additions")
     @classmethod
@@ -518,10 +548,13 @@ class TripEditAnalysis(StrictSchema):
         if not self.requires_regeneration and (
             self.interests_changed
             or self.place_replacements
-            or (self.must_visit_places_changed and not self.place_additions)
+            or (
+                self.must_visit_places_changed
+                and not (self.place_additions or self.place_removals)
+            )
         ):
             raise ValueError(
-                "Изменение интересов, замена или изменение обязательных мест без добавлений требует генерации."
+                "Изменение интересов, замена или изменение обязательных мест без локальных посещений требует генерации."
             )
         return self
 

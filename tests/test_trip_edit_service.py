@@ -145,6 +145,7 @@ async def test_scoped_generation_requests_fresh_preserved_visits_without_promoti
         must_visit_places=case.preferences.must_visit_places,
         rest_period_changes=[],
         period_actions=[],
+        place_removals=[],
         place_additions=[],
         place_replacements=[
             {
@@ -208,6 +209,7 @@ async def test_unrelated_edit_preserves_saved_rest_rules(
     async def analyze(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_removals=[],
             place_additions=[],
             place_replacements=[],
             requires_regeneration=True,
@@ -260,6 +262,7 @@ async def test_rest_conflict_leaves_saved_trip_unchanged(
     async def analyze(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_removals=[],
             place_additions=[],
             place_replacements=[],
             requires_regeneration=True,
@@ -317,6 +320,7 @@ async def test_edit_rebuilds_context_and_saves_full_version(
     )
     analysis = TripEditAnalysis(
         period_actions=[],
+        place_removals=[],
         place_additions=[],
         place_replacements=[],
         requires_regeneration=True,
@@ -440,6 +444,7 @@ async def test_edit_rejects_destination_or_duration_change(
     async def fake_analyze_trip_edit(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_removals=[],
             place_additions=[],
             place_replacements=[],
             requires_regeneration=True,
@@ -507,6 +512,7 @@ async def test_named_addition_fresh_lookup_and_atomic_service_write(
         requires_regeneration=False,
         regeneration_periods=[],
         place_replacements=[],
+        place_removals=[],
         place_additions=[
             {
                 "day": 2,
@@ -561,6 +567,102 @@ async def test_named_addition_fresh_lookup_and_atomic_service_write(
         assert (
             saved["preferences_data"]["must_visit_places"] == parsed.must_visit_places
         )
+        assert session.commit_count == 1
+    assert repository.trip.plan_data == plan.model_dump(mode="json")
+    assert repository.trip.preferences_data == case.preferences.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defect", [None, "removed_missing", "kept_missing", "empty_period"]
+)
+async def test_named_removal_lookup_and_atomic_write(monkeypatch, defect):
+    """Удаляемое место не обогащается; неподтверждённый сосед отменяет запись."""
+
+    from app.services.ai import AIServiceError
+
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[4]
+    plan = suite.plans[case.current_plan].model_copy(deep=True)
+    context = suite.contexts[case.context].model_copy(deep=True)
+    if defect in {"removed_missing", "kept_missing"}:
+        missing = (
+            "eval-edit-museum-5"
+            if defect == "removed_missing"
+            else "eval-edit-museum-4"
+        )
+        context.places = [p for p in context.places if p.source_place_id != missing]
+    if defect == "empty_period":
+        plan.days[1].afternoon = plan.days[1].afternoon[1:]
+    parsed = TripEditAnalysis(
+        supported=True,
+        interests_changed=False,
+        interests=None,
+        must_visit_places_changed=True,
+        must_visit_places=["Art Aquarium Museum GINZA"],
+        rest_period_changes=[],
+        period_actions=[],
+        requires_regeneration=False,
+        regeneration_periods=[],
+        place_replacements=[],
+        place_additions=[],
+        place_removals=[
+            {"day": 2, "period": "afternoon", "place_name": "Тестовый музей 5"}
+        ],
+    )
+
+    async def analyze(**_):
+        return parsed
+
+    class Enrichment:
+        called = False
+
+        async def enrich(self, preferences, *, preserved_place_names):
+            self.called = True
+            assert set(preserved_place_names) == {
+                "Art Aquarium Museum GINZA",
+                "Mitsuo Aida Museum",
+                "Тестовый музей 3",
+                "Тестовый музей 4",
+            }
+            assert preferences.must_visit_places == ["Art Aquarium Museum GINZA"]
+            return context
+
+    enrichment = Enrichment()
+    session = FakeSession()
+    repository = FakeTripRepository(
+        preferences_data=case.preferences.model_dump(mode="json")
+    )
+    repository.trip.plan_data = plan.model_dump(mode="json")
+    monkeypatch.setattr(trip_service_module, "analyze_trip_edit", analyze)
+    service = TripService(session)
+    service._user_repository = FakeUserRepository()
+    service._trip_repository = repository
+
+    async def edit():
+        return await service.edit_trip_plan(
+            telegram_id=9000000001,
+            trip_id=7,
+            instruction=case.steps[0].user_message,
+            enrichment_service=enrichment,
+        )
+
+    if defect in {"kept_missing", "empty_period"}:
+        with pytest.raises(AIServiceError, match="Маршрут не изменён"):
+            await edit()
+        assert repository.update_arguments is None
+        assert session.commit_count == 0
+        assert enrichment.called is (defect != "empty_period")
+    else:
+        await edit()
+        saved = repository.update_arguments
+        assert len(saved["plan_data"]["days"][1]["afternoon"]) == 1
+        assert saved["plan_data"]["days"][1]["afternoon"][0].startswith(
+            "Тестовый музей 4:"
+        )
+        assert saved["preferences_data"]["must_visit_places"] == [
+            "Art Aquarium Museum GINZA"
+        ]
         assert session.commit_count == 1
     assert repository.trip.plan_data == plan.model_dump(mode="json")
     assert repository.trip.preferences_data == case.preferences.model_dump(mode="json")
