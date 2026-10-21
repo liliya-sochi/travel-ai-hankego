@@ -61,15 +61,19 @@ from app.services.trip_editing import (
     QUIET_WALK_DESCRIPTION,
     PeriodKey,
     PlaceAdditionUnavailableError,
+    PlaceRemovalUnavailableError,
     PreservedActivityUnavailableError,
     ReplacementReferenceUnavailableError,
     ReplacementVisitRequirement,
     VisitReplacementConstraint,
     addition_cells,
+    context_without_removed_visits,
     distinct_replacement_choices,
     period_action_map,
+    plan_without_removed_visits,
     preserved_cells,
     regeneration_cells,
+    removed_visit_names,
     replacement_visit_names,
     requires_full_generation,
     resolve_added_activities,
@@ -440,9 +444,20 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
   включай только другие периоды, действительно требующие выбора генератором;
 - «вместо отдыха добавь <название>» также требует rest=false для этого периода.
   Без явной отмены не снимай сохранённый отдых;
+- place_removals перечисляет явно НАЗВАННЫЕ в edit_instruction прежние посещения,
+  которые нужно УДАЛИТЬ. Найди каждое в current_trip_plan и укажи его day, period,
+  place_name. Без такого запроса верни [];
+- удаление одного места не удаляет остальные активности его периода и не меняет
+  interests. Этот период не включай в regeneration_periods и не меняй в нём отдых;
+- если удаляемое место было обязательным, убери только его из полного
+  must_visit_places и верни must_visit_places_changed=true. Иначе список не меняй;
+- не совмещай удаление с добавлением, заменой или прогулкой в том же периоде;
+  слова «остальные активности оставь» не разрешают такие изменения;
+- чистое именованное удаление: requires_regeneration=false, regeneration_periods=[];
+  если название не указано или запрос неоднозначен, используй обычную генерацию;
 - requires_regeneration=false только если ВСЯ инструкция сводится к
   сохранению активностей, добавлению/отмене отдыха, спокойной прогулке
-  или именованным добавлениям в конкретный день и период;
+  или именованным добавлениям/удалениям в конкретный день и период;
 - любой другой выбор/замена/перенос места, другой тип общей активности, другой вариант
   маршрута, изменение тем или интересов требует requires_regeneration=true;
 - изменение отдыха или прогулки в конкретном периоде само по себе
@@ -475,6 +490,9 @@ EDIT_ANALYSIS_RETRY_PROMPT = """
   activity_focus обязателен (null без явного типа). [] без именованного добавления;
 - для чистого именованного добавления requires_regeneration=false, regeneration_periods=[];
   добавление входит в полный must_visit_places, прежние обязательные места сохраняются;
+- place_removals содержит только явно названные удаляемые посещения старого плана
+  с конкретными day и period; [] без удаления. Другие активности сохраняются;
+- чистое удаление не требует генерации; удалённое место не может оставаться обязательным;
 - номер дня не может превышать current_preferences.duration_days;
 - не меняй правила отдыха, которые не затронуты edit_instruction;
 - не добавляй неизвестные поля и обычный текст.
@@ -1639,6 +1657,10 @@ def _validate_trip_edit_analysis(
             if current_plan is None:
                 raise ValueError("Replacement validation needs the saved plan.")
             replacement_visit_names(current_plan, analysis)
+        if analysis.place_removals:
+            if current_plan is None:
+                raise ValueError("Removal validation needs the saved plan.")
+            removed_visit_names(current_plan, analysis)
 
     for index, place_name in enumerate(returned_places):
         if _place_name_matches_any(place_name, returned_places[:index]):
@@ -1675,15 +1697,21 @@ def _validate_trip_edit_analysis(
             required_name=instruction, candidate_name=name
         ):
             raise ValueError("Added visit must be explicit and required.")
+    removal_names = [item.place_name for item in analysis.place_removals]
+    for name in removal_names:
+        if not required_place_name_matches(
+            required_name=instruction, candidate_name=name
+        ):
+            raise ValueError("Removed visit must be explicitly named.")
+        if _place_name_matches_any(name, returned_places):
+            raise ValueError("Removed visit is still required.")
     if not analysis.requires_regeneration and (
-        removed_places
+        any(not _place_name_matches_any(name, removal_names) for name in removed_places)
         or any(
             not _place_name_matches_any(name, addition_names) for name in added_places
         )
     ):
-        raise ValueError(
-            "Local edit changes required places beyond declared additions."
-        )
+        raise ValueError("Local edit changes required places beyond declared visits.")
 
 
 def _build_grounded_edit_user_message(
@@ -3017,9 +3045,12 @@ async def generate_edited_trip_plan(
     replacements: dict[PeriodKey, VisitReplacementConstraint] = {}
     if analysis is not None:
         try:
+            removed = removed_visit_names(current_plan, analysis)
+            retained_plan = plan_without_removed_visits(current_plan, analysis)
+            travel_context = context_without_removed_visits(travel_context, removed)
             cells = preserved_cells(analysis, current_preferences, preferences)
             preserved = resolve_preserved_activities(
-                current_plan, cells, travel_context
+                retained_plan, cells, travel_context
             )
             replacements = resolve_visit_replacements(
                 current_plan, analysis, travel_context
@@ -3065,7 +3096,7 @@ async def generate_edited_trip_plan(
                 )
             )
             additions, added_count = resolve_added_activities(
-                plan=current_plan,
+                plan=retained_plan,
                 analysis=analysis,
                 context=travel_context,
                 current=current_preferences,
@@ -3084,14 +3115,20 @@ async def generate_edited_trip_plan(
                         places_by_id=places_by_id,
                         period=period,
                     )
+            if analysis.place_removals:
+                logger.info(
+                    "Trip edit place removals applied | period_count=%s | removed_visit_count=%s",
+                    len(removed),
+                    sum(len(names) for names in removed.values()),
+                )
             if analysis.place_additions:
                 logger.info(
                     "Trip edit place additions applied | period_count=%s | added_visit_count=%s",
                     len(additions),
                     added_count,
                 )
-        except PlaceAdditionUnavailableError as error:
-            logger.warning("Trip edit addition unavailable")
+        except (PlaceAdditionUnavailableError, PlaceRemovalUnavailableError) as error:
+            logger.warning("Trip edit named visit change unavailable")
             raise AIServiceError(str(error)) from error
         except ReplacementReferenceUnavailableError as error:
             logger.warning("Trip edit replacement reference unavailable")
@@ -3443,6 +3480,10 @@ async def analyze_trip_edit(
             logger.info(
                 "Trip edit place additions parsed | visit_count=%s",
                 len(analysis.place_additions),
+            )
+            logger.info(
+                "Trip edit place removals parsed | visit_count=%s",
+                len(analysis.place_removals),
             )
             return analysis
 

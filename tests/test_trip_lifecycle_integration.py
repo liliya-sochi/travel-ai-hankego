@@ -93,6 +93,7 @@ def edit_analysis(
 
     return {
         "period_actions": [],
+        "place_removals": [],
         "place_additions": [],
         "place_replacements": [],
         "requires_regeneration": True,
@@ -683,6 +684,7 @@ async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
         "must_visit_places": [REQUIRED_MUSEUM, "Тестовый музей"],
         "requires_regeneration": False,
         "regeneration_periods": [],
+        "place_removals": [],
         "place_additions": [
             {
                 "day": 1,
@@ -719,4 +721,106 @@ async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
             assert after[0]["days"][0][period] == before[0]["days"][0][period]
     assert (await case.details(trip_id))["days"] == after[0]["days"]
     assert case.model.calls == ["trip_plan", "trip_edit_analysis"]
+    assert not case.model.replies
+
+
+@pytest.mark.parametrize(
+    "defect", [None, "removed_missing", "kept_missing", "empty_period"]
+)
+async def test_named_removal_after_addition_is_local_atomic_and_reopens(
+    lifecycle_case: LifecycleCase,
+    database_session: AsyncSession,
+    defect: str | None,
+) -> None:
+    """Реальная SQL-правка удаляет одно посещение и его требование, сохраняя соседа."""
+
+    case = lifecycle_case
+    created = await case.create()
+    trip_id = created["trip_id"]
+    addition = {
+        **edit_analysis(change_rest=False),
+        "interests_changed": False,
+        "interests": None,
+        "must_visit_places_changed": True,
+        "must_visit_places": [REQUIRED_MUSEUM, "Тестовый музей"],
+        "requires_regeneration": False,
+        "regeneration_periods": [],
+        "place_additions": [
+            {
+                "day": 1,
+                "period": "afternoon",
+                "place_name": "Тестовый музей",
+                "activity_focus": "museum",
+            }
+        ],
+    }
+    case.model.replies.append(("trip_edit_analysis", addition))
+    added = await case.client.post(
+        "/api/v1/trip-edit",
+        json={
+            "telegram_id": OWNER_ID,
+            "trip_id": trip_id,
+            "instruction": "Днём добавь Тестовый музей к прежнему парку. Остальное оставь.",
+        },
+    )
+    assert added.status_code == 200, added.text
+    before = await stored_state(database_session, trip_id)
+    if defect in {"removed_missing", "kept_missing"}:
+        case.context.missing_place_id = (
+            "second-museum" if defect == "removed_missing" else "day-park"
+        )
+    removal = {
+        **edit_analysis(change_rest=False),
+        "interests_changed": False,
+        "interests": None,
+        "must_visit_places_changed": True,
+        "requires_regeneration": False,
+        "regeneration_periods": [],
+        "place_removals": [
+            {
+                "day": 1,
+                "period": "afternoon",
+                "place_name": "Тестовый музей",
+            }
+        ],
+    }
+    if defect == "empty_period":
+        removal["must_visit_places"] = ["Тестовый музей"]
+        removal["place_removals"] = [
+            {"day": 1, "period": "morning", "place_name": REQUIRED_MUSEUM}
+        ]
+        instruction = f"Утром удали {REQUIRED_MUSEUM}. Остальное оставь."
+    else:
+        instruction = (
+            "Днём удали Тестовый музей. Прежний парк и остальные активности оставь."
+        )
+    case.model.replies.append(("trip_edit_analysis", removal))
+    lookup_count = len(case.context.calls)
+    response = await case.client.post(
+        "/api/v1/trip-edit",
+        json={
+            "telegram_id": OWNER_ID,
+            "trip_id": trip_id,
+            "instruction": instruction,
+        },
+    )
+    failed = defect in {"kept_missing", "empty_period"}
+    assert response.status_code == (502 if failed else 200), response.text
+    after = await stored_state(database_session, trip_id)
+    if failed:
+        assert after == before
+    else:
+        assert after[2] == before[2]
+        assert after[1]["must_visit_places"] == [REQUIRED_MUSEUM]
+        assert after[1]["interests"] == "Парки"
+        assert after[0]["days"][0]["afternoon"] == before[0]["days"][0]["afternoon"][:1]
+        for period in ("morning", "evening"):
+            assert after[0]["days"][0][period] == before[0]["days"][0][period]
+    if defect == "empty_period":
+        assert len(case.context.calls) == lookup_count
+    else:
+        assert "Тестовый музей" not in case.context.preserved_names[-1]
+        assert "Тестовый дневной парк" in case.context.preserved_names[-1]
+    assert (await case.details(trip_id))["days"] == after[0]["days"]
+    assert case.model.calls == ["trip_plan", "trip_edit_analysis", "trip_edit_analysis"]
     assert not case.model.replies

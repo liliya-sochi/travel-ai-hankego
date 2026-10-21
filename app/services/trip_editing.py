@@ -74,6 +74,10 @@ class PlaceAdditionUnavailableError(ValueError):
     """Безопасное объяснение невозможности добавить посещение без потерь."""
 
 
+class PlaceRemovalUnavailableError(ValueError):
+    """Удаление оставило бы период пустым; нужен явный выбор пользователя."""
+
+
 def addition_cells(analysis: TripEditAnalysis, duration: int) -> set[PeriodKey]:
     """Проверяет конкретные дни именованных добавлений."""
 
@@ -194,6 +198,112 @@ def preserved_place_names(plan: TripPlanResponse, cells: set[PeriodKey]) -> list
                             normalize_place_name(reference[0]), reference[0]
                         )
     return list(names.values())
+
+
+def removed_visit_names(
+    plan: TripPlanResponse, analysis: TripEditAnalysis
+) -> dict[PeriodKey, set[str]]:
+    """Находит удаляемые посещения в сохранённом плане, не требуя свежего места."""
+
+    allowed_generation = regeneration_cells(analysis, plan.duration_days)
+    actions = period_action_map(analysis, plan.duration_days)
+    other_visits = {
+        (item.day, item.period)
+        for item in [*analysis.place_additions, *analysis.place_replacements]
+    }
+    by_day = {day.day: day for day in plan.days}
+    result: dict[PeriodKey, set[str]] = {}
+    for request in analysis.place_removals:
+        cell = request.day, request.period
+        if request.day not in by_day:
+            raise ValueError("Removal day exceeds trip duration.")
+        if (
+            cell in allowed_generation
+            or cell in other_visits
+            or actions.get(cell) == "quiet_walk"
+            or any(
+                change.day in (None, request.day) and change.period == request.period
+                for change in analysis.rest_period_changes
+            )
+        ):
+            raise ValueError("Removal conflicts with another edit in the same period.")
+        names = [
+            reference[0]
+            for line in getattr(by_day[request.day], request.period)
+            if (reference := saved_visit_reference(line)) is not None
+        ]
+        exact = [
+            name
+            for name in names
+            if normalize_place_name(name) == normalize_place_name(request.place_name)
+        ]
+        matches = exact or [
+            name
+            for name in names
+            if required_place_name_matches(
+                required_name=request.place_name, candidate_name=name
+            )
+        ]
+        if len(matches) != 1:
+            raise ValueError("Removal does not identify one saved visit.")
+        removed = result.setdefault(cell, set())
+        if matches[0] in removed:
+            raise ValueError("Removal identifies the same saved visit twice.")
+        removed.add(matches[0])
+    return result
+
+
+def plan_without_removed_visits(
+    plan: TripPlanResponse, analysis: TripEditAnalysis
+) -> TripPlanResponse:
+    """Копирует план без указанных посещений, сохраняя порядок и текст остальных."""
+
+    removed = removed_visit_names(plan, analysis)
+    result = plan.model_copy(deep=True)
+    for day in result.days:
+        for period in PERIODS:
+            names = removed.get((day.day, period), set())
+            if not names:
+                continue
+            remaining = [
+                line
+                for line in getattr(day, period)
+                if (reference := saved_visit_reference(line)) is None
+                or reference[0] not in names
+            ]
+            if not remaining:
+                raise PlaceRemovalUnavailableError(
+                    "После удаления в периоде не останется активностей. "
+                    "Укажите замену или попросите запланировать отдых. Маршрут не изменён."
+                )
+            setattr(day, period, remaining)
+    return result
+
+
+def context_without_removed_visits(
+    context: TravelContext, removed: dict[PeriodKey, set[str]]
+) -> TravelContext:
+    """Не позволяет генератору вернуть удалённое место в другом периоде."""
+
+    names = {name for values in removed.values() for name in values}
+    if not names:
+        return context
+    places = [
+        place
+        for place in context.places
+        if not any(
+            normalize_place_name(name)
+            in {
+                normalize_place_name(place.name),
+                normalize_place_name(place.display_name),
+            }
+            or required_place_name_matches(
+                required_name=name, candidate_name=place.display_name
+            )
+            for name in names
+        )
+    ]
+    return TravelContext.model_validate({**context.model_dump(), "places": places})
 
 
 def _saved_replacement_requests(

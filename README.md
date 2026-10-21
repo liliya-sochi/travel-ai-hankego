@@ -177,8 +177,25 @@ Redis is used for:
   visits; saved optional venues are never promoted merely because they are kept.
   A pure named addition is applied locally after analysis with
   `requires_regeneration=false` and `regeneration_periods=[]`. It needs no
-  generation-model call. The local path rejects mandatory-place removals or other
-  mandatory changes disguised as additions;
+  generation-model call. The local path rejects mandatory changes outside the
+  declared additions and removals;
+- required `place_removals` supports explicitly named saved visits removed from a
+  concrete `day` and `period`. It defaults to `[]` in the model's answer when no
+  removal was requested; the field itself is required by Structured Output.
+  Python matches each request to exactly one saved visit, keeps its neighbors and
+  all untouched periods, and removes only explicitly named mandatory venues from
+  the full required-place list. A pure removal uses no generation-model call;
+- removal occurs on a copy before fresh lookup: the deleted venue need not still
+  exist in provider results. Remaining visits are re-fetched and checked for
+  identity, category and available period; old hours, addresses and links are not
+  trusted. Removed venues are excluded from generation candidates when another
+  period is regenerated, and the trimmed period is locked to its surviving visits;
+- deleting the last activity in a period is rejected before enrichment or writing:
+  the user must choose a replacement or ask for rest. Removal cannot share its
+  period with generation, additions, replacements, rest changes or a quiet-walk
+  action; these requests should be sent separately. A `preserve` action keeps the
+  surviving activities. Missing/ambiguous targets, conflicting mandatory changes
+  or unconfirmed survivors leave both saved plan and preferences unchanged;
 - the existing visits in an addition period are resolved against fresh candidates
   and supplied temporarily to enrichment, even if generation is needed elsewhere.
   Python appends the new visit after checking identity, focus and available period.
@@ -632,6 +649,24 @@ field to be filled. A non-null expected focus is checked strictly. The final
 appended visits must still have the expected `museum` focus regardless of the
 analysis field. These expectations are evaluation-only;
 the application receives actual analysis and prior state, without golden values.
+
+A fifth, one-turn case `tokyo_remove_second_afternoon` starts with two afternoon
+museums and removes one explicitly named required venue. Independent criteria
+check the parsed removal, the surviving visit and its focus, absence of the
+removed ID throughout the itinerary, updated mandatory list, and all other visits
+and walks. The first afternoon keeps its original `architecture` action. The
+runner also requires generation to be skipped. These criteria are never passed
+to the model. Run this single case with:
+
+```powershell
+python -m scripts.evaluate_routes --suite edits --live --case tokyo_remove_second_afternoon --repeat 1 --output evals/results/named-removal.json
+```
+
+Use a fresh output path for each run. PostgreSQL lifecycle tests cover
+create → add a required visit → remove only that visit → reopen, including absent
+deleted venues and atomic failure when the survivor cannot be confirmed.
+No database migration, new dependency or Telegram response field is needed;
+deploy the API with the updated analysis schema and runtime together.
 
 All coordinates,
 IDs, addresses, and opening hours are synthetic. Venue names are fixture labels,

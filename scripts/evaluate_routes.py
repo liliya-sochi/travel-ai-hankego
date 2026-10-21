@@ -44,6 +44,7 @@ from app.schemas.trip import (
     TripIntent,
     TripPeriodScope,
     TripPlaceAddition,
+    TripPlaceRemoval,
     TripPlanResponse,
     TripPreferences,
 )
@@ -231,6 +232,22 @@ class EditPeriodVisits(StrictSchema):
     activity_focus: GroundedActivityFocus | None = None
 
 
+class EditRemovalVisits(EditPeriodVisits):
+    """Оставшиеся посещения периода и запрещённые после удаления ID."""
+
+    removed_place_ids: list[str] = Field(min_length=1, max_length=2)
+
+    @model_validator(mode="after")
+    def validate_removed_ids(self) -> Self:
+        if len(set(self.removed_place_ids)) != len(self.removed_place_ids) or set(
+            self.place_ids
+        ).intersection(self.removed_place_ids):
+            raise ValueError(
+                "Удалённые и сохраняемые ID не должны пересекаться или повторяться."
+            )
+        return self
+
+
 class EditReplacementVisits(EditPeriodVisits):
     """Независимое условие близости к указанному месту тестового контекста."""
 
@@ -269,6 +286,8 @@ class EditExpectations(StrictSchema):
     replacement_visits: list[EditReplacementVisits] = Field(default_factory=list)
     addition_requests: list[TripPlaceAddition] = Field(default_factory=list)
     appended_periods: list[EditPeriodVisits] = Field(default_factory=list)
+    removal_requests: list[TripPlaceRemoval] = Field(default_factory=list)
+    trimmed_periods: list[EditRemovalVisits] = Field(default_factory=list)
     must_visit_places: list[MustVisitPlaceName] | None = Field(
         default=None, max_length=5
     )
@@ -359,6 +378,7 @@ class EditEvaluationCase(StrictSchema):
                     raise ValueError("Некорректная ожидаемая область генерации.")
             TripEditAnalysis(
                 period_actions=[],
+                place_removals=[],
                 place_additions=[],
                 place_replacements=[],
                 requires_regeneration=True,
@@ -431,6 +451,23 @@ class EditEvaluationCase(StrictSchema):
                 for day, period in replacement_scopes
             ):
                 raise ValueError("Некорректная проверка заменяемых посещений.")
+            removed_scopes = [
+                (visit.day, visit.period) for visit in expected.trimmed_periods
+            ]
+            if len(removed_scopes) != len(set(removed_scopes)) or any(
+                day > duration
+                or (day, period) in state
+                or (day, period) in scopes
+                or (day, period) in text_scopes
+                or (day, period) in added_scopes
+                or (day, period) in replacement_scopes
+                for day, period in removed_scopes
+            ):
+                raise ValueError("Некорректная проверка удалённых посещений.")
+            if any(item.day > duration for item in expected.removal_requests) or {
+                (item.day, item.period) for item in expected.removal_requests
+            } != set(removed_scopes):
+                raise ValueError("Удаления и проверки итоговых периодов противоречат.")
         return self
 
 
@@ -476,11 +513,18 @@ class EditEvaluationSuite(StrictSchema):
                         for visit in [
                             *step.expectations.replacement_visits,
                             *step.expectations.appended_periods,
+                            *step.expectations.trimmed_periods,
                         ]
                     ),
                 ]
             ):
                 raise ValueError("Неверные ID сохраняемых посещений.")
+            if any(
+                not set(visit.removed_place_ids).issubset(available)
+                for step in case.steps
+                for visit in step.expectations.trimmed_periods
+            ):
+                raise ValueError("Неизвестные удаляемые ID.")
             if any(
                 visit.nearby_reference_id is not None
                 and visit.nearby_reference_id not in available
@@ -716,14 +760,28 @@ def assess_edit_periods(
         ("preserved", case.preserved_visits),
         ("replacement", expected.replacement_visits),
         ("addition", expected.appended_periods),
+        ("removal", expected.trimmed_periods),
     ):
         for visit in visits:
             lines = activities(visit.day, visit.period)
             places = selected_places(lines, context)
-            if kind in {"replacement", "addition"}:
+            if kind in {"replacement", "addition", "removal"}:
                 checks[f"{kind}:{visit.day}:{visit.period}"] = [
                     place.source_place_id for place in places
                 ] == visit.place_ids
+                if kind == "removal":
+                    selected = selected_places(
+                        [
+                            line
+                            for day in plan.days
+                            for period in ("morning", "afternoon", "evening")
+                            for line in getattr(day, period)
+                        ],
+                        context,
+                    )
+                    checks[f"removed_absent:{visit.day}:{visit.period}"] = not {
+                        place.source_place_id for place in selected
+                    }.intersection(visit.removed_place_ids)
                 if kind == "replacement" and visit.nearby_reference_id is not None:
                     anchor = next(
                         place
@@ -869,6 +927,13 @@ async def evaluate_edit_dialogue(
 
             turn["checks"]["addition_requests"] = assess_addition_requests(
                 analysis.place_additions, step.expectations.addition_requests
+            )
+            turn["checks"]["removal_requests"] = Counter(
+                (item.day, item.period, normalize_text(item.place_name))
+                for item in analysis.place_removals
+            ) == Counter(
+                (item.day, item.period, normalize_text(item.place_name))
+                for item in step.expectations.removal_requests
             )
             if not record_checks(turn):
                 return finish_checks(result)
