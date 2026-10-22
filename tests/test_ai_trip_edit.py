@@ -63,6 +63,7 @@ async def test_analyze_trip_edit_returns_full_preference_patch(
                             "content": json.dumps(
                                 {
                                     "period_actions": [],
+                                    "place_moves": [],
                                     "place_removals": [],
                                     "place_additions": [],
                                     "place_replacements": [],
@@ -161,6 +162,7 @@ async def test_analyze_trip_edit_retries_old_plan_place_promotion(
                             "content": json.dumps(
                                 {
                                     "period_actions": [],
+                                    "place_moves": [],
                                     "place_removals": [],
                                     "place_additions": [],
                                     "place_replacements": [],

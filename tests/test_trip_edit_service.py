@@ -145,6 +145,7 @@ async def test_scoped_generation_requests_fresh_preserved_visits_without_promoti
         must_visit_places=case.preferences.must_visit_places,
         rest_period_changes=[],
         period_actions=[],
+        place_moves=[],
         place_removals=[],
         place_additions=[],
         place_replacements=[
@@ -209,6 +210,7 @@ async def test_unrelated_edit_preserves_saved_rest_rules(
     async def analyze(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_moves=[],
             place_removals=[],
             place_additions=[],
             place_replacements=[],
@@ -262,6 +264,7 @@ async def test_rest_conflict_leaves_saved_trip_unchanged(
     async def analyze(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_moves=[],
             place_removals=[],
             place_additions=[],
             place_replacements=[],
@@ -320,6 +323,7 @@ async def test_edit_rebuilds_context_and_saves_full_version(
     )
     analysis = TripEditAnalysis(
         period_actions=[],
+        place_moves=[],
         place_removals=[],
         place_additions=[],
         place_replacements=[],
@@ -444,6 +448,7 @@ async def test_edit_rejects_destination_or_duration_change(
     async def fake_analyze_trip_edit(**_: Any) -> TripEditAnalysis:
         return TripEditAnalysis(
             period_actions=[],
+            place_moves=[],
             place_removals=[],
             place_additions=[],
             place_replacements=[],
@@ -512,6 +517,7 @@ async def test_named_addition_fresh_lookup_and_atomic_service_write(
         requires_regeneration=False,
         regeneration_periods=[],
         place_replacements=[],
+        place_moves=[],
         place_removals=[],
         place_additions=[
             {
@@ -606,6 +612,7 @@ async def test_named_removal_lookup_and_atomic_write(monkeypatch, defect):
         regeneration_periods=[],
         place_replacements=[],
         place_additions=[],
+        place_moves=[],
         place_removals=[
             {"day": 2, "period": "afternoon", "place_name": "Тестовый музей 5"}
         ],
@@ -663,6 +670,100 @@ async def test_named_removal_lookup_and_atomic_write(monkeypatch, defect):
         assert saved["preferences_data"]["must_visit_places"] == [
             "Art Aquarium Museum GINZA"
         ]
+        assert session.commit_count == 1
+    assert repository.trip.plan_data == plan.model_dump(mode="json")
+    assert repository.trip.preferences_data == case.preferences.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defect", [None, "missing", "full", "far"])
+async def test_named_move_uses_fresh_lookups_and_writes_both_periods_atomically(
+    monkeypatch, defect
+):
+    """Сервис сохраняет перенос и прежние обязательные места одним обновлением."""
+
+    from app.services.ai import AIServiceError
+
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[5]
+    plan = suite.plans[case.current_plan].model_copy(deep=True)
+    context = suite.contexts[case.context].model_copy(deep=True)
+    moved = next(p for p in context.places if p.source_place_id == "eval-edit-museum-4")
+    if defect == "missing":
+        context.places.remove(moved)
+    elif defect == "far":
+        moved.latitude = 35.8
+    elif defect == "full":
+        plan.days[0].afternoon.append("Неспешная пауза.")
+    parsed = TripEditAnalysis(
+        supported=True,
+        interests_changed=False,
+        interests=None,
+        must_visit_places_changed=False,
+        must_visit_places=case.preferences.must_visit_places,
+        rest_period_changes=[],
+        period_actions=[],
+        requires_regeneration=False,
+        regeneration_periods=[],
+        place_replacements=[],
+        place_additions=[],
+        place_removals=[],
+        place_moves=[
+            {
+                "place_name": "Тестовый музей 4",
+                "source_day": 2,
+                "source_period": "afternoon",
+                "target_day": 1,
+                "target_period": "afternoon",
+            }
+        ],
+    )
+
+    async def analyze(**_):
+        return parsed
+
+    class Enrichment:
+        async def enrich(self, preferences, *, preserved_place_names):
+            assert set(preserved_place_names) == {
+                "Art Aquarium Museum GINZA",
+                "Mitsuo Aida Museum",
+                "Тестовый музей 3",
+                "Тестовый музей 4",
+            }
+            assert preferences == case.preferences
+            return context
+
+    session = FakeSession()
+    repository = FakeTripRepository(
+        preferences_data=case.preferences.model_dump(mode="json")
+    )
+    repository.trip.plan_data = plan.model_dump(mode="json")
+    monkeypatch.setattr(trip_service_module, "analyze_trip_edit", analyze)
+    service = TripService(session)
+    service._user_repository = FakeUserRepository()
+    service._trip_repository = repository
+
+    async def edit():
+        return await service.edit_trip_plan(
+            telegram_id=9000000001,
+            trip_id=7,
+            instruction=case.steps[0].user_message,
+            enrichment_service=Enrichment(),
+        )
+
+    if defect is not None:
+        with pytest.raises(AIServiceError, match="Маршрут не изменён"):
+            await edit()
+        assert repository.update_arguments is None and session.commit_count == 0
+    else:
+        await edit()
+        saved = repository.update_arguments
+        assert saved["plan_data"]["days"][1]["afternoon"] == ["Свободное время."]
+        assert len(saved["plan_data"]["days"][0]["afternoon"]) == 2
+        assert saved["plan_data"]["days"][0]["afternoon"][0].startswith(
+            "Mitsuo Aida Museum: осмотреть архитектурный объект."
+        )
+        assert saved["preferences_data"] == case.preferences.model_dump(mode="json")
         assert session.commit_count == 1
     assert repository.trip.plan_data == plan.model_dump(mode="json")
     assert repository.trip.preferences_data == case.preferences.model_dump(mode="json")

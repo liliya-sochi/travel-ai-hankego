@@ -38,6 +38,7 @@ def edit_reply() -> dict[str, Any]:
         "requires_regeneration": False,
         "regeneration_periods": [],
         "place_replacements": [],
+        "place_moves": [],
         "place_removals": [],
         "place_additions": [
             {

@@ -61,14 +61,18 @@ from app.services.trip_editing import (
     QUIET_WALK_DESCRIPTION,
     PeriodKey,
     PlaceAdditionUnavailableError,
+    PlaceMoveUnavailableError,
     PlaceRemovalUnavailableError,
     PreservedActivityUnavailableError,
     ReplacementReferenceUnavailableError,
     ReplacementVisitRequirement,
+    VisitMoveConstraints,
     VisitReplacementConstraint,
     addition_cells,
     context_without_removed_visits,
     distinct_replacement_choices,
+    fixed_day_place_counts,
+    moved_visit_references,
     period_action_map,
     plan_without_removed_visits,
     preserved_cells,
@@ -77,8 +81,10 @@ from app.services.trip_editing import (
     replacement_visit_names,
     requires_full_generation,
     resolve_added_activities,
+    resolve_moved_activities,
     resolve_preserved_activities,
     resolve_visit_replacements,
+    validate_moved_visits,
 )
 from app.services.trip_enrichment import (
     place_matches_category,
@@ -455,10 +461,22 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
   слова «остальные активности оставь» не разрешают такие изменения;
 - чистое именованное удаление: requires_regeneration=false, regeneration_periods=[];
   если название не указано или запрос неоднозначен, используй обычную генерацию;
+- place_moves содержит переносы явно НАЗВАННЫХ в edit_instruction сохранённых мест.
+  Для каждого укажи place_name, source_day и source_period из current_trip_plan,
+  target_day и target_period из инструкции. Без переноса верни [];
+- перенос сохраняет прежнее действие у места и список must_visit_places.
+  interests_changed=false, must_visit_places_changed=false, если нет других явных изменений;
+- оба конца переноса выполняет приложение: не включай их в regeneration_periods,
+  place_removals или place_additions. Остальные активности обоих периодов сохраняются;
+- если исходный период опустеет, приложение отметит свободное время. Не объявляй
+  его отдыхом и не меняй rest_period_changes. Нельзя переносить в сохранённый отдых;
+- не совмещай перенос с другой правкой его исходного или целевого периода;
+- для чистого именованного переноса requires_regeneration=false, regeneration_periods=[];
+  изменение других периодов разбирай отдельно по обычным правилам;
 - requires_regeneration=false только если ВСЯ инструкция сводится к
   сохранению активностей, добавлению/отмене отдыха, спокойной прогулке
-  или именованным добавлениям/удалениям в конкретный день и период;
-- любой другой выбор/замена/перенос места, другой тип общей активности, другой вариант
+  или именованным добавлениям, удалениям и переносам в конкретные периоды;
+- любой другой выбор или замена места, другой тип общей активности, другой вариант
   маршрута, изменение тем или интересов требует requires_regeneration=true;
 - изменение отдыха или прогулки в конкретном периоде само по себе
   не меняет общие interests; period_actions=[] при отсутствии таких действий;
@@ -493,6 +511,10 @@ EDIT_ANALYSIS_RETRY_PROMPT = """
 - place_removals содержит только явно названные удаляемые посещения старого плана
   с конкретными day и period; [] без удаления. Другие активности сохраняются;
 - чистое удаление не требует генерации; удалённое место не может оставаться обязательным;
+- place_moves содержит явно названное сохранённое место, исходные source_day,
+  source_period и запрошенные target_day, target_period. [] без переноса;
+- перенос не добавляет и не удаляет обязательное место, не меняет действие и
+  не включает оба затронутых периода в regeneration_periods;
 - номер дня не может превышать current_preferences.duration_days;
 - не меняй правила отдыха, которые не затронуты edit_instruction;
 - не добавляй неизвестные поля и обычный текст.
@@ -521,6 +543,9 @@ EDIT_SYSTEM_PROMPT = (
 - старые строки current_trip_plan не являются проверенными источниками мест;
 - каждое конкретное место заново выбери из travel_context.places
   и верни его точные source_place_id и name;
+- place_moves задаёт новые назначения уже перенесённых приложением source_place_id.
+  Сохрани ID только в указанном target_day и target_period; не дублируй его в других
+  периодах. Освободившиеся периоды приложение заполняет свободным временем;
 - place_replacements задаёт обязательные замены по периодам: не выбирай там
   excluded_source_place_ids; включи minimum_new_places мест с ID, которых не было
   в previous_source_place_ids этого периода. Общее занятие и смена текста
@@ -1661,6 +1686,15 @@ def _validate_trip_edit_analysis(
             if current_plan is None:
                 raise ValueError("Removal validation needs the saved plan.")
             removed_visit_names(current_plan, analysis)
+        if analysis.place_moves:
+            if current_plan is None:
+                raise ValueError("Move validation needs the saved plan.")
+            moved_visit_references(current_plan, analysis)
+            for item in analysis.place_moves:
+                if not required_place_name_matches(
+                    required_name=instruction, candidate_name=item.place_name
+                ):
+                    raise ValueError("Moved visit must be explicitly named.")
 
     for index, place_name in enumerate(returned_places):
         if _place_name_matches_any(place_name, returned_places[:index]):
@@ -1723,6 +1757,7 @@ def _build_grounded_edit_user_message(
     instruction: str,
     preserved_activities: dict[PeriodKey, list[GroundedActivity]] | None = None,
     replacement_constraints: dict[PeriodKey, VisitReplacementConstraint] | None = None,
+    move_constraints: VisitMoveConstraints | None = None,
 ) -> str:
     """Добавляет старый маршрут и изменение к свежему grounded-контексту."""
 
@@ -1766,6 +1801,22 @@ def _build_grounded_edit_user_message(
         }
         for (day, period), rule in sorted((replacement_constraints or {}).items())
     ]
+
+    if move_constraints is not None:
+        payload["place_moves"] = [
+            {"target_day": day, "target_period": period, "source_place_id": place_id}
+            for day, period, place_id in move_constraints.destinations
+        ]
+    fixed_counts = fixed_day_place_counts(
+        preserved_activities or {}, preferences=preferences
+    )
+    if fixed_counts:
+        requirements = payload["travel_context"]["grounding_requirements"]
+        minimums = requirements.setdefault("minimum_places_per_day_by_day", {})
+        for day, count in fixed_counts.items():
+            minimums[str(day)] = min(
+                count, minimums.get(str(day), requirements["minimum_places_per_day"])
+            )
 
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -1984,6 +2035,7 @@ def _validate_grounded_trip_plan(
     current_plan: TripPlanResponse | None = None,
     preserved_activities: dict[PeriodKey, list[GroundedActivity]] | None = None,
     replacement_constraints: dict[PeriodKey, VisitReplacementConstraint] | None = None,
+    move_constraints: VisitMoveConstraints | None = None,
 ) -> TripPlanResponse:
     """
     Проверяет grounded Structured Output и ссылки на места.
@@ -2148,19 +2200,38 @@ def _validate_grounded_trip_plan(
         if selected_for_focus.isdisjoint(required_place_ids):
             raise ValueError("LLM omitted an explicitly requested interest category.")
 
+    if move_constraints is not None:
+        validate_moved_visits(
+            {
+                (day.day, period): getattr(day, period)
+                for day in grounded_plan.days
+                for period in ("morning", "afternoon", "evening")
+            },
+            constraints=move_constraints,
+            context=planning_context,
+            maximum_distance_meters=MAX_COMPACT_PLACE_DISTANCE_METERS,
+        )
+    fixed_counts = fixed_day_place_counts(
+        preserved_activities or {}, preferences=preferences
+    )
     minimum_by_day = grounding_requirements.get("minimum_places_per_day_by_day", {})
-    if any(
-        len(day_place_ids)
-        < minimum_by_day.get(
+    for day, day_place_ids in zip(
+        grounded_plan.days, day_place_ids_collection, strict=True
+    ):
+        minimum = minimum_by_day.get(
             str(day.day), grounding_requirements["minimum_places_per_day"]
         )
-        for day, day_place_ids in zip(
-            grounded_plan.days, day_place_ids_collection, strict=True
-        )
-    ):
-        raise ValueError("LLM used too few grounded places in a day.")
+        if day.day in fixed_counts:
+            minimum = min(minimum, fixed_counts[day.day])
+        if len(day_place_ids) < minimum:
+            raise ValueError("LLM used too few grounded places in a day.")
 
-    if len(selected_place_ids) < grounding_requirements["minimum_unique_places"]:
+    unique_minimum = grounding_requirements["minimum_unique_places"]
+    if len(fixed_counts) == preferences.duration_days:
+        unique_minimum = min(
+            unique_minimum, len(set(_preserved_place_ids(preserved_activities)))
+        )
+    if len(selected_place_ids) < unique_minimum:
         raise ValueError("LLM used too few unique grounded places.")
 
     # Явную замену уже проверили выше; исходный интерес не отменяет эту правку.
@@ -2168,6 +2239,7 @@ def _validate_grounded_trip_plan(
         preferences.duration_days == 1
         and not preferences.is_rest_period(1, "afternoon")
         and (1, "afternoon") not in (replacement_constraints or {})
+        and (1, "afternoon") not in (preserved_activities or {})
     ):
         day = grounded_plan.days[0]
         afternoon_place_ids = {
@@ -2229,7 +2301,7 @@ def _validate_grounded_trip_plan(
         elif not afternoon_place_ids and nearby_place_ids:
             raise ValueError("LLM omitted an available nearby afternoon place.")
 
-    if evening_place_ids:
+    if evening_place_ids and (1, "evening") not in (preserved_activities or {}):
         day = grounded_plan.days[0]
         earlier_place_ids = {
             activity.source_place_id
@@ -2277,6 +2349,7 @@ def _validate_grounded_trip_plan(
                     current_plan=current_plan,
                     preserved_activities=preserved_activities,
                     replacement_constraints=replacement_constraints,
+                    move_constraints=move_constraints,
                 )
             except (ValidationError, ValueError) as error:
                 reason, _ = _grounded_validation_hint(error)
@@ -2713,6 +2786,7 @@ async def _generate_grounded_plan(
     current_plan: TripPlanResponse | None = None,
     preserved_activities: dict[PeriodKey, list[GroundedActivity]] | None = None,
     replacement_constraints: dict[PeriodKey, VisitReplacementConstraint] | None = None,
+    move_constraints: VisitMoveConstraints | None = None,
 ) -> TripPlanResponse:
     """
     Запрашивает и проверяет полный grounded-план.
@@ -2757,6 +2831,7 @@ async def _generate_grounded_plan(
             current_plan=current_plan,
             preserved_activities=preserved_activities,
             replacement_constraints=replacement_constraints,
+            move_constraints=move_constraints,
         )
         logger.info("Grounded rest plan created")
         return result
@@ -2858,6 +2933,7 @@ async def _generate_grounded_plan(
                     current_plan=current_plan,
                     preserved_activities=preserved_activities,
                     replacement_constraints=replacement_constraints,
+                    move_constraints=move_constraints,
                 )
 
             except (ValidationError, ValueError) as error:
@@ -3043,6 +3119,7 @@ async def generate_edited_trip_plan(
     preserved: dict[PeriodKey, list[GroundedActivity]] = {}
     walks: dict[PeriodKey, str] = {}
     replacements: dict[PeriodKey, VisitReplacementConstraint] = {}
+    moves: VisitMoveConstraints | None = None
     if analysis is not None:
         try:
             removed = removed_visit_names(current_plan, analysis)
@@ -3075,6 +3152,13 @@ async def generate_edited_trip_plan(
                         description=QUIET_WALK_DESCRIPTION,
                     )
                 ]
+            moved, moves = resolve_moved_activities(
+                plan=retained_plan,
+                analysis=analysis,
+                preferences=preferences,
+                preserved=preserved,
+            )
+            preserved.update(moved)
             preferred_focuses = list(
                 dict.fromkeys(
                     [
@@ -3115,6 +3199,18 @@ async def generate_edited_trip_plan(
                         places_by_id=places_by_id,
                         period=period,
                     )
+            if moves is not None:
+                validate_moved_visits(
+                    preserved,
+                    constraints=moves,
+                    context=travel_context,
+                    maximum_distance_meters=MAX_COMPACT_PLACE_DISTANCE_METERS,
+                )
+                logger.info(
+                    "Trip edit place moves applied | period_count=%s | moved_visit_count=%s",
+                    len(moved),
+                    len(moves.destinations),
+                )
             if analysis.place_removals:
                 logger.info(
                     "Trip edit place removals applied | period_count=%s | removed_visit_count=%s",
@@ -3127,7 +3223,11 @@ async def generate_edited_trip_plan(
                     len(additions),
                     added_count,
                 )
-        except (PlaceAdditionUnavailableError, PlaceRemovalUnavailableError) as error:
+        except (
+            PlaceAdditionUnavailableError,
+            PlaceRemovalUnavailableError,
+            PlaceMoveUnavailableError,
+        ) as error:
             logger.warning("Trip edit named visit change unavailable")
             raise AIServiceError(str(error)) from error
         except ReplacementReferenceUnavailableError as error:
@@ -3139,7 +3239,7 @@ async def generate_edited_trip_plan(
         except (ValidationError, ValueError) as error:
             logger.warning("Trip edit preservation unavailable")
             raise AIServiceError(
-                "Не удалось подтвердить добавляемые или сохраняемые активности по свежим данным. "
+                "Не удалось подтвердить добавляемые, переносимые или сохраняемые активности по свежим данным. "
                 "Маршрут не изменён. Уточните пожелания."
             ) from error
 
@@ -3181,6 +3281,7 @@ async def generate_edited_trip_plan(
                     current_preferences=current_preferences,
                     current_plan=current_plan,
                     preserved_activities=preserved,
+                    move_constraints=moves,
                 )
             except (ValidationError, ValueError) as error:
                 logger.warning("Trip edit local validation failed")
@@ -3208,6 +3309,7 @@ async def generate_edited_trip_plan(
                 instruction=instruction,
                 preserved_activities=preserved,
                 replacement_constraints=replacements,
+                **({"move_constraints": moves} if moves is not None else {}),
             ),
         },
     ]
@@ -3221,6 +3323,7 @@ async def generate_edited_trip_plan(
         current_plan=current_plan,
         preserved_activities=preserved,
         replacement_constraints=replacements,
+        **({"move_constraints": moves} if moves is not None else {}),
     )
 
 
@@ -3484,6 +3587,10 @@ async def analyze_trip_edit(
             logger.info(
                 "Trip edit place removals parsed | visit_count=%s",
                 len(analysis.place_removals),
+            )
+            logger.info(
+                "Trip edit place moves parsed | visit_count=%s",
+                len(analysis.place_moves),
             )
             return analysis
 

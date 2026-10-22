@@ -34,6 +34,7 @@ def removal_analysis(**updates):
             "regeneration_periods": [],
             "place_replacements": [],
             "place_additions": [],
+            "place_moves": [],
             "place_removals": [
                 {"day": 2, "period": "afternoon", "place_name": "Тестовый музей 5"}
             ],
@@ -110,6 +111,7 @@ async def test_optional_visit_removal_keeps_required_neighbor(removal_case):
     parsed = removal_analysis(
         must_visit_places_changed=False,
         must_visit_places=case.preferences.must_visit_places,
+        place_moves=[],
         place_removals=[
             {"day": 2, "period": "afternoon", "place_name": "Тестовый музей 4"}
         ],
@@ -258,10 +260,11 @@ def test_analysis_rejects_wrong_removal_scope_identity_and_required_changes(
         )
     elif defect == "duplicate_alias":
         parsed = removal_analysis(
+            place_moves=[],
             place_removals=[
                 {"day": 2, "period": "afternoon", "place_name": "Тестовый музей 5"},
                 {"day": 2, "period": "afternoon", "place_name": "ТЕСТОВЫЙ МУЗЕЙ 5!"},
-            ]
+            ],
         )
     elif defect == "ambiguous_saved":
         plan.days[1].afternoon = [plan.days[1].afternoon[1]] * 2

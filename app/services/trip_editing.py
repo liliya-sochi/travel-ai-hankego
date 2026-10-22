@@ -14,6 +14,7 @@ from app.schemas.trip import (
     MAX_ACTIVITIES_PER_PERIOD,
     TripDayPeriod,
     TripEditAnalysis,
+    TripPlaceMove,
     TripPlaceReplacement,
     TripPlanResponse,
     TripPreferences,
@@ -28,6 +29,234 @@ PERIODS: tuple[TripDayPeriod, ...] = ("morning", "afternoon", "evening")
 QUIET_WALK_DESCRIPTION = "Спокойная прогулка."
 PeriodKey = tuple[int, TripDayPeriod]
 MAX_NEARBY_REPLACEMENT_DISTANCE_METERS = 2_000
+FREE_TIME_DESCRIPTION = "Свободное время."
+
+
+@dataclass(frozen=True)
+class VisitMoveConstraints:
+    """Проверенные назначения перенесённых ID и дни освобождённых периодов."""
+
+    destinations: tuple[tuple[int, TripDayPeriod, str], ...]
+    source_cells: frozenset[PeriodKey]
+
+
+class PlaceMoveUnavailableError(ValueError):
+    """Безопасная причина отказа в переносе без записи частичного результата."""
+
+
+def move_cells(analysis: TripEditAnalysis, duration: int) -> set[PeriodKey]:
+    """Проверяет границы и возвращает оба конца каждого переноса."""
+
+    if any(
+        max(item.source_day, item.target_day) > duration
+        for item in analysis.place_moves
+    ):
+        raise ValueError("Move day exceeds trip duration.")
+    return {
+        cell
+        for item in analysis.place_moves
+        for cell in (
+            (item.source_day, item.source_period),
+            (item.target_day, item.target_period),
+        )
+    }
+
+
+def moved_visit_references(
+    plan: TripPlanResponse, analysis: TripEditAnalysis
+) -> list[tuple[TripPlaceMove, str, GroundedActivityFocus]]:
+    """Однозначно находит старое посещение; запрещает конфликтующие правки обоих периодов."""
+
+    cells = move_cells(analysis, plan.duration_days)
+    actions = period_action_map(analysis, plan.duration_days)
+    rest_cells = {
+        (day, item.period)
+        for item in analysis.rest_period_changes
+        for day in (
+            range(1, plan.duration_days + 1) if item.day is None else [item.day]
+        )
+    }
+    other_cells = {
+        (item.day, item.period)
+        for item in [
+            *analysis.place_additions,
+            *analysis.place_removals,
+            *analysis.place_replacements,
+        ]
+    }
+    if cells.intersection(
+        regeneration_cells(analysis, plan.duration_days) | rest_cells | other_cells
+    ) or any(actions.get(cell) == "quiet_walk" for cell in cells):
+        raise ValueError("Move conflicts with another edit in an affected period.")
+    by_day = {day.day: day for day in plan.days}
+    result = []
+    seen = set()
+    for request in analysis.place_moves:
+        references = [
+            reference
+            for line in getattr(by_day[request.source_day], request.source_period)
+            if (reference := saved_visit_reference(line)) is not None
+        ]
+        exact = [
+            ref
+            for ref in references
+            if normalize_place_name(ref[0]) == normalize_place_name(request.place_name)
+        ]
+        matches = exact or [
+            ref
+            for ref in references
+            if required_place_name_matches(
+                required_name=request.place_name, candidate_name=ref[0]
+            )
+        ]
+        if len(matches) != 1:
+            raise ValueError("Move does not identify one saved visit.")
+        name, focus = matches[0]
+        key = request.source_day, request.source_period, normalize_place_name(name)
+        if key in seen:
+            raise ValueError("Move identifies the same saved visit twice.")
+        seen.add(key)
+        result.append((request, name, focus))
+    return result
+
+
+def resolve_moved_activities(
+    *,
+    plan: TripPlanResponse,
+    analysis: TripEditAnalysis,
+    preferences: TripPreferences,
+    preserved: dict[PeriodKey, list[GroundedActivity]],
+) -> tuple[dict[PeriodKey, list[GroundedActivity]], VisitMoveConstraints | None]:
+    """Переносит все выбранные посещения одновременно, затем проверяет вместимость."""
+
+    references = moved_visit_references(plan, analysis)
+    if not references:
+        return {}, None
+    cells = move_cells(analysis, preferences.duration_days)
+    if any(preferences.is_rest_period(*cell) for cell in cells):
+        raise PlaceMoveUnavailableError(
+            "Перенос затрагивает период отдыха. Выберите другое время или измените отдых отдельным сообщением. Маршрут не изменён."
+        )
+    result = {cell: [item.model_copy() for item in preserved[cell]] for cell in cells}
+    transfers = []
+    for request, name, focus in references:
+        source = request.source_day, request.source_period
+        # Порядок resolve_preserved_activities совпадает с исходным публичным периодом.
+        lines = getattr(plan.days[request.source_day - 1], request.source_period)
+        index = next(
+            i
+            for i, line in enumerate(lines)
+            if saved_visit_reference(line) == (name, focus)
+        )
+        activity = preserved[source][index]
+        transfers.append((request, activity))
+    for request, activity in transfers:
+        source = request.source_day, request.source_period
+        result[source] = [
+            item
+            for item in result[source]
+            if item.source_place_id != activity.source_place_id
+        ]
+    for request, activity in transfers:
+        target = request.target_day, request.target_period
+        # Свободное время, созданное предыдущим переносом, заполняется возвращаемым посещением.
+        result[target] = [
+            item for item in result[target] if item.description != FREE_TIME_DESCRIPTION
+        ]
+        result[target].append(activity.model_copy())
+    for cell, items in result.items():
+        if len(items) > MAX_ACTIVITIES_PER_PERIOD:
+            raise PlaceMoveUnavailableError(
+                "В целевом периоде не хватает места для переноса. Разрешено не больше двух активностей. Маршрут не изменён."
+            )
+        if not items:
+            result[cell] = [
+                GroundedActivity(
+                    source_place_id=None,
+                    place_name=None,
+                    activity_focus=None,
+                    description=FREE_TIME_DESCRIPTION,
+                )
+            ]
+    constraints = VisitMoveConstraints(
+        destinations=tuple(
+            (request.target_day, request.target_period, activity.source_place_id)
+            for request, activity in transfers
+        ),
+        source_cells=frozenset(
+            (request.source_day, request.source_period) for request, _ in transfers
+        ),
+    )
+    return result, constraints
+
+
+def validate_moved_visits(
+    activities: dict[PeriodKey, list[GroundedActivity]],
+    *,
+    constraints: VisitMoveConstraints,
+    context: TravelContext,
+    maximum_distance_meters: float,
+) -> None:
+    """Проверяет единственность перенесённого ID, его назначение и близость к остальным местам дня."""
+
+    places = {place.source_place_id: place for place in context.places}
+    for day, period, place_id in constraints.destinations:
+        if sum(
+            item.source_place_id == place_id
+            for items in activities.values()
+            for item in items
+        ) != 1 or not any(
+            item.source_place_id == place_id
+            for item in activities.get((day, period), [])
+        ):
+            raise PlaceMoveUnavailableError(
+                "Перенос не удалось выполнить однозначно. Маршрут не изменён."
+            )
+        place = places[place_id]
+        for (other_day, _), items in activities.items():
+            if other_day != day:
+                continue
+            for item in items:
+                if item.source_place_id is None or item.source_place_id == place_id:
+                    continue
+                other = places[item.source_place_id]
+                if (
+                    calculate_distance_meters(
+                        first_latitude=place.latitude,
+                        first_longitude=place.longitude,
+                        second_latitude=other.latitude,
+                        second_longitude=other.longitude,
+                    )
+                    > maximum_distance_meters
+                ):
+                    raise PlaceMoveUnavailableError(
+                        "Переносимое место слишком далеко от остальных посещений целевого дня. Выберите другой день. Маршрут не изменён."
+                    )
+
+
+def fixed_day_place_counts(
+    preserved: dict[PeriodKey, list[GroundedActivity]],
+    *,
+    preferences: TripPreferences,
+) -> dict[int, int]:
+    """Считает посещения дней, полностью заданных сохранением и локальными действиями."""
+
+    return {
+        day: len(
+            {
+                item.source_place_id
+                for (number, _), items in preserved.items()
+                if number == day
+                for item in items
+                if item.source_place_id is not None
+            }
+        )
+        for day in range(1, preferences.duration_days + 1)
+        if all(
+            (day, period) in preserved or preferences.is_rest_period(day, period)
+            for period in PERIODS
+        )
+    }
 
 
 @dataclass(frozen=True)

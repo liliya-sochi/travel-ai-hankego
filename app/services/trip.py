@@ -29,6 +29,7 @@ from app.services.ai import (
 from app.services.trip_editing import (
     PlaceRemovalUnavailableError,
     addition_cells,
+    move_cells,
     plan_without_removed_visits,
     preserved_cells,
     preserved_place_names,
@@ -229,7 +230,9 @@ class TripService:
         cells = preserved_cells(analysis, current_preferences, updated_preferences)
         names = preserved_place_names(
             retained_plan,
-            cells | addition_cells(analysis, updated_preferences.duration_days),
+            cells
+            | addition_cells(analysis, updated_preferences.duration_days)
+            | move_cells(analysis, updated_preferences.duration_days),
         )
         names = list(
             dict.fromkeys(
