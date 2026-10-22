@@ -44,6 +44,7 @@ from app.schemas.trip import (
     TripIntent,
     TripPeriodScope,
     TripPlaceAddition,
+    TripPlaceMove,
     TripPlaceRemoval,
     TripPlanResponse,
     TripPreferences,
@@ -232,6 +233,31 @@ class EditPeriodVisits(StrictSchema):
     activity_focus: GroundedActivityFocus | None = None
 
 
+class EditMoveVisits(TripPlaceMove):
+    """Независимые критерии обоих периодов переноса и прежних действий."""
+
+    moved_place_id: str
+    source_place_ids: list[str] = Field(max_length=2)
+    source_activity_focuses: list[GroundedActivityFocus] = Field(max_length=2)
+    target_place_ids: list[str] = Field(min_length=1, max_length=2)
+    target_activity_focuses: list[GroundedActivityFocus] = Field(
+        min_length=1, max_length=2
+    )
+
+    @model_validator(mode="after")
+    def validate_ids_and_focuses(self) -> Self:
+        if (
+            len(self.source_place_ids) != len(self.source_activity_focuses)
+            or len(self.target_place_ids) != len(self.target_activity_focuses)
+            or len(set(self.source_place_ids)) != len(self.source_place_ids)
+            or len(set(self.target_place_ids)) != len(self.target_place_ids)
+            or self.moved_place_id in self.source_place_ids
+            or self.moved_place_id not in self.target_place_ids
+        ):
+            raise ValueError("Некорректные ID или действия в критерии переноса.")
+        return self
+
+
 class EditRemovalVisits(EditPeriodVisits):
     """Оставшиеся посещения периода и запрещённые после удаления ID."""
 
@@ -288,6 +314,8 @@ class EditExpectations(StrictSchema):
     appended_periods: list[EditPeriodVisits] = Field(default_factory=list)
     removal_requests: list[TripPlaceRemoval] = Field(default_factory=list)
     trimmed_periods: list[EditRemovalVisits] = Field(default_factory=list)
+    moved_visits: list[EditMoveVisits] = Field(default_factory=list)
+    minimum_places_per_day_by_day: dict[str, int] | None = None
     must_visit_places: list[MustVisitPlaceName] | None = Field(
         default=None, max_length=5
     )
@@ -378,6 +406,7 @@ class EditEvaluationCase(StrictSchema):
                     raise ValueError("Некорректная ожидаемая область генерации.")
             TripEditAnalysis(
                 period_actions=[],
+                place_moves=[],
                 place_removals=[],
                 place_additions=[],
                 place_replacements=[],
@@ -468,6 +497,31 @@ class EditEvaluationCase(StrictSchema):
                 (item.day, item.period) for item in expected.removal_requests
             } != set(removed_scopes):
                 raise ValueError("Удаления и проверки итоговых периодов противоречат.")
+            move_scopes = {
+                cell
+                for item in expected.moved_visits
+                for cell in (
+                    (item.source_day, item.source_period),
+                    (item.target_day, item.target_period),
+                )
+            }
+            if any(
+                day > duration
+                or (day, period) in state
+                or (day, period) in scopes
+                or (day, period) in text_scopes
+                or (day, period) in added_scopes
+                or (day, period) in replacement_scopes
+                or (day, period) in removed_scopes
+                for day, period in move_scopes
+            ):
+                raise ValueError("Некорректная область проверки переноса.")
+            if expected.minimum_places_per_day_by_day is not None:
+                minimums = expected.minimum_places_per_day_by_day
+                if set(minimums) != {str(day) for day in range(1, duration + 1)} or any(
+                    value < 0 or value > 6 for value in minimums.values()
+                ):
+                    raise ValueError("Некорректный подневной минимум посещений.")
         return self
 
 
@@ -525,6 +579,14 @@ class EditEvaluationSuite(StrictSchema):
                 for visit in step.expectations.trimmed_periods
             ):
                 raise ValueError("Неизвестные удаляемые ID.")
+            if any(
+                not set([*visit.source_place_ids, *visit.target_place_ids]).issubset(
+                    available
+                )
+                for step in case.steps
+                for visit in step.expectations.moved_visits
+            ):
+                raise ValueError("Неизвестные ID в проверке переноса.")
             if any(
                 visit.nearby_reference_id is not None
                 and visit.nearby_reference_id not in available
@@ -823,6 +885,52 @@ def assess_edit_periods(
         for period in PERIODS
         if (day, period) not in reserved
     )
+    for visit in expected.moved_visits:
+        for kind, day, period, ids, focuses in (
+            (
+                "source",
+                visit.source_day,
+                visit.source_period,
+                visit.source_place_ids,
+                visit.source_activity_focuses,
+            ),
+            (
+                "target",
+                visit.target_day,
+                visit.target_period,
+                visit.target_place_ids,
+                visit.target_activity_focuses,
+            ),
+        ):
+            lines = activities(day, period)
+            places = selected_places(lines, context)
+            checks[f"move_{kind}:{day}:{period}"] = [
+                place.source_place_id for place in places
+            ] == ids
+            checks[f"move_{kind}_focus:{day}:{period}"] = (
+                len(lines) == len(places) == len(focuses)
+                and all(
+                    line.startswith(
+                        f"{place.display_name}: {ACTIVITY_FOCUS_DESCRIPTIONS[focus]}."
+                    )
+                    for line, place, focus in zip(lines, places, focuses, strict=True)
+                )
+                if ids
+                else lines == ["Свободное время."]
+            )
+        all_places = selected_places(
+            [
+                line
+                for day in plan.days
+                for period in PERIODS
+                for line in getattr(day, period)
+            ],
+            context,
+        )
+        checks[f"move_unique:{visit.moved_place_id}"] = (
+            sum(place.source_place_id == visit.moved_place_id for place in all_places)
+            == 1
+        )
     for terms in expected.general_activities:
         period_activities = activities(terms.day, terms.period)
         text = normalize_text(" ".join(period_activities)) or ""
@@ -935,6 +1043,19 @@ async def evaluate_edit_dialogue(
                 (item.day, item.period, normalize_text(item.place_name))
                 for item in step.expectations.removal_requests
             )
+
+            def move_key(item: TripPlaceMove) -> tuple:
+                return (
+                    normalize_text(item.place_name),
+                    item.source_day,
+                    item.source_period,
+                    item.target_day,
+                    item.target_period,
+                )
+
+            turn["checks"]["move_requests"] = Counter(
+                move_key(item) for item in analysis.place_moves
+            ) == Counter(move_key(item) for item in step.expectations.moved_visits)
             if not record_checks(turn):
                 return finish_checks(result)
             try:
@@ -977,6 +1098,25 @@ async def evaluate_edit_dialogue(
             assessment = assess_plan(
                 generated, case.model_copy(update={"preferences": updated}), context
             )
+            if step.expectations.minimum_places_per_day_by_day is not None:
+                minimums = step.expectations.minimum_places_per_day_by_day
+                assessment["checks"]["places_per_day"] = all(
+                    len(
+                        {
+                            place.source_place_id
+                            for place in selected_places(
+                                [
+                                    line
+                                    for period in PERIODS
+                                    for line in getattr(day, period)
+                                ],
+                                context,
+                            )
+                        }
+                    )
+                    >= minimums[str(day.day)]
+                    for day in generated.days
+                )
             turn["checks"].update(assessment.pop("checks"))
             turn.update(assessment)
             turn["checks"].update(

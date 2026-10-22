@@ -11,7 +11,19 @@ MAX_VALIDATION_ISSUES = 5
 KNOWN_FIELDS = (
     frozenset(TripEditAnalysis.model_fields)
     | frozenset(TripIntakeExtraction.model_fields)
-    | {"day", "period", "place_name", "activity_focus", "nearby", "action", "rest"}
+    | {
+        "day",
+        "period",
+        "place_name",
+        "activity_focus",
+        "nearby",
+        "action",
+        "rest",
+        "source_day",
+        "source_period",
+        "target_day",
+        "target_period",
+    }
 )
 KNOWN_ERROR_TYPES = frozenset(
     {
@@ -36,6 +48,14 @@ KNOWN_ERROR_TYPES = frozenset(
 KNOWN_VALIDATION_REASONS = {
     "Режим генерации должен соответствовать её периодам.": "regeneration_mode_mismatch",
     "Изменение интересов, замена или изменение обязательных мест без локальных посещений требует генерации.": "generation_required",
+    "Исходный и целевой периоды переноса должны различаться.": "move_same_period",
+    "Переносимые посещения не должны повторяться.": "duplicate_moves",
+    "Move day exceeds trip duration.": "move_day_outside_trip",
+    "Move validation needs the saved plan.": "move_plan_unavailable",
+    "Moved visit must be explicitly named.": "move_not_explicit",
+    "Move conflicts with another edit in an affected period.": "move_scope_conflict",
+    "Move does not identify one saved visit.": "move_reference_not_unique",
+    "Move identifies the same saved visit twice.": "duplicate_move_reference",
     "Удаляемые посещения не должны повторяться.": "duplicate_removals",
     "Removal day exceeds trip duration.": "removal_day_outside_trip",
     "Removal validation needs the saved plan.": "removal_plan_unavailable",

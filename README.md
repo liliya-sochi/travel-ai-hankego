@@ -196,6 +196,32 @@ Redis is used for:
   action; these requests should be sent separately. A `preserve` action keeps the
   surviving activities. Missing/ambiguous targets, conflicting mandatory changes
   or unconfirmed survivors leave both saved plan and preferences unchanged;
+- required `place_moves` contains explicitly named saved visits with `place_name`,
+  `source_day`, `source_period`, `target_day` and `target_period`; use `[]` when no
+  move is requested. Both periods must differ and belong to the trip. A pure move
+  runs locally after analysis, keeps its original action and required-place list,
+  and preserves all other activities in both periods;
+- moves resolve saved names against fresh candidates and validate the transferred
+  visit at its target period. Old hours and links are discarded. An emptied source
+  becomes `Свободное время.`, not a reserved-rest preference. Moving back fills
+  this placeholder. All transfers are applied simultaneously, supporting swaps
+  without treating an intermediate state as over capacity;
+- the two-activity limit includes visits and general activities. A move cannot
+  share either period with generation, additions, removals, replacements, rest
+  changes or quiet-walk actions. `preserve` keeps its surviving neighbors. Reserved
+  rest, a missing/ambiguous venue, unavailable target hours or an overfull period
+  rejects the complete edit without changing the saved plan or preferences;
+- a moved venue must be within 4,000 metres straight-line distance of every other
+  concrete visit in its target day, using fresh coordinates. This follows the
+  compact-day policy, not walking distance or travel time. Mixed edits lock both
+  periods and carry move constraints through generation and retries. Generated
+  duplicates and visits too far from the moved venue are rejected;
+- density minimums apply to generated days. Fully fixed days follow their
+  validated local activities, so an explicit move can leave one visit or free
+  time. Subsequent preservation and removal also accept that saved result. Fully
+  local edits use actual unique preserved IDs as their density bound; required
+  places, interests, identity, focus and period checks remain active. Unlocked
+  generated periods retain their normal relevance requirements;
 - the existing visits in an addition period are resolved against fresh candidates
   and supplied temporarily to enrichment, even if generation is needed elsewhere.
   Python appends the new visit after checking identity, focus and available period.
@@ -667,6 +693,24 @@ create → add a required visit → remove only that visit → reopen, including
 deleted venues and atomic failure when the survivor cannot be confirmed.
 No database migration, new dependency or Telegram response field is needed;
 deploy the API with the updated analysis schema and runtime together.
+
+A sixth case, `tokyo_move_second_afternoon`, transfers a named required museum
+from the second afternoon to the first afternoon. Independent golden criteria
+check both periods, a single occurrence of the moved ID, all retained actions
+including the neighbor's `architecture` action, unchanged required places, both
+walks and skipped generation. Evaluation-only day minimums require three visits
+on the first day and one on the second. Runtime derives local counts from actual
+activities and never receives these golden minimums.
+
+```powershell
+python -m scripts.evaluate_routes --suite edits --live --case tokyo_move_second_afternoon --repeat 1 --output evals/results/named-move.json
+```
+
+PostgreSQL lifecycle tests cover moving a required morning visit into the
+existing afternoon, reopening the saved route, and atomic failure for a missing
+venue, unavailable target hours, excessive distance and a full destination.
+The internal analysis schema changes together with API runtime; no migration or
+new public response field is needed. Deploy the API after CI and live evaluation.
 
 All coordinates,
 IDs, addresses, and opening hours are synthetic. Venue names are fixture labels,

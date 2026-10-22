@@ -93,6 +93,7 @@ def edit_analysis(
 
     return {
         "period_actions": [],
+        "place_moves": [],
         "place_removals": [],
         "place_additions": [],
         "place_replacements": [],
@@ -155,6 +156,7 @@ class ContextReplay:
     preserved_names: list[list[str]] = field(default_factory=list)
     missing_place_id: str | None = None
     replacement_defect: str | None = None
+    move_defect: str | None = None
 
     async def enrich(
         self,
@@ -204,6 +206,12 @@ class ContextReplay:
             ],
             fetched_at=datetime(2026, 10, 7, tzinfo=UTC),
         )
+        if self.move_defect is not None:
+            moved = next(p for p in context.places if p.source_place_id == "required")
+            if self.move_defect == "closed":
+                moved.opening_hours = "Mo-Su 09:00-11:00"
+            elif self.move_defect == "far":
+                moved.latitude = 35.8
         if self.replacement_defect is not None:
             candidate = next(
                 p for p in context.places if p.source_place_id == "second-museum"
@@ -234,10 +242,12 @@ class LifecycleCase:
     model: ModelReplay
     context: ContextReplay
 
-    async def create(self) -> dict[str, Any]:
+    async def create(self, *, plan: dict[str, Any] | None = None) -> dict[str, Any]:
         """Создаёт исходный маршрут через настоящий HTTP endpoint."""
 
-        self.model.replies.append(("trip_plan", grounded_plan()))
+        self.model.replies.append(
+            ("trip_plan", plan if plan is not None else grounded_plan())
+        )
         response = await self.client.post(
             "/api/v1/trip-plan",
             json={
@@ -684,6 +694,7 @@ async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
         "must_visit_places": [REQUIRED_MUSEUM, "Тестовый музей"],
         "requires_regeneration": False,
         "regeneration_periods": [],
+        "place_moves": [],
         "place_removals": [],
         "place_additions": [
             {
@@ -776,6 +787,7 @@ async def test_named_removal_after_addition_is_local_atomic_and_reopens(
         "must_visit_places_changed": True,
         "requires_regeneration": False,
         "regeneration_periods": [],
+        "place_moves": [],
         "place_removals": [
             {
                 "day": 1,
@@ -823,4 +835,77 @@ async def test_named_removal_after_addition_is_local_atomic_and_reopens(
         assert "Тестовый дневной парк" in case.context.preserved_names[-1]
     assert (await case.details(trip_id))["days"] == after[0]["days"]
     assert case.model.calls == ["trip_plan", "trip_edit_analysis", "trip_edit_analysis"]
+    assert not case.model.replies
+
+
+@pytest.mark.parametrize("defect", [None, "missing", "closed", "far", "full"])
+async def test_named_move_is_local_atomic_and_reopens_at_new_time(
+    lifecycle_case: LifecycleCase,
+    database_session: AsyncSession,
+    defect: str | None,
+) -> None:
+    """Настоящий HTTP и PostgreSQL сохраняют оба конца переноса либо исходную запись."""
+
+    case = lifecycle_case
+    initial = grounded_plan()
+    if defect == "full":
+        initial["days"][0]["afternoon"].append(
+            {
+                "source_place_id": None,
+                "place_name": None,
+                "activity_focus": None,
+                "description": "Неспешная пауза.",
+            }
+        )
+    created = await case.create(plan=initial)
+    trip_id = created["trip_id"]
+    before = await stored_state(database_session, trip_id)
+    if defect == "missing":
+        case.context.missing_place_id = "required"
+    elif defect in {"closed", "far"}:
+        case.context.move_defect = defect
+    parsed = {
+        **edit_analysis(change_rest=False),
+        "interests_changed": False,
+        "interests": None,
+        "requires_regeneration": False,
+        "regeneration_periods": [],
+        "place_moves": [
+            {
+                "place_name": REQUIRED_MUSEUM,
+                "source_day": 1,
+                "source_period": "morning",
+                "target_day": 1,
+                "target_period": "afternoon",
+            }
+        ],
+    }
+    case.model.replies.append(("trip_edit_analysis", parsed))
+    response = await case.client.post(
+        "/api/v1/trip-edit",
+        json={
+            "telegram_id": OWNER_ID,
+            "trip_id": trip_id,
+            "instruction": f"Перенеси {REQUIRED_MUSEUM} с утра на день. Все остальные активности оставь.",
+        },
+    )
+    assert response.status_code == (200 if defect is None else 502), response.text
+    after = await stored_state(database_session, trip_id)
+    if defect is not None:
+        assert after == before
+    else:
+        assert after[2] == before[2]
+        assert after[1] == before[1]
+        assert after[0]["days"][0]["morning"] == ["Свободное время."]
+        assert (
+            after[0]["days"][0]["afternoon"][0] == before[0]["days"][0]["afternoon"][0]
+        )
+        assert after[0]["days"][0]["afternoon"][1].startswith(
+            f"{REQUIRED_MUSEUM}: посетить музей."
+        )
+        assert after[0]["days"][0]["evening"] == before[0]["days"][0]["evening"]
+    assert REQUIRED_MUSEUM in case.context.preserved_names[-1]
+    assert "Тестовый дневной парк" in case.context.preserved_names[-1]
+    assert (await case.details(trip_id))["days"] == after[0]["days"]
+    assert case.model.calls == ["trip_plan", "trip_edit_analysis"]
     assert not case.model.replies

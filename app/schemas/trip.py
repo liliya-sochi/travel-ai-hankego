@@ -108,6 +108,25 @@ class TripPlaceRemoval(StrictSchema):
     )
 
 
+class TripPlaceMove(StrictSchema):
+    """Явно названное сохранённое посещение и его новое время."""
+
+    place_name: MustVisitPlaceName
+    source_day: int = Field(ge=1, le=30)
+    source_period: TripDayPeriod
+    target_day: int = Field(ge=1, le=30)
+    target_period: TripDayPeriod
+
+    @model_validator(mode="after")
+    def validate_different_periods(self) -> Self:
+        if (self.source_day, self.source_period) == (
+            self.target_day,
+            self.target_period,
+        ):
+            raise ValueError("Исходный и целевой периоды переноса должны различаться.")
+        return self
+
+
 class RestPeriodChange(RestPeriod):
     """Одно явное добавление или отмена отдыха из текущей инструкции."""
 
@@ -451,7 +470,7 @@ class TripEditAnalysis(StrictSchema):
         description="Явные просьбы сохранить период или сделать спокойную прогулку.",
     )
     requires_regeneration: bool = Field(
-        description="Нужна ли генерация вне отдыха, period_actions, place_additions и place_removals.",
+        description="Нужна ли генерация вне отдыха, period_actions, place_additions, place_removals и place_moves.",
     )
     regeneration_periods: list[TripPeriodScope] = Field(
         max_length=90,
@@ -481,6 +500,30 @@ class TripEditAnalysis(StrictSchema):
             "[] без такого запроса. Другие активности периода сохраняются."
         ),
     )
+
+    place_moves: list[TripPlaceMove] = Field(
+        max_length=180,
+        description=(
+            "Явно названные сохранённые посещения для переноса: place_name, "
+            "source_day, source_period из плана и target_day, target_period из инструкции. "
+            "[] без переноса. Действие и список обязательных мест сохраняются."
+        ),
+    )
+
+    @field_validator("place_moves")
+    @classmethod
+    def validate_place_moves(cls, moves: list[TripPlaceMove]) -> list[TripPlaceMove]:
+        keys = {
+            (
+                item.source_day,
+                item.source_period,
+                " ".join(item.place_name.casefold().split()),
+            )
+            for item in moves
+        }
+        if len(keys) != len(moves):
+            raise ValueError("Переносимые посещения не должны повторяться.")
+        return moves
 
     @field_validator("place_removals")
     @classmethod

@@ -31,6 +31,7 @@ def analysis(**updates: Any) -> TripEditAnalysis:
             "must_visit_places": ["Art Aquarium Museum GINZA"],
             "rest_period_changes": [],
             "period_actions": [],
+            "place_moves": [],
             "place_removals": [],
             "place_additions": [],
             "place_replacements": [],
@@ -428,6 +429,7 @@ def replacement_analysis(*, nearby=True, activity_focus="museum", **updates):
     return analysis(
         requires_regeneration=True,
         regeneration_periods=[{"day": 2, "period": "afternoon"}],
+        place_moves=[],
         place_removals=[],
         place_additions=[],
         place_replacements=[
@@ -777,6 +779,7 @@ async def test_one_day_afternoon_replacement_can_override_initial_interest(
         must_visit_places=prefs.must_visit_places,
         requires_regeneration=True,
         regeneration_periods=[{"day": 1, "period": "afternoon"}],
+        place_moves=[],
         place_removals=[],
         place_additions=[],
         place_replacements=[
