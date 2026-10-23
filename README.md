@@ -878,3 +878,14 @@ contact Docker, Telegram, or a production server.
 ## License
 
 This project is licensed under the MIT License.
+
+The bilingual move case `tokyo_move_bilingual_second_afternoon` uses a saved
+`Tokyo Station Gallery (東京ステーションギャラリー)` caption and an English-only
+instruction. Move explicitness is checked against the full known names of the
+uniquely resolved saved visit, rather than the model's chosen display variant.
+Partial venue names, absent names and ambiguous source visits remain invalid.
+The evaluation resolves exact context aliases to independent expected place IDs.
+
+```bash
+python -m scripts.evaluate_routes --suite edits --live --case tokyo_move_bilingual_second_afternoon --repeat 1 --output evals/results/bilingual-move.json
+```

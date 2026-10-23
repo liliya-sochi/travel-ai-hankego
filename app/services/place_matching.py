@@ -3,6 +3,31 @@
 import unicodedata
 
 
+def saved_place_name_is_explicit(*, instruction: str, saved_name: str) -> bool:
+    """Ищет полное сохранённое название или его известный вариант в скобках."""
+
+    display_name = unicodedata.normalize("NFKC", saved_name).strip()
+    aliases = [display_name]
+    if display_name.endswith(")"):
+        depth = 0
+        for index in range(len(display_name) - 1, -1, -1):
+            character = display_name[index]
+            if character == ")":
+                depth += 1
+            elif character == "(":
+                depth -= 1
+                if depth == 0:
+                    prefix = display_name[:index].strip()
+                    if prefix:
+                        aliases.extend((prefix, display_name[index + 1 : -1]))
+                    break
+    normalized_instruction = normalize_place_name(instruction)
+    return any(
+        len(alias) >= 4 and alias in normalized_instruction
+        for alias in map(normalize_place_name, aliases)
+    )
+
+
 def normalize_place_name(value: str) -> str:
     """Убирает регистр, диакритику, пробелы и знаки препинания."""
 

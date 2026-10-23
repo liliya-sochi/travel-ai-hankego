@@ -514,8 +514,17 @@ async def test_alias_move_keeps_old_focus_from_saved_visit(move_case):
 
 
 @pytest.mark.parametrize("first_invalid", [False, True])
+@pytest.mark.parametrize(
+    "bilingual_name",
+    [
+        None,
+        "Tokyo Station Gallery",
+        "東京ステーションギャラリー",
+        "Tokyo Station Gallery (東京ステーションギャラリー)",
+    ],
+)
 def test_real_analysis_http_and_local_move_pass_live_eval_report(
-    move_case, monkeypatch, tmp_path, first_invalid
+    move_case, monkeypatch, tmp_path, first_invalid, bilingual_name
 ):
     import json
     from types import SimpleNamespace
@@ -524,6 +533,10 @@ def test_real_analysis_http_and_local_move_pass_live_eval_report(
 
     case, _, _ = move_case
     valid = move_analysis().model_dump()
+    if bilingual_name:
+        case = evaluation.load_edit_suite().cases[6]
+        valid["place_moves"][0]["place_name"] = bilingual_name
+        valid["must_visit_places"] = case.preferences.must_visit_places
     replies = [valid]
     if first_invalid:
         invalid = deepcopy(valid)
