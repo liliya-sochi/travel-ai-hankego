@@ -799,6 +799,44 @@ def merge_edit_preferences(
     return TripPreferences.model_validate({**preferences.model_dump(), **updates})
 
 
+def assess_move_requests(
+    actual: list[TripPlaceMove], expected: list[EditMoveVisits], context: TravelContext
+) -> bool:
+    """Сравнивает переносы по независимым ID, принимая только известные названия."""
+
+    def move_key(item: TripPlaceMove) -> tuple | None:
+        matches = {
+            place.source_place_id
+            for place in context.places
+            if normalize_text(item.place_name)
+            in {
+                normalize_text(alias)
+                for alias in (place.name, place.localized_name, place.display_name)
+                if alias
+            }
+        }
+        if len(matches) != 1:
+            return None
+        return (
+            matches.pop(),
+            item.source_day,
+            item.source_period,
+            item.target_day,
+            item.target_period,
+        )
+
+    actual_keys = [move_key(item) for item in actual]
+    expected_keys = [move_key(item) for item in expected]
+    if None in actual_keys or None in expected_keys:
+        return False
+    if any(
+        key[0] != item.moved_place_id
+        for key, item in zip(expected_keys, expected, strict=True)
+    ):
+        return False
+    return Counter(actual_keys) == Counter(expected_keys)
+
+
 def assess_edit_periods(
     plan: TripPlanResponse,
     case: EditEvaluationCase,
@@ -1044,18 +1082,9 @@ async def evaluate_edit_dialogue(
                 for item in step.expectations.removal_requests
             )
 
-            def move_key(item: TripPlaceMove) -> tuple:
-                return (
-                    normalize_text(item.place_name),
-                    item.source_day,
-                    item.source_period,
-                    item.target_day,
-                    item.target_period,
-                )
-
-            turn["checks"]["move_requests"] = Counter(
-                move_key(item) for item in analysis.place_moves
-            ) == Counter(move_key(item) for item in step.expectations.moved_visits)
+            turn["checks"]["move_requests"] = assess_move_requests(
+                analysis.place_moves, step.expectations.moved_visits, context
+            )
             if not record_checks(turn):
                 return finish_checks(result)
             try:

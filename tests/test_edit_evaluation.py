@@ -140,7 +140,13 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                         }
                     ],
                 )
-            if "Перенеси Тестовый музей 4" in incoming["edit_instruction"]:
+            if any(
+                name in incoming["edit_instruction"]
+                for name in (
+                    "Перенеси Тестовый музей 4",
+                    "Перенеси Tokyo Station Gallery",
+                )
+            ):
                 content.update(
                     interests_changed=False,
                     interests=None,
@@ -149,7 +155,12 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                     regeneration_periods=[],
                     place_moves=[
                         {
-                            "place_name": "Тестовый музей 4",
+                            "place_name": (
+                                "Tokyo Station Gallery (東京ステーションギャラリー)"
+                                if "Tokyo Station Gallery"
+                                in incoming["edit_instruction"]
+                                else "Тестовый музей 4"
+                            ),
                             "source_day": 2,
                             "source_period": "afternoon",
                             "target_day": 1,
@@ -249,8 +260,9 @@ def test_edit_corpus_has_rest_cycles_and_scoped_replacement(suite) -> None:
         "tokyo_add_second_afternoon",
         "tokyo_remove_second_afternoon",
         "tokyo_move_second_afternoon",
+        "tokyo_move_bilingual_second_afternoon",
     ]
-    assert [len(case.steps) for case in suite.cases] == [3, 3, 1, 1, 1, 1]
+    assert [len(case.steps) for case in suite.cases] == [3, 3, 1, 1, 1, 1, 1]
     assert suite.contexts["tokyo_museums"].fetched_at.tzinfo is not None
 
 
@@ -536,11 +548,11 @@ def test_live_edit_cli_reports_all_turns_and_interval(
     )
     report = json.loads(path.read_text(encoding="utf-8"))
     assert report["completed"]
-    assert report["planned_runs"] == 6 and report["planned_messages"] == 10
-    assert report["summary"] == {"passed": 6}
-    assert len(requests) == 17
-    assert pauses == [65] * 9
-    assert [len(row["steps"]) for row in report["results"]] == [3, 3, 1, 1, 1, 1]
+    assert report["planned_runs"] == 7 and report["planned_messages"] == 11
+    assert report["summary"] == {"passed": 7}
+    assert len(requests) == 18
+    assert pauses == [65] * 10
+    assert [len(row["steps"]) for row in report["results"]] == [3, 3, 1, 1, 1, 1, 1]
     assert "fixture-secret" not in path.read_text(encoding="utf-8")
 
 

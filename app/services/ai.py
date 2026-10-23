@@ -55,7 +55,10 @@ from app.services.place_geography import (
     calculate_distance_meters,
     format_place_area_group,
 )
-from app.services.place_matching import required_place_name_matches
+from app.services.place_matching import (
+    required_place_name_matches,
+    saved_place_name_is_explicit,
+)
 from app.services.trip_editing import (
     MAX_NEARBY_REPLACEMENT_DISTANCE_METERS,
     QUIET_WALK_DESCRIPTION,
@@ -1689,10 +1692,9 @@ def _validate_trip_edit_analysis(
         if analysis.place_moves:
             if current_plan is None:
                 raise ValueError("Move validation needs the saved plan.")
-            moved_visit_references(current_plan, analysis)
-            for item in analysis.place_moves:
-                if not required_place_name_matches(
-                    required_name=instruction, candidate_name=item.place_name
+            for _, saved_name, _ in moved_visit_references(current_plan, analysis):
+                if not saved_place_name_is_explicit(
+                    instruction=instruction, saved_name=saved_name
                 ):
                     raise ValueError("Moved visit must be explicitly named.")
 
