@@ -889,3 +889,11 @@ The evaluation resolves exact context aliases to independent expected place IDs.
 ```bash
 python -m scripts.evaluate_routes --suite edits --live --case tokyo_move_bilingual_second_afternoon --repeat 1 --output evals/results/bilingual-move.json
 ```
+
+Named addition validation reports `addition_not_explicit` when the returned
+addition name is absent from the instruction, or `addition_not_required` when
+an explicitly named addition is missing from the returned required-place list.
+Explicitness is checked first if both conditions fail. These are fixed safe
+codes; rejected replies and place names are not added to logs or eval errors.
+The legacy combined code remains accepted when sanitizing older diagnostics.
+This changes diagnostics only; invalid additions still fail before mutation.

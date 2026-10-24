@@ -256,6 +256,8 @@ def install_transport(monkeypatch, replies: list[object]):
         ("generation", "schema", "generation_required"),
         ("missing", "schema", "schema_validation"),
         ("semantic", "semantic", "required_change_absent_from_instruction"),
+        ("addition_name", "semantic", "addition_not_explicit"),
+        ("addition_required", "semantic", "addition_not_required"),
         ("json", "schema", "schema_validation"),
         ("extraction", "extraction", "model_text_unavailable"),
     ],
@@ -272,6 +274,11 @@ async def test_edit_retry_keeps_diagnostic_then_succeeds_without_generation(
         del bad["place_additions"][0]["activity_focus"]
     elif defect == "semantic":
         bad["must_visit_places"].append(PRIVATE_REPLY)
+    elif defect == "addition_name":
+        bad["place_additions"][0]["place_name"] = PRIVATE_REPLY
+    elif defect == "addition_required":
+        bad["must_visit_places"] = ["Art Aquarium Museum GINZA"]
+        bad["must_visit_places_changed"] = False
     bad_text = (
         None
         if defect == "extraction"
@@ -299,11 +306,20 @@ async def test_edit_retry_keeps_diagnostic_then_succeeds_without_generation(
     assert "PRIVATE" not in json.dumps(result) + caplog.text
 
 
+@pytest.mark.parametrize(
+    "reason", ["generation_required", "addition_not_explicit", "addition_not_required"]
+)
 def test_diagnostic_survives_two_rate_limits_in_written_live_report(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, reason
 ):
     bad = edit_reply()
-    bad.update(interests_changed=True, interests=PRIVATE_REPLY)
+    if reason == "generation_required":
+        bad.update(interests_changed=True, interests=PRIVATE_REPLY)
+    elif reason == "addition_not_explicit":
+        bad["place_additions"][0]["place_name"] = PRIVATE_REPLY
+    else:
+        bad["must_visit_places"] = ["Art Aquarium Museum GINZA"]
+        bad["must_visit_places_changed"] = False
     requests = install_transport(
         monkeypatch, [json.dumps(bad), "rate_limit", "rate_limit"]
     )
@@ -334,7 +350,7 @@ def test_diagnostic_survives_two_rate_limits_in_written_live_report(
         "rate_limited",
         "rate_limited",
     ]
-    assert result["calls"][0]["validation_reason"] == "generation_required"
+    assert result["calls"][0]["validation_reason"] == reason
     assert all("validation_stage" not in call for call in result["calls"][1:])
     assert result["steps"][0]["calls"][0] == result["calls"][0]
     assert "PRIVATE" not in output.read_text()
