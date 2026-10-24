@@ -1727,12 +1727,12 @@ def _validate_trip_edit_analysis(
 
     addition_names = [item.place_name for item in analysis.place_additions]
     for name in addition_names:
-        if not _place_name_matches_any(
-            name, returned_places
-        ) or not required_place_name_matches(
+        if not required_place_name_matches(
             required_name=instruction, candidate_name=name
         ):
-            raise ValueError("Added visit must be explicit and required.")
+            raise ValueError("Added visit must be explicitly named.")
+        if not _place_name_matches_any(name, returned_places):
+            raise ValueError("Added visit must be required.")
     removal_names = [item.place_name for item in analysis.place_removals]
     for name in removal_names:
         if not required_place_name_matches(

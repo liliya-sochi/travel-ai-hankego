@@ -77,6 +77,8 @@ KNOWN_VALIDATION_REASONS = {
     "LLM returned duplicate required places.": "duplicate_required_places",
     "LLM changed required places without declaring it.": "undeclared_required_change",
     "LLM changed a required place absent from the instruction.": "required_change_absent_from_instruction",
+    "Added visit must be explicitly named.": "addition_not_explicit",
+    "Added visit must be required.": "addition_not_required",
     "Added visit must be explicit and required.": "addition_not_explicit_or_required",
     "Local edit changes required places beyond declared visits.": "local_required_change_beyond_visits",
     "Replacement conflicts with generation scope or period action.": "replacement_scope_conflict",
