@@ -1666,8 +1666,9 @@ def _validate_trip_edit_analysis(
     current_preferences: TripPreferences,
     instruction: str,
     current_plan: TripPlanResponse | None = None,
+    require_additions_in_required_places: bool = True,
 ) -> None:
-    """Проверяет обязательные места, область правки и заменяемые посещения."""
+    """Проверяет правку; при подготовке допускает только пропуск добавлений в списке."""
 
     current_places = current_preferences.must_visit_places
     returned_places = analysis.must_visit_places
@@ -1731,7 +1732,9 @@ def _validate_trip_edit_analysis(
             required_name=instruction, candidate_name=name
         ):
             raise ValueError("Added visit must be explicitly named.")
-        if not _place_name_matches_any(name, returned_places):
+        if require_additions_in_required_places and not _place_name_matches_any(
+            name, returned_places
+        ):
             raise ValueError("Added visit must be required.")
     removal_names = [item.place_name for item in analysis.place_removals]
     for name in removal_names:
@@ -1748,6 +1751,47 @@ def _validate_trip_edit_analysis(
         )
     ):
         raise ValueError("Local edit changes required places beyond declared visits.")
+
+
+def _complete_added_required_places(
+    *,
+    analysis: TripEditAnalysis,
+    current_preferences: TripPreferences,
+    instruction: str,
+    current_plan: TripPlanResponse,
+) -> TripEditAnalysis:
+    """Дополняет обязательные места только из проверенных явных добавлений."""
+
+    _validate_trip_edit_analysis(
+        analysis=analysis,
+        current_preferences=current_preferences,
+        instruction=instruction,
+        current_plan=current_plan,
+        require_additions_in_required_places=False,
+    )
+    if not analysis.supported:
+        return analysis
+    places = list(analysis.must_visit_places)
+    for item in analysis.place_additions:
+        if not _place_name_matches_any(item.place_name, places):
+            places.append(item.place_name)
+    if places == analysis.must_visit_places:
+        return analysis
+    # Повторная Pydantic-проверка сохраняет ограничение длины списка и остальные связи.
+    completed = TripEditAnalysis.model_validate(
+        {
+            **analysis.model_dump(),
+            "must_visit_places": places,
+            "must_visit_places_changed": True,
+        }
+    )
+    _validate_trip_edit_analysis(
+        analysis=completed,
+        current_preferences=current_preferences,
+        instruction=instruction,
+        current_plan=current_plan,
+    )
+    return completed
 
 
 def _build_grounded_edit_user_message(
@@ -3514,7 +3558,7 @@ async def analyze_trip_edit(
                 validation_stage = "schema"
                 analysis = TripEditAnalysis.model_validate_json(model_text)
                 validation_stage = "semantic"
-                _validate_trip_edit_analysis(
+                analysis = _complete_added_required_places(
                     analysis=analysis,
                     current_preferences=current_preferences,
                     instruction=instruction,
