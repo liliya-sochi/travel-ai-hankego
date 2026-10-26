@@ -673,12 +673,16 @@ async def test_visit_replacement_never_saves_unchanged_target(
 
 
 @pytest.mark.parametrize("new_place_missing", [False, True])
+@pytest.mark.parametrize(
+    "required_reply", ["complete", "old_list_false", "old_list_true"]
+)
 async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
     lifecycle_case: LifecycleCase,
     database_session: AsyncSession,
     new_place_missing: bool,
+    required_reply: str,
 ) -> None:
-    """Реальная SQL-запись сохраняет прежний парк и добавляет названный музей."""
+    """Реальная SQL-запись сохраняет парк и дополняет обязательные места из добавления."""
 
     case = lifecycle_case
     created = await case.create()
@@ -705,6 +709,9 @@ async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
             }
         ],
     }
+    if required_reply != "complete":
+        parsed["must_visit_places"] = [REQUIRED_MUSEUM]
+        parsed["must_visit_places_changed"] = required_reply == "old_list_true"
     case.model.replies.append(("trip_edit_analysis", parsed))
     response = await case.client.post(
         "/api/v1/trip-edit",

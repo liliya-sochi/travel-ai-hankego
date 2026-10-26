@@ -890,10 +890,20 @@ The evaluation resolves exact context aliases to independent expected place IDs.
 python -m scripts.evaluate_routes --suite edits --live --case tokyo_move_bilingual_second_afternoon --repeat 1 --output evals/results/bilingual-move.json
 ```
 
-Named addition validation reports `addition_not_explicit` when the returned
+Strict named addition validation distinguishes `addition_not_explicit` when the returned
 addition name is absent from the instruction, or `addition_not_required` when
 an explicitly named addition is missing from the returned required-place list.
 Explicitness is checked first if both conditions fail. These are fixed safe
 codes; rejected replies and place names are not added to logs or eval errors.
 The legacy combined code remains accepted when sanitizing older diagnostics.
 This changes diagnostics only; invalid additions still fail before mutation.
+
+Explicit named additions now complete the required-place list in application
+code after semantic checks. An otherwise valid reply may retain the old list
+and either change flag; the app appends only explicitly requested addition
+names and sets the flag. Existing required-place changes, duplicate names,
+out-of-range days and undeclared changes are still validated before completion.
+The completed analysis is revalidated with Pydantic (including the five-place
+limit) and the strict semantic validator. Invalid additions never reach storage.
+Both already-complete and incomplete replies use the same local add path.
+No schema, dependency, database migration or public API changes are needed.
