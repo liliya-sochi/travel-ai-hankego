@@ -312,3 +312,66 @@ async def test_one_day_park_interests_keep_park_and_append_required_museum(
     assert result.days[0].afternoon[0].startswith(plan.days[0].afternoon[0])
     assert result.days[0].afternoon[1].startswith("Тестовый музей 5: посетить музей.")
     assert result.days[0].evening[0].startswith(plan.days[0].evening[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "neighbor",
+    [None, "Неспешная пауза.", "Спокойный отдых.", "Свободное время после музея."],
+)
+async def test_addition_consumes_only_exact_free_time_placeholder(
+    addition_case, neighbor
+):
+    case, plan, context = addition_case
+    plan.days[1].afternoon = ["Свободное время."]
+    if neighbor:
+        plan.days[1].afternoon.append(neighbor)
+    before = plan.model_dump_json()
+    result = await generate(case, plan, context, addition_analysis())
+    lines = result.days[1].afternoon
+    assert len(lines) == 1 + bool(neighbor)
+    assert "Свободное время." not in lines
+    if neighbor:
+        assert lines[0] == neighbor
+    assert lines[-1].startswith("Тестовый музей 5: посетить музей.")
+    assert plan.model_dump_json() == before
+    for old, new in zip(plan.days, result.days, strict=True):
+        assert new.morning[0].startswith(old.morning[0])
+        assert new.evening == old.evening
+    assert result.days[0].afternoon[0].startswith(plan.days[0].afternoon[0])
+
+
+@pytest.mark.asyncio
+async def test_two_additions_fit_in_free_period(addition_case):
+    case, plan, context = addition_case
+    plan.days[1].afternoon = ["Свободное время."]
+    parsed = addition_analysis()
+    parsed.place_additions.append(
+        parsed.place_additions[0].model_copy(update={"place_name": "Тестовый музей 4"})
+    )
+    parsed.must_visit_places.append("Тестовый музей 4")
+    result = await generate(case, plan, context, parsed)
+    assert len(result.days[1].afternoon) == 2
+    assert result.days[1].afternoon[0].startswith("Тестовый музей 5:")
+    assert result.days[1].afternoon[1].startswith("Тестовый музей 4:")
+
+
+@pytest.mark.asyncio
+async def test_readding_existing_visit_cleans_legacy_placeholder(addition_case):
+    case, plan, context = addition_case
+    plan.days[1].afternoon = ["Свободное время.", "Тестовый музей 5: посетить музей."]
+    result = await generate(case, plan, context, addition_analysis())
+    assert len(result.days[1].afternoon) == 1
+    assert result.days[1].afternoon[0].startswith("Тестовый музей 5:")
+
+
+def test_evaluation_detects_free_placeholder_left_beside_added_visit():
+    suite = evaluation.load_edit_suite()
+    case = suite.cases[7]
+    plan = suite.plans[case.current_plan].model_copy(deep=True)
+    plan.days[1].afternoon.append("Тестовый музей 5: посетить музей.")
+    checks = evaluation.assess_edit_periods(
+        plan, case, case.steps[0].expectations, suite.contexts[case.context]
+    )
+    assert checks["addition:2:afternoon"]
+    assert not checks["addition_placeholder_absent:2:afternoon"]

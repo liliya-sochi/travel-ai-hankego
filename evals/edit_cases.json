@@ -417,6 +417,42 @@
       "practical_tips": [
         "Синтетический исходный план для оценки модели."
       ]
+    },
+    "tokyo_2_days_free_afternoon": {
+      "destination": "Токио",
+      "duration_days": 2,
+      "summary": "Музеи и спокойные прогулки.",
+      "days": [
+        {
+          "day": 1,
+          "title": "Музеи",
+          "morning": [
+            "Art Aquarium Museum GINZA: посетить музей."
+          ],
+          "afternoon": [
+            "Mitsuo Aida Museum: посетить музей."
+          ],
+          "evening": [
+            "Спокойная прогулка."
+          ]
+        },
+        {
+          "day": 2,
+          "title": "Музеи",
+          "morning": [
+            "Тестовый музей 3: посетить музей."
+          ],
+          "afternoon": [
+            "Свободное время."
+          ],
+          "evening": [
+            "Спокойная прогулка."
+          ]
+        }
+      ],
+      "practical_tips": [
+        "Синтетический исходный план для оценки модели."
+      ]
     }
   },
   "cases": [
@@ -1111,6 +1147,102 @@
                 ]
               }
             ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "tokyo_add_after_free_time",
+      "kind": "edit_dialogue",
+      "preferences": {
+        "destination": "Токио",
+        "duration_days": 2,
+        "interests": "Музеи; вечером спокойная прогулка",
+        "must_visit_places": [
+          "Art Aquarium Museum GINZA"
+        ]
+      },
+      "context": "tokyo_museums_replacement",
+      "current_plan": "tokyo_2_days_free_afternoon",
+      "preserved_visits": [
+        {
+          "day": 1,
+          "period": "morning",
+          "place_ids": [
+            "eval-edit-aquarium"
+          ],
+          "activity_focus": "museum"
+        },
+        {
+          "day": 1,
+          "period": "afternoon",
+          "place_ids": [
+            "eval-edit-aida"
+          ],
+          "activity_focus": "museum"
+        },
+        {
+          "day": 2,
+          "period": "morning",
+          "place_ids": [
+            "eval-edit-museum-3"
+          ],
+          "activity_focus": "museum"
+        }
+      ],
+      "steps": [
+        {
+          "user_message": "Во второй день днём добавь Тестовый музей 5. Все остальные активности оставь без изменений.",
+          "expectations": {
+            "rest_period_changes": [],
+            "rest_periods": [],
+            "regeneration_periods": [],
+            "general_activities": [
+              {
+                "day": 1,
+                "period": "evening",
+                "contains": [
+                  "спокойная прогулка"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              },
+              {
+                "day": 2,
+                "period": "evening",
+                "contains": [
+                  "спокойная прогулка"
+                ],
+                "excludes": [
+                  "отдых"
+                ]
+              }
+            ],
+            "replacement_visits": [],
+            "addition_requests": [
+              {
+                "day": 2,
+                "period": "afternoon",
+                "place_name": "Тестовый музей 5",
+                "activity_focus": null
+              }
+            ],
+            "appended_periods": [
+              {
+                "day": 2,
+                "period": "afternoon",
+                "place_ids": [
+                  "eval-edit-museum-5"
+                ],
+                "activity_focus": "museum"
+              }
+            ],
+            "must_visit_places": [
+              "Art Aquarium Museum GINZA",
+              "Тестовый музей 5"
+            ],
+            "generation_expected": false
           }
         }
       ]
