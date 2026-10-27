@@ -687,18 +687,15 @@ async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
     """Реальная SQL-запись сохраняет парк и дополняет обязательные места из добавления."""
 
     case = lifecycle_case
-    initial = grounded_plan()
-    if free_source:
-        initial["days"][0]["afternoon"] = [
-            {
-                "source_place_id": None,
-                "place_name": None,
-                "activity_focus": None,
-                "description": "Свободное время.",
-            }
-        ]
-    created = await case.create(plan=initial)
+    created = await case.create()
     trip_id = created["trip_id"]
+    if free_source:
+        trip = await database_session.get(Trip, trip_id)
+        assert trip is not None
+        saved_plan = deepcopy(trip.plan_data)
+        saved_plan["days"][0]["afternoon"] = ["Свободное время."]
+        trip.plan_data = saved_plan
+        await database_session.commit()
     before = await stored_state(database_session, trip_id)
     if new_place_missing:
         case.context.missing_place_id = "second-museum"
