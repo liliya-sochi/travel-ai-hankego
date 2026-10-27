@@ -261,8 +261,9 @@ def test_edit_corpus_has_rest_cycles_and_scoped_replacement(suite) -> None:
         "tokyo_remove_second_afternoon",
         "tokyo_move_second_afternoon",
         "tokyo_move_bilingual_second_afternoon",
+        "tokyo_add_after_free_time",
     ]
-    assert [len(case.steps) for case in suite.cases] == [3, 3, 1, 1, 1, 1, 1]
+    assert [len(case.steps) for case in suite.cases] == [3, 3, 1, 1, 1, 1, 1, 1]
     assert suite.contexts["tokyo_museums"].fetched_at.tzinfo is not None
 
 
@@ -548,11 +549,11 @@ def test_live_edit_cli_reports_all_turns_and_interval(
     )
     report = json.loads(path.read_text(encoding="utf-8"))
     assert report["completed"]
-    assert report["planned_runs"] == 7 and report["planned_messages"] == 11
-    assert report["summary"] == {"passed": 7}
-    assert len(requests) == 18
-    assert pauses == [65] * 10
-    assert [len(row["steps"]) for row in report["results"]] == [3, 3, 1, 1, 1, 1, 1]
+    assert report["planned_runs"] == 8 and report["planned_messages"] == 12
+    assert report["summary"] == {"passed": 8}
+    assert len(requests) == 19
+    assert pauses == [65] * 11
+    assert [len(row["steps"]) for row in report["results"]] == [3, 3, 1, 1, 1, 1, 1, 1]
     assert "fixture-secret" not in path.read_text(encoding="utf-8")
 
 

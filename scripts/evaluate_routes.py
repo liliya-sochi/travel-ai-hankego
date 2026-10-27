@@ -869,6 +869,10 @@ def assess_edit_periods(
                 checks[f"{kind}:{visit.day}:{visit.period}"] = [
                     place.source_place_id for place in places
                 ] == visit.place_ids
+                if kind == "addition":
+                    checks[
+                        f"addition_placeholder_absent:{visit.day}:{visit.period}"
+                    ] = "Свободное время." not in lines
                 if kind == "removal":
                     selected = selected_places(
                         [

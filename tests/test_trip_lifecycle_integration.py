@@ -673,6 +673,7 @@ async def test_visit_replacement_never_saves_unchanged_target(
 
 
 @pytest.mark.parametrize("new_place_missing", [False, True])
+@pytest.mark.parametrize("free_source", [False, True])
 @pytest.mark.parametrize(
     "required_reply", ["complete", "old_list_false", "old_list_true"]
 )
@@ -681,11 +682,22 @@ async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
     database_session: AsyncSession,
     new_place_missing: bool,
     required_reply: str,
+    free_source: bool,
 ) -> None:
     """Реальная SQL-запись сохраняет парк и дополняет обязательные места из добавления."""
 
     case = lifecycle_case
-    created = await case.create()
+    initial = grounded_plan()
+    if free_source:
+        initial["days"][0]["afternoon"] = [
+            {
+                "source_place_id": None,
+                "place_name": None,
+                "activity_focus": None,
+                "description": "Свободное время.",
+            }
+        ]
+    created = await case.create(plan=initial)
     trip_id = created["trip_id"]
     before = await stored_state(database_session, trip_id)
     if new_place_missing:
@@ -729,12 +741,12 @@ async def test_named_addition_is_local_atomic_and_reopens_with_both_visits(
         assert after[2] == before[2]
         assert after[1]["must_visit_places"] == [REQUIRED_MUSEUM, "Тестовый музей"]
         assert after[1]["interests"] == "Парки"
-        assert (
-            after[0]["days"][0]["afternoon"][0] == before[0]["days"][0]["afternoon"][0]
-        )
-        assert after[0]["days"][0]["afternoon"][1].startswith(
-            "Тестовый музей: посетить музей."
-        )
+        afternoon = after[0]["days"][0]["afternoon"]
+        assert len(afternoon) == (1 if free_source else 2)
+        assert "Свободное время." not in afternoon
+        if not free_source:
+            assert afternoon[0] == before[0]["days"][0]["afternoon"][0]
+        assert afternoon[-1].startswith("Тестовый музей: посетить музей.")
         for period in ("morning", "evening"):
             assert after[0]["days"][0][period] == before[0]["days"][0][period]
     assert (await case.details(trip_id))["days"] == after[0]["days"]

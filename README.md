@@ -907,3 +907,9 @@ The completed analysis is revalidated with Pydantic (including the five-place
 limit) and the strict semantic validator. Invalid additions never reach storage.
 Both already-complete and incomplete replies use the same local add path.
 No schema, dependency, database migration or public API changes are needed.
+
+Named additions consume the exact service placeholder `Свободное время.` in
+their target period before capacity is checked, including legacy periods that
+already contain the added visit. Other general activities and explicit rest
+remain protected. The `tokyo_add_after_free_time` live edit case independently
+checks that the placeholder is absent after adding a concrete visit.

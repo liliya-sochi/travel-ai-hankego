@@ -828,6 +828,14 @@ def resolve_added_activities(
             raise PlaceAdditionUnavailableError(
                 "Добавляемое место не подходит для указанного вида активности. Маршрут не изменён."
             )
+        result[cell] = [
+            activity
+            for activity in result[cell]
+            if not (
+                activity.source_place_id is None
+                and activity.description == FREE_TIME_DESCRIPTION
+            )
+        ]
         existing = next(
             (a for a in result[cell] if a.source_place_id == place.source_place_id),
             None,
