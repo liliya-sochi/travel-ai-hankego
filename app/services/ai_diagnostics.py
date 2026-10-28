@@ -46,6 +46,9 @@ KNOWN_ERROR_TYPES = frozenset(
     }
 )
 KNOWN_VALIDATION_REASONS = {
+    "Изменение интересов требует генерации.": "generation_required_interests",
+    "Замена посещений требует генерации.": "generation_required_replacements",
+    "Изменение обязательных мест без локальных посещений требует генерации.": "generation_required_required_places",
     "Режим генерации должен соответствовать её периодам.": "regeneration_mode_mismatch",
     "Изменение интересов, замена или изменение обязательных мест без локальных посещений требует генерации.": "generation_required",
     "Исходный и целевой периоды переноса должны различаться.": "move_same_period",

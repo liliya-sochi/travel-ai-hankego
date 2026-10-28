@@ -588,17 +588,17 @@ class TripEditAnalysis(StrictSchema):
             self.regeneration_periods
         ):
             raise ValueError("Режим генерации должен соответствовать её периодам.")
-        if not self.requires_regeneration and (
-            self.interests_changed
-            or self.place_replacements
-            or (
-                self.must_visit_places_changed
-                and not (self.place_additions or self.place_removals)
-            )
-        ):
-            raise ValueError(
-                "Изменение интересов, замена или изменение обязательных мест без локальных посещений требует генерации."
-            )
+        if not self.requires_regeneration:
+            if self.interests_changed:
+                raise ValueError("Изменение интересов требует генерации.")
+            if self.place_replacements:
+                raise ValueError("Замена посещений требует генерации.")
+            if self.must_visit_places_changed and not (
+                self.place_additions or self.place_removals
+            ):
+                raise ValueError(
+                    "Изменение обязательных мест без локальных посещений требует генерации."
+                )
         return self
 
     @field_validator("rest_period_changes")
