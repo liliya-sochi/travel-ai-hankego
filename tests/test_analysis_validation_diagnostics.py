@@ -54,7 +54,7 @@ def edit_reply() -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("defect", "reason", "field", "kind"),
     [
-        ("generation", "generation_required", "<root>", "value_error"),
+        ("generation", "generation_required_interests", "<root>", "value_error"),
         ("mode", "regeneration_mode_mismatch", "<root>", "value_error"),
         ("missing", "schema_validation", "place_additions[].activity_focus", "missing"),
         ("literal", "schema_validation", "place_additions[].period", "literal_error"),
@@ -253,7 +253,7 @@ def install_transport(monkeypatch, replies: list[object]):
 @pytest.mark.parametrize(
     ("defect", "stage", "reason"),
     [
-        ("generation", "schema", "generation_required"),
+        ("generation", "schema", "generation_required_interests"),
         ("missing", "schema", "schema_validation"),
         ("semantic", "semantic", "required_change_absent_from_instruction"),
         ("addition_name", "semantic", "addition_not_explicit"),
@@ -302,12 +302,14 @@ async def test_edit_retry_keeps_diagnostic_then_succeeds_without_generation(
     assert "PRIVATE" not in json.dumps(result) + caplog.text
 
 
-@pytest.mark.parametrize("reason", ["generation_required", "addition_not_explicit"])
+@pytest.mark.parametrize(
+    "reason", ["generation_required_interests", "addition_not_explicit"]
+)
 def test_diagnostic_survives_two_rate_limits_in_written_live_report(
     monkeypatch, tmp_path, reason
 ):
     bad = edit_reply()
-    if reason == "generation_required":
+    if reason == "generation_required_interests":
         bad.update(interests_changed=True, interests=PRIVATE_REPLY)
     elif reason == "addition_not_explicit":
         bad["place_additions"][0]["place_name"] = PRIVATE_REPLY

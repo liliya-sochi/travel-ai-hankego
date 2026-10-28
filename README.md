@@ -913,3 +913,12 @@ their target period before capacity is checked, including legacy periods that
 already contain the added visit. Other general activities and explicit rest
 remain protected. The `tokyo_add_after_free_time` live edit case independently
 checks that the placeholder is absent after adding a concrete visit.
+
+Edit schema diagnostics now distinguish `generation_required_interests`,
+`generation_required_replacements`, and `generation_required_required_places`.
+They indicate which field conflicts with a disabled generation mode. If multiple
+conditions fail, precedence is interests, replacements, then required places;
+the existing generation/scope mismatch check still runs first. Validation
+acceptance and the provider JSON Schema remain unchanged. The old combined
+`generation_required` code remains recognized when sanitizing older reports.
+Only fixed diagnostic codes are logged; rejected inputs and replies remain private.
