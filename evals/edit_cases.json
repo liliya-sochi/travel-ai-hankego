@@ -502,7 +502,8 @@
                 "period": "evening"
               }
             ],
-            "general_activities": []
+            "general_activities": [],
+            "interests_changed": false
           }
         },
         {
@@ -515,7 +516,8 @@
                 "period": "evening"
               }
             ],
-            "general_activities": []
+            "general_activities": [],
+            "interests_changed": false
           }
         },
         {
@@ -540,7 +542,8 @@
                   "отдых"
                 ]
               }
-            ]
+            ],
+            "interests_changed": false
           }
         }
       ]
@@ -616,7 +619,8 @@
                   "отдых"
                 ]
               }
-            ]
+            ],
+            "interests_changed": false
           }
         },
         {
@@ -640,7 +644,8 @@
                   "отдых"
                 ]
               }
-            ]
+            ],
+            "interests_changed": false
           }
         },
         {
@@ -675,7 +680,8 @@
                   "отдых"
                 ]
               }
-            ]
+            ],
+            "interests_changed": false
           }
         }
       ]

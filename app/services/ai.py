@@ -369,8 +369,25 @@ EDIT_ANALYSIS_SYSTEM_PROMPT = """
 - просьба создать другой вариант для тех же направления и длительности
   поддерживается и не меняет preferences сама по себе;
 - остальные изменения внутри текущей поездки поддерживаются;
-- interests_changed=true, если меняются темп, темы, предпочтения,
-  типы активностей или общие пожелания;
+- interests описывает ОБЩИЕ темы, темп и предпочтения поездки целиком.
+  interests_changed=true только при явном изменении этих общих предпочтений;
+- сначала определи область инструкции: отдельный день/период или вся поездка.
+  Отдых, прогулка и сохранение активностей в указанном периоде сами по себе
+  НЕ меняют общие интересы: interests_changed=false, interests=null;
+- «оставь музеи утром и днём, вечером спокойный отдых»: interests_changed=false,
+  interests=null, rest_period_changes=[{"day":null,"period":"evening","rest":true}],
+  requires_regeneration=false, regeneration_periods=[]; остальные периоды сохрани;
+- «второй вечер вместо отдыха спокойная прогулка»: interests_changed=false,
+  interests=null, rest_period_changes=[{"day":2,"period":"evening","rest":false}],
+  period_actions=[{"day":2,"period":"evening","action":"quiet_walk"}],
+  requires_regeneration=false, regeneration_periods=[];
+- «вместо музеев хочу парки» без ограничения периода меняет общие интересы:
+  interests_changed=true, interests — полное обновлённое значение,
+  requires_regeneration=true, regeneration_periods разрешает все три периода;
+- не удаляй пожелание о прогулках из общих interests только из-за отдыха
+  в одном периоде: локальные правила отдыха приложение применит отдельно;
+- если одна инструкция меняет и общие темы, и отдых в периоде, верни оба
+  изменения; не скрывай настоящую смену общих тем за локальной правкой;
 - если interests_changed=true, interests содержит полное новое значение
   с учётом current_preferences; null означает полную очистку интересов;
 - конкретное место, которое пользователь просит добавить или заменить,

@@ -32,7 +32,9 @@ class DummyAsyncClient:
         return None
 
 
-def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+def mock_provider(
+    monkeypatch: pytest.MonkeyPatch, *, scope_only: bool = False
+) -> list[dict[str, Any]]:
     """Оставляет настоящими AI-функции, merge, валидацию и форматирование."""
 
     requests: list[dict[str, Any]] = []
@@ -80,8 +82,25 @@ def mock_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                 ],
                 "rest_period_changes": changes,
             }
+            if scope_only:
+                content.update(
+                    interests_changed=False,
+                    interests=None,
+                    requires_regeneration=False,
+                    regeneration_periods=[],
+                    period_actions=[
+                        {
+                            "day": 1 if duration == 1 else 2,
+                            "period": "evening",
+                            "action": "quiet_walk",
+                        }
+                    ]
+                    if stage == 2
+                    else [],
+                )
             if replacement_mode:
                 content.update(
+                    requires_regeneration=True,
                     interests_changed=False,
                     interests=None,
                     rest_period_changes=[],
@@ -320,7 +339,12 @@ async def test_real_ai_boundaries_carry_actual_state_between_edits(
 ) -> None:
     before = suite.model_dump_json()
     requests = mock_provider(monkeypatch)
-    case = suite.cases[case_index]
+    case = suite.cases[case_index].model_copy(deep=True)
+    # Этот тест отдельно проверяет перенос состояния при полной генерации.
+    for step in case.steps:
+        step.expectations.interests_changed = None
+        step.expectations.regeneration_periods = None
+        step.expectations.generation_expected = None
     result = await evaluation.evaluate_case(case, suite)
 
     assert result["status"] == "passed", result
@@ -521,7 +545,7 @@ def test_new_cli_is_offline_until_live_is_explicit(monkeypatch, capsys) -> None:
 def test_live_edit_cli_reports_all_turns_and_interval(
     monkeypatch, tmp_path: Path
 ) -> None:
-    requests = mock_provider(monkeypatch)
+    requests = mock_provider(monkeypatch, scope_only=True)
     pauses = []
 
     async def sleep(interval):
@@ -551,7 +575,7 @@ def test_live_edit_cli_reports_all_turns_and_interval(
     assert report["completed"]
     assert report["planned_runs"] == 8 and report["planned_messages"] == 12
     assert report["summary"] == {"passed": 8}
-    assert len(requests) == 19
+    assert len(requests) == 13
     assert pauses == [65] * 11
     assert [len(row["steps"]) for row in report["results"]] == [3, 3, 1, 1, 1, 1, 1, 1]
     assert "fixture-secret" not in path.read_text(encoding="utf-8")
