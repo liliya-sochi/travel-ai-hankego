@@ -308,6 +308,7 @@ class EditExpectations(StrictSchema):
     rest_period_changes: list[RestPeriodChange]
     rest_periods: list[RestPeriod]
     general_activities: list[EditPeriodTerms] = Field(default_factory=list)
+    interests_changed: bool | None = None
     regeneration_periods: list[TripPeriodScope] | None = None
     replacement_visits: list[EditReplacementVisits] = Field(default_factory=list)
     addition_requests: list[TripPlaceAddition] = Field(default_factory=list)
@@ -1042,6 +1043,10 @@ async def evaluate_edit_dialogue(
                     step.expectations.rest_period_changes, preferences.duration_days
                 ),
             }
+            if step.expectations.interests_changed is not None:
+                turn["checks"]["interests_change_scope"] = (
+                    analysis.interests_changed == step.expectations.interests_changed
+                )
             expected_scope = step.expectations.regeneration_periods
             if expected_scope is not None:
                 turn["checks"]["regeneration_scope"] = expanded_period_scopes(
@@ -1098,6 +1103,10 @@ async def evaluate_edit_dialogue(
                 record_checks(turn)
                 return finish_checks(result)
             turn["updated_preferences"] = updated.model_dump(mode="json")
+            if step.expectations.interests_changed is False:
+                turn["checks"]["interests_preserved"] = (
+                    updated.interests == preferences.interests
+                )
             turn["checks"]["rest_preferences"] = expanded_period_scopes(
                 updated.rest_periods, preferences.duration_days
             ) == expanded_period_scopes(

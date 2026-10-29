@@ -922,3 +922,13 @@ the existing generation/scope mismatch check still runs first. Validation
 acceptance and the provider JSON Schema remain unchanged. The old combined
 `generation_required` code remains recognized when sanitizing older reports.
 Only fixed diagnostic codes are logged; rejected inputs and replies remain private.
+
+The edit analyzer distinguishes trip-wide interests from changes limited to a
+particular day or period. Rest, a quiet walk, and preserving visits do not by
+themselves rewrite global interests. An explicit trip-wide switch (for example,
+museums to parks) still changes interests and requires regeneration; mixed
+instructions may change both interests and rest rules. Contradictory model
+replies remain rejected by the strict schema without automatic flag resets.
+The rest edit evaluation cycles now independently require unchanged interests
+and verify the merged preferences. This prompt change needs a live evaluation;
+mocked HTTP tests validate the contract and application behavior only.
