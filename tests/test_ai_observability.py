@@ -630,7 +630,7 @@ async def test_grounded_plan_retries_only_one_provider_schema_failure(
                 )
 
     assert attempts == [1, 2]
-    assert delays == [ai_service.GROUNDED_SCHEMA_RETRY_DELAY_SECONDS]
+    assert delays == [ai_service.STRUCTURED_OUTPUT_RETRY_DELAY_SECONDS]
     retry_logs = [
         record.getMessage()
         for record in caplog.records
