@@ -932,3 +932,13 @@ replies remain rejected by the strict schema without automatic flag resets.
 The rest edit evaluation cycles now independently require unchanged interests
 and verify the merged preferences. This prompt change needs a live evaluation;
 mocked HTTP tests validate the contract and application behavior only.
+
+The trip-edit analyzer now consumes one of its existing two analysis attempts
+when the provider returns HTTP 400 classified as `structured_output_validation`.
+It waits two seconds and appends the existing edit-analysis correction prompt.
+A second structured-output failure is returned without a third analysis attempt.
+Schema and semantic failures share this same budget. The existing bounded 429
+provider retry policy is unchanged; other HTTP errors are not retried by this
+new path. Successful replies still undergo strict Pydantic and semantic checks.
+The existing generator uses the same renamed retry-log helper and delay constant;
+its behavior is unchanged. No raw provider reply is logged or added to the prompt.
