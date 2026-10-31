@@ -201,6 +201,11 @@ SEMANTIC_RETRY_PROMPT = """
 """.strip()
 
 GROUNDED_VALIDATION_HINTS: dict[str, tuple[str, str]] = {
+    "LLM selected distant daily places.": (
+        "distant_daily_places",
+        "Choose places within 4000 meters of every other place on the same day. "
+        "Replace optional morning anchors when no nearby afternoon choice exists.",
+    ),
     "LLM duration_days does not match trip preferences.": (
         "wrong_duration",
         "Число дней должно совпадать с trip_preferences.duration_days.",
@@ -2394,7 +2399,11 @@ def _validate_grounded_trip_plan(
             len(replacement_constraints),
         )
 
-    if shorten_afternoons and preferences.duration_days > 1:
+    if (
+        shorten_afternoons
+        and preferences.duration_days > 1
+        and not preserved_activities
+    ):
         adjusted_plan = grounded_plan.model_copy(deep=True)
         replacement_count = _shorten_grounded_afternoons(
             plan=adjusted_plan,
@@ -2414,6 +2423,7 @@ def _validate_grounded_trip_plan(
                     replacement_constraints=replacement_constraints,
                     move_constraints=move_constraints,
                 )
+                _validate_compact_grounded_days(adjusted_plan, places_by_id)
             except (ValidationError, ValueError) as error:
                 reason, _ = _grounded_validation_hint(error)
                 logger.warning(
@@ -2426,6 +2436,7 @@ def _validate_grounded_trip_plan(
                     replacement_count,
                 )
                 return adjusted_result
+        _validate_compact_grounded_days(grounded_plan, places_by_id)
 
     return grounded_plan.to_trip_plan_response(
         practical_tips=_build_grounded_practical_tips(travel_context),
@@ -2498,13 +2509,39 @@ def _align_grounded_interest_focuses(
         activities[index][1].activity_focus = focus
 
 
+def _validate_compact_grounded_days(
+    plan: GroundedTripPlanResponse,
+    places_by_id: dict[str, PlaceCandidate],
+) -> None:
+    """Не позволяет новой многодневной поездке скрыть далёкую пару мест."""
+
+    for day in plan.days:
+        places = [
+            places_by_id[activity.source_place_id]
+            for activity in (*day.morning, *day.afternoon, *day.evening)
+            if activity.source_place_id is not None
+        ]
+        for index, first in enumerate(places):
+            for second in places[index + 1 :]:
+                if (
+                    calculate_distance_meters(
+                        first_latitude=first.latitude,
+                        first_longitude=first.longitude,
+                        second_latitude=second.latitude,
+                        second_longitude=second.longitude,
+                    )
+                    > MAX_COMPACT_PLACE_DISTANCE_METERS
+                ):
+                    raise ValueError("LLM selected distant daily places.")
+
+
 def _shorten_grounded_afternoons(
     *,
     plan: GroundedTripPlanResponse,
     places_by_id: dict[str, PlaceCandidate],
     must_visit_place_ids: set[str],
 ) -> int:
-    """Заменяет необязательные далёкие дневные места, сохраняя их фокус."""
+    """Сближает необязательные дневные и утренние места с сохранением фокуса."""
 
     all_activities = [
         activity
@@ -2534,71 +2571,73 @@ def _shorten_grounded_afternoons(
         )
 
     for day in plan.days:
-        for index, activity in enumerate(day.afternoon):
-            place_id = activity.source_place_id
-            if (
-                place_id is None
-                or place_id in must_visit_place_ids
-                or counts[place_id] != 1
-            ):
-                continue
-            original = places_by_id[place_id]
-            # Именованное место в общей активности нельзя оставить после замены.
-            if any(
-                name.casefold() in general.description.casefold()
-                for general in all_activities
-                if general.description is not None
-                for name in (original.name, original.localized_name)
-                if name is not None
-            ):
-                continue
-            other_places = [
-                places_by_id[other.source_place_id]
-                for other in (*day.morning, *day.afternoon, *day.evening)
-                if other is not activity and other.source_place_id is not None
-            ]
-            if (
-                maximum_distance(original, other_places)
-                <= MAX_COMPACT_PLACE_DISTANCE_METERS
-            ):
-                continue
-            candidates = [
-                place
-                for place in places_by_id.values()
-                if place.source_place_id not in selected_ids
-                and _has_planning_evidence(place)
-                and activity.activity_focus in get_supported_activity_focuses(place)
-                and maximum_distance(place, other_places)
-                <= MAX_COMPACT_PLACE_DISTANCE_METERS
-            ]
-            for candidate in sorted(
-                candidates,
-                key=lambda place: (
-                    maximum_distance(place, other_places),
-                    *_planning_place_sort_key(place),
-                ),
-            ):
-                replacement = activity.model_copy(
-                    update={
-                        "source_place_id": candidate.source_place_id,
-                        "place_name": candidate.name,
-                    }
-                )
-                try:
-                    _validate_grounded_activity(
-                        activity=replacement,
-                        places_by_id=places_by_id,
-                        period="afternoon",
-                    )
-                except ValueError:
+        # Сначала сохраняем утреннюю опору; при отсутствии замены меняем её.
+        for period in ("afternoon", "morning"):
+            activities = getattr(day, period)
+            for index, activity in enumerate(activities):
+                place_id = activity.source_place_id
+                if (
+                    place_id is None
+                    or place_id in must_visit_place_ids
+                    or counts[place_id] != 1
+                ):
                     continue
-                day.afternoon[index] = replacement
-                selected_ids.remove(place_id)
-                selected_ids.add(candidate.source_place_id)
-                counts[candidate.source_place_id] = 1
-                replacement_count += 1
-                break
-
+                original = places_by_id[place_id]
+                # Именованное место в общей активности нельзя оставить после замены.
+                if any(
+                    name.casefold() in general.description.casefold()
+                    for general in all_activities
+                    if general.description is not None
+                    for name in (original.name, original.localized_name)
+                    if name is not None
+                ):
+                    continue
+                other_places = [
+                    places_by_id[other.source_place_id]
+                    for other in (*day.morning, *day.afternoon, *day.evening)
+                    if other is not activity and other.source_place_id is not None
+                ]
+                if (
+                    maximum_distance(original, other_places)
+                    <= MAX_COMPACT_PLACE_DISTANCE_METERS
+                ):
+                    continue
+                candidates = [
+                    place
+                    for place in places_by_id.values()
+                    if place.source_place_id not in selected_ids
+                    and _has_planning_evidence(place)
+                    and activity.activity_focus in get_supported_activity_focuses(place)
+                    and maximum_distance(place, other_places)
+                    <= MAX_COMPACT_PLACE_DISTANCE_METERS
+                ]
+                for candidate in sorted(
+                    candidates,
+                    key=lambda place: (
+                        maximum_distance(place, other_places),
+                        *_planning_place_sort_key(place),
+                    ),
+                ):
+                    replacement = activity.model_copy(
+                        update={
+                            "source_place_id": candidate.source_place_id,
+                            "place_name": candidate.name,
+                        }
+                    )
+                    try:
+                        _validate_grounded_activity(
+                            activity=replacement,
+                            places_by_id=places_by_id,
+                            period=period,
+                        )
+                    except ValueError:
+                        continue
+                    activities[index] = replacement
+                    selected_ids.remove(place_id)
+                    selected_ids.add(candidate.source_place_id)
+                    counts[candidate.source_place_id] = 1
+                    replacement_count += 1
+                    break
     return replacement_count
 
 
