@@ -22,6 +22,19 @@ Users can:
 - restore the main menu and see concise guidance through `/help`;
 - delete an itinerary only after explicit confirmation.
 
+### Compact multi-day generation
+
+New multi-day plans are checked against a 4,000 metre straight-line limit for
+all pairs of concrete visits within each day. Local correction first tries an
+unused nearby afternoon candidate, then an optional morning candidate if needed.
+Each replacement retains its activity focus, needs planning evidence and must be
+valid for its actual period. Required places and visits named in general activity
+text are not replaced. The entire corrected plan is validated again, including
+interest coverage and uniqueness. If correction cannot produce a valid compact
+plan, `distant_daily_places` uses the existing bounded semantic retry instead of
+returning a successful distant route. Saved edit periods are not rearranged by
+this generation-only correction; edit-specific geographic checks remain in force.
+
 ## Architecture
 
 ```mermaid
