@@ -798,3 +798,81 @@ async def test_does_not_retry_after_long_provider_delay(
             )
 
     assert provider_attempts == [1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "classification"),
+    [(401, "authentication_failed"), (403, "access_denied")],
+)
+@pytest.mark.parametrize("response_body", ["json", "html", "empty", "schema_code"])
+async def test_provider_access_errors_are_classified_without_retry_or_private_data(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    classification: str,
+    response_body: str,
+) -> None:
+    """Отказ доступа имеет безопасный код даже без JSON и не запускает retry."""
+    from unittest.mock import AsyncMock
+
+    requests: list[httpx.Request] = []
+    sleep = AsyncMock()
+    monkeypatch.setattr(ai_service.asyncio, "sleep", sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        headers = {"retry-after": "1", "x-private-header": PRIVATE_BUDGET}
+        if response_body == "empty":
+            return httpx.Response(status_code, headers=headers)
+        if response_body == "html":
+            return httpx.Response(
+                status_code, headers=headers, text=f"<html>{PRIVATE_ROUTE}</html>"
+            )
+        return httpx.Response(
+            status_code,
+            headers=headers,
+            json={
+                "error": {
+                    "code": "json_validate_failed"
+                    if response_body == "schema_code"
+                    else "PRIVATE_PROVIDER_CODE_DO_NOT_LOG",
+                    "message": PRIVATE_ROUTE,
+                }
+            },
+        )
+
+    with caplog.at_level(logging.WARNING, logger=ai_service.__name__):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(ai_service.AIServiceError) as error:
+                await _request_model_with_retry(
+                    client=client,
+                    url="https://example.invalid/chat/completions",
+                    headers={"Authorization": f"Bearer {PRIVATE_API_KEY}"},
+                    payload={
+                        "messages": [{"role": "user", "content": PRIVATE_INTERESTS}]
+                    },
+                    model="test-model",
+                    attempt=1,
+                )
+
+    assert type(error.value) is ai_service.AIServiceError
+    assert len(requests) == 1
+    sleep.assert_not_awaited()
+    events = read_llm_events(caplog)
+    assert len(events) == 1
+    assert events[0]["outcome"] == "http_error"
+    assert events[0]["http_status"] == status_code
+    assert events[0]["provider_error_code"] == classification
+    assert events[0]["provider_attempt"] == 1
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "LLM retry" not in logs
+    for private in (
+        PRIVATE_API_KEY,
+        PRIVATE_ROUTE,
+        PRIVATE_INTERESTS,
+        PRIVATE_BUDGET,
+        "PRIVATE_PROVIDER_CODE_DO_NOT_LOG",
+    ):
+        assert private not in logs
+        assert private not in str(error.value)
