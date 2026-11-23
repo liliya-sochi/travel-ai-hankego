@@ -315,6 +315,11 @@ Redis is used for:
 - prompt injection risk reduction;
 - user input length limits;
 - safe LLM observability without logging prompts or personal data.
+- provider HTTP 401 and 403 have fixed diagnostic codes `authentication_failed`
+  and `access_denied`, including non-JSON responses. Status takes precedence over
+  body error codes; neither response is retried. These codes identify the failure
+  category, not a specific account, key or regional restriction. Response bodies
+  and credentials are excluded from logs and evaluation reports.
 - rolling production reports for LLM attempts and final AI API responses, with
   error-threshold alerts through the existing host monitor.
 - explicit validation reason codes for grounded-plan failures without logging model output.

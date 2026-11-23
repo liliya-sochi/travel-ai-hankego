@@ -849,6 +849,10 @@ def _provider_header_count(response: httpx.Response | None, name: str) -> int | 
 def _classify_provider_error(response: httpx.Response) -> str:
     """Классифицирует ошибку без сохранения текста ответа провайдера."""
 
+    if response.status_code == 401:
+        return "authentication_failed"
+    if response.status_code == 403:
+        return "access_denied"
     if response.status_code == 413:
         return "request_too_large"
 
