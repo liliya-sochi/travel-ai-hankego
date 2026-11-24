@@ -15,6 +15,8 @@ import json
 import logging
 from collections import Counter
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from math import isfinite
 from time import perf_counter
 from typing import Any
@@ -884,8 +886,10 @@ def _classify_provider_error(response: httpx.Response) -> str:
 
 def _parse_retry_after_seconds(
     response: httpx.Response,
+    *,
+    now: datetime | None = None,
 ) -> float | None:
-    """Извлекает безопасное число секунд из Retry-After."""
+    """Читает секунды или HTTP-дату; now позволяет фиксировать часы в тестах."""
 
     raw_value = response.headers.get("retry-after")
 
@@ -896,7 +900,16 @@ def _parse_retry_after_seconds(
         retry_after_seconds = float(raw_value)
 
     except ValueError:
-        return None
+        try:
+            retry_at = parsedate_to_datetime(raw_value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+        # Устаревший HTTP-формат asctime не содержит зоны, но означает GMT.
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=UTC)
+        reference_time = now if now is not None else datetime.now(UTC)
+        return max(0.0, (retry_at - reference_time).total_seconds())
 
     if not isfinite(retry_after_seconds) or retry_after_seconds < 0:
         return None
