@@ -310,6 +310,10 @@ Redis is used for:
 - validation of the number and sequence of itinerary days;
 - semantic retry when the model returns a logically inconsistent response;
 - bounded provider retry for HTTP 429 with `Retry-After` support;
+- `Retry-After` accepts seconds (including existing fractional values) and
+  HTTP dates. Past dates mean zero delay; malformed dates use the existing
+  fallback delay. Parsed dates obey the same wait and attempt limits as seconds.
+  Tests freeze the clock and mock HTTP and sleep; no live LLM call is required;
 - one bounded grounded-plan retry when Groq rejects generated JSON against the strict schema;
 - separation of system instructions and user-provided data;
 - prompt injection risk reduction;
