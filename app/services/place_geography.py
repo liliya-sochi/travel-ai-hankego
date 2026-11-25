@@ -33,6 +33,8 @@ def calculate_distance_meters(
         * math.sin(longitude_delta / 2) ** 2
     )
 
+    # У почти противоположных точек округление может дать значение чуть выше 1.
+    haversine_value = min(1.0, max(0.0, haversine_value))
     return 2 * EARTH_RADIUS_METERS * math.asin(math.sqrt(haversine_value))
 
 

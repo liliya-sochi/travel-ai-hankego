@@ -307,6 +307,9 @@ Redis is used for:
 - no evening museum, restaurant or entertainment visit without known opening hours;
 - deterministic addition of verified place details to selected itinerary activities;
 - explicit prevention of invented prices, schedules, opening hours, and websites;
+- shared spherical distance calculation for Geoapify candidates and route checks;
+  rounding near antipodal coordinates is bounded to prevent math domain errors.
+  Distances remain straight-line estimates, not walking or transit routes;
 - validation of the number and sequence of itinerary days;
 - semantic retry when the model returns a logically inconsistent response;
 - bounded provider retry for HTTP 429 with `Retry-After` support;

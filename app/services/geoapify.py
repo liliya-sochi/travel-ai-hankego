@@ -27,43 +27,15 @@ from app.schemas.geoapify import (
     PlaceCandidate,
     PlaceDetails,
 )
+from app.services.place_geography import (
+    EARTH_RADIUS_METERS,
+    calculate_distance_meters,
+)
 
 logger = logging.getLogger(__name__)
 
-EARTH_RADIUS_METERS = 6_371_000
 MAX_SEARCH_ANCHOR_DISTANCE_METERS = 5_000
 SEARCH_ANCHOR_BEARINGS = (0.0, 90.0, 180.0, 270.0)
-
-
-def _calculate_distance_meters(
-    *,
-    start_latitude: float,
-    start_longitude: float,
-    end_latitude: float,
-    end_longitude: float,
-) -> float:
-    """Вычисляет расстояние между двумя координатами."""
-
-    start_latitude_radians = math.radians(start_latitude)
-    end_latitude_radians = math.radians(end_latitude)
-    latitude_difference = math.radians(end_latitude - start_latitude)
-    longitude_difference = math.radians(end_longitude - start_longitude)
-
-    haversine_value = (
-        math.sin(latitude_difference / 2) ** 2
-        + math.cos(start_latitude_radians)
-        * math.cos(end_latitude_radians)
-        * math.sin(longitude_difference / 2) ** 2
-    )
-
-    return (
-        EARTH_RADIUS_METERS
-        * 2
-        * math.atan2(
-            math.sqrt(haversine_value),
-            math.sqrt(1 - haversine_value),
-        )
-    )
 
 
 def _move_coordinate(
@@ -486,11 +458,11 @@ class GeoapifyClient:
                     latitude=properties.lat,
                     longitude=properties.lon,
                     categories=properties.categories,
-                    distance_meters=_calculate_distance_meters(
-                        start_latitude=location.latitude,
-                        start_longitude=location.longitude,
-                        end_latitude=properties.lat,
-                        end_longitude=properties.lon,
+                    distance_meters=calculate_distance_meters(
+                        first_latitude=location.latitude,
+                        first_longitude=location.longitude,
+                        second_latitude=properties.lat,
+                        second_longitude=properties.lon,
                     ),
                     available_details=properties.details,
                     wiki_reference_count=wiki_reference_count,
