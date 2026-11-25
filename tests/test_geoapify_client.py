@@ -565,3 +565,48 @@ async def test_handles_invalid_json_structure() -> None:
     async with http_client:
         with pytest.raises(GeoapifyServiceError):
             await client.geocode_destination("Стамбул")
+
+
+@pytest.mark.asyncio
+async def test_search_handles_nearly_antipodal_provider_coordinates() -> None:
+    """Валидные далёкие координаты из ответа не обрушивают обработку мест."""
+    import math
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "name": "Тестовое место",
+                            "formatted": "Тестовый адрес",
+                            "lat": -66.01301490460911,
+                            "lon": -24.97033235988793,
+                            "place_id": "antipodal-test-place",
+                            "categories": ["tourism.sights"],
+                        },
+                    }
+                ],
+            },
+        )
+
+    http_client, client = build_client(handler)
+    async with http_client:
+        places = await client.search_places(
+            location=DestinationLocation(
+                formatted_name="Тестовый центр",
+                latitude=66.01301490014168,
+                longitude=155.02966763235167,
+                source_place_id="antipodal-test-center",
+            ),
+            categories=["tourism.sights"],
+            limit=1,
+        )
+    assert len(places) == 1
+    assert places[0].source_place_id == "antipodal-test-place"
+    assert places[0].distance_meters is not None
+    assert math.isfinite(places[0].distance_meters)
+    assert places[0].distance_meters == pytest.approx(20_015_086.796, abs=0.5)
