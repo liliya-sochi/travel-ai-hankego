@@ -349,6 +349,10 @@ Redis is used for:
 
 ### External Travel Data
 
+Malformed website URLs from external place data are treated as insufficient
+evidence of relocation, without interrupting enrichment. Relocation requires
+a matching page identity plus the existing type, distance and ranking checks.
+
 - Geoapify geocoding for destination resolution;
 - Geoapify Places API for nearby sights, museums, restaurants, parks, and entertainment;
 - deterministic mapping of user interests to place categories;

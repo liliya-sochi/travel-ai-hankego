@@ -246,12 +246,15 @@ def _normalize_website_identity(
     if value is None:
         return None
 
-    parsed_url = urlsplit(value.strip())
+    try:
+        parsed_url = urlsplit(value.strip())
+        host = (parsed_url.hostname or "").casefold()
+    except ValueError:
+        # Некорректный URL из внешних данных не доказывает перенос места.
+        return None
 
     if parsed_url.scheme.casefold() not in {"http", "https"}:
         return None
-
-    host = (parsed_url.hostname or "").casefold()
 
     if host.startswith("www."):
         host = host[4:]
