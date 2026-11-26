@@ -17,6 +17,7 @@ from app.services.google_places import (
     GooglePlacesClient,
     GooglePlacesMonthlyBudget,
     GooglePlacesServiceError,
+    _normalize_website_identity,
     format_google_opening_hours,
 )
 
@@ -534,6 +535,9 @@ async def test_enrich_place_accepts_verified_relocation() -> None:
         "longitude",
     ),
     [
+        ("https://[broken/museum", ["museum"], 35.6218791, 139.7190516),
+        ("https://[not-an-ip]/museum", ["museum"], 35.6218791, 139.7190516),
+        ("https://example.com\uff1a443/museum", ["museum"], 35.6218791, 139.7190516),
         (
             "https://example.com/different-place",
             ["museum"],
@@ -743,3 +747,23 @@ async def test_monthly_budget_fails_closed_without_redis() -> None:
 
     with pytest.raises(GooglePlacesBudgetUnavailableError):
         await budget.try_acquire()
+
+
+@pytest.mark.parametrize(
+    ("website", "expected"),
+    [
+        ("https://[broken/museum", None),
+        ("https://[not-an-ip]/museum", None),
+        ("https://example.com\uff1a443/museum", None),
+        (" https://WWW.EXAMPLE.COM/museum/ ", ("example.com", "/museum")),
+        ("http://example.com/Museum", ("example.com", "/Museum")),
+        ("https://example.com/", None),
+        (None, None),
+    ],
+)
+def test_website_identity_handles_invalid_provider_urls(
+    website: str | None,
+    expected: tuple[str, str] | None,
+) -> None:
+    """Неверный URL не прерывает проверку, корректная страница сохраняет идентичность."""
+    assert _normalize_website_identity(website) == expected
