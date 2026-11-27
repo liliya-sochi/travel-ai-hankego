@@ -133,9 +133,15 @@ def _normalize_website(
     if normalized_value is None:
         return None
 
-    parsed_url = urlparse(normalized_value)
+    try:
+        parsed_url = urlparse(normalized_value)
+        host = parsed_url.hostname
+        # Свойство port проверяет числовой формат и допустимый диапазон.
+        _ = parsed_url.port
+    except ValueError:
+        return None
 
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+    if parsed_url.scheme not in {"http", "https"} or not host:
         return None
 
     return normalized_value

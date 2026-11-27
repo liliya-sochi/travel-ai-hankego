@@ -12,6 +12,7 @@ from app.services.geoapify import (
     GeoapifyClient,
     GeoapifyRateLimitError,
     GeoapifyServiceError,
+    _normalize_website,
 )
 
 TEST_API_KEY = "test-geoapify-api-key"
@@ -364,7 +365,22 @@ async def test_search_places_raises_if_all_anchors_fail() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_place_details() -> None:
+@pytest.mark.parametrize(
+    ("website", "expected_website"),
+    [
+        (" https://museum.example/ ", "https://museum.example/"),
+        ("https://[broken/museum", None),
+        ("https://[not-an-ip]/museum", None),
+        ("https://museum.example\uff1a443/", None),
+        ("https://museum.example:wrong/", None),
+        ("https://museum.example:70000/", None),
+        ("https://:443/", None),
+    ],
+)
+async def test_get_place_details(
+    website: str,
+    expected_website: str | None,
+) -> None:
     """Проверяет получение сайта и часов работы места."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -388,7 +404,7 @@ async def test_get_place_details() -> None:
                             "lat": 41.0082,
                             "lon": 28.9784,
                             "place_id": ("details-feature-place-id"),
-                            "website": " https://museum.example/ ",
+                            "website": website,
                             "opening_hours": " Mo-Su 09:00-18:30 ",
                         },
                     }
@@ -403,7 +419,7 @@ async def test_get_place_details() -> None:
 
     """Проверяет детали и сохранение ID исходного кандидата."""
     assert details.source_place_id == "museum-place-id"
-    assert details.website == "https://museum.example/"
+    assert details.website == expected_website
     assert details.opening_hours == "Mo-Su 09:00-18:30"
     assert details.source == "geoapify"
 
@@ -610,3 +626,27 @@ async def test_search_handles_nearly_antipodal_provider_coordinates() -> None:
     assert places[0].distance_meters is not None
     assert math.isfinite(places[0].distance_meters)
     assert places[0].distance_meters == pytest.approx(20_015_086.796, abs=0.5)
+
+
+@pytest.mark.parametrize(
+    ("website", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("none", None),
+        ("ftp://museum.example/", None),
+        ("https:///info", None),
+        ("https://museum.example:8443/info", "https://museum.example:8443/info"),
+        ("https://[2001:db8::1]:443/info", "https://[2001:db8::1]:443/info"),
+        (
+            "http://museum.example/info?lang=ru#x",
+            "http://museum.example/info?lang=ru#x",
+        ),
+    ],
+)
+def test_website_validation_preserves_supported_urls(
+    website: str | None,
+    expected: str | None,
+) -> None:
+    """Принимает корректные порты и IPv6, отбрасывает отсутствующие сайты."""
+    assert _normalize_website(website) == expected
